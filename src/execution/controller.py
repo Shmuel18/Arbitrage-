@@ -112,13 +112,24 @@ class ExecutionController:
         """Best-effort recovery when one leg fails"""
         try:
             if long_result and not short_result:
-                order_id = long_result.get("id")
-                if order_id:
-                    await long_adapter.cancel_order(opportunity.symbol, order_id)
+                close_order = OrderRequest(
+                    exchange=opportunity.exchange_long,
+                    symbol=opportunity.symbol,
+                    side=OrderSide.SHORT,
+                    quantity=opportunity.quantity,
+                    price=None,
+                )
+                await long_adapter.place_order(close_order)
+
             if short_result and not long_result:
-                order_id = short_result.get("id")
-                if order_id:
-                    await short_adapter.cancel_order(opportunity.symbol, order_id)
+                close_order = OrderRequest(
+                    exchange=opportunity.exchange_short,
+                    symbol=opportunity.symbol,
+                    side=OrderSide.LONG,
+                    quantity=opportunity.quantity,
+                    price=None,
+                )
+                await short_adapter.place_order(close_order)
         except Exception as e:
             logger.error("Recovery failed", error=str(e), opportunity_id=str(opportunity.opportunity_id))
 

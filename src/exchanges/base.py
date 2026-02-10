@@ -165,12 +165,18 @@ class ExchangeManager:
     Manages multiple exchange adapters
     """
     
-    def __init__(self):
+    def __init__(self, watchlist: Optional[List[str]] = None):
         self.adapters: Dict[str, ExchangeAdapter] = {}
+        self.watchlist = watchlist or []
     
     def register_adapter(self, exchange_id: str, adapter: ExchangeAdapter):
         """Register exchange adapter"""
         self.adapters[exchange_id] = adapter
+        
+        # Inject watchlist into adapter for warm-up
+        if hasattr(adapter, '_watchlist'):
+            adapter._watchlist = self.watchlist
+        
         logger.info(f"Registered exchange adapter: {exchange_id}")
     
     def get_adapter(self, exchange_id: str) -> Optional[ExchangeAdapter]:

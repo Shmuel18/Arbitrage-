@@ -41,6 +41,7 @@ class TrinityEngine:
         self.redis_client = None
         self.execution_controller = None
         self.risk_guard = None
+        self.discovery_scanner = None
         
         # Shutdown flag
         self._shutdown_event = asyncio.Event()
@@ -79,7 +80,7 @@ class TrinityEngine:
             
             # Initialize exchange manager
             logger.info("Initializing exchange adapters...")
-            self.exchange_manager = ExchangeManager()
+            self.exchange_manager = ExchangeManager(watchlist=self.config.watchlist)
 
             adapter_map = {
                 "binance": BinanceAdapter,
@@ -108,6 +109,12 @@ class TrinityEngine:
             # Start risk guard loops
             self.risk_guard = RiskGuard(self.exchange_manager, self.redis_client)
             await self.risk_guard.start()
+
+            # Start discovery scanner
+            from src.discovery.scanner import DiscoveryScanner
+            self.discovery_scanner = DiscoveryScanner(self.exchange_manager, self.execution_controller)
+            await self.discovery_scanner.start()
+            logger.info("Discovery scanner active")
 
             # Log enabled exchanges
             logger.info(f"Enabled exchanges: {', '.join(self.config.enabled_exchanges)}")
@@ -150,6 +157,10 @@ class TrinityEngine:
         try:
             # Signal shutdown
             self._shutdown_event.set()
+            
+            # Stop discovery scanner
+            if self.discovery_scanner:
+                await self.discovery_scanner.stop()
             
             # Stop health monitor
             if self.health_monitor:

@@ -34,9 +34,17 @@ class CCXTProAdapter(ExchangeAdapter):
     Generic CCXT adapter for futures/swap exchanges
     """
 
+    def __init__(self, config: ExchangeConfig):
+        super().__init__(config)
+        self._settings_applied = set()
+        self._watchlist = []
+
     async def _ensure_trading_settings(self, symbol: str):
         """Ensure leverage/margin/position modes are set before trading"""
         if self.exchange is None:
+            return
+
+        if symbol in self._settings_applied:
             return
 
         leverage = self.config.leverage or self.config.max_leverage
@@ -62,6 +70,32 @@ class CCXTProAdapter(ExchangeAdapter):
                 except Exception as e:
                     logger.warning("Failed to set position mode", exchange=self.exchange_id, symbol=symbol, error=str(e))
 
+        self._settings_applied.add(symbol)
+
+    async def warm_up_symbols(self, symbols: List[str]):
+        """Pre-configure trading settings for symbols to reduce first-trade latency"""
+        if not symbols:
+            return
+
+        logger.info("Warming up trading settings", exchange=self.exchange_id, symbols=symbols)
+        
+        for symbol in symbols:
+            try:
+                await self._ensure_trading_settings(symbol)
+            except Exception as e:
+                logger.warning(
+                    "Failed to warm up symbol",
+                    exchange=self.exchange_id,
+                    symbol=symbol,
+                    error=str(e)
+                )
+        
+        logger.info(
+            "Trading settings warmed up",
+            exchange=self.exchange_id,
+            configured_symbols=len(self._settings_applied)
+        )
+
     async def connect(self):
         """Initialize exchange connection"""
         if self.exchange:
@@ -75,6 +109,10 @@ class CCXTProAdapter(ExchangeAdapter):
         await self.exchange.load_markets()
         self._connected = True
         logger.info("Exchange connected", exchange=self.exchange_id)
+        
+        # Warm up watchlist symbols if configured
+        if self._watchlist:
+            await self.warm_up_symbols(self._watchlist)
 
     async def disconnect(self):
         """Close exchange connection"""
