@@ -7,7 +7,10 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Dict, List, Optional
 
-import ccxt.pro as ccxtpro
+try:
+    import ccxt.pro as ccxtpro
+except Exception:
+    import ccxt.async_support as ccxtpro
 
 from src.core.config import ExchangeConfig
 from src.core.contracts import InstrumentSpec, OrderRequest, Position

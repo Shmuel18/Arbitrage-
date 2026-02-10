@@ -39,6 +39,8 @@ class TrinityEngine:
         self.exchange_manager = None
         self.health_monitor = None
         self.redis_client = None
+        self.execution_controller = None
+        self.risk_guard = None
         
         # Shutdown flag
         self._shutdown_event = asyncio.Event()
@@ -58,6 +60,11 @@ class TrinityEngine:
             # Import components (lazy import to ensure config is loaded)
             from src.ingestion.health_monitor import HealthMonitor
             from src.exchanges.base import ExchangeManager
+            from src.exchanges.binance import BinanceAdapter
+            from src.exchanges.bybit import BybitAdapter
+            from src.exchanges.okx import OkxAdapter
+            from src.execution.controller import ExecutionController
+            from src.risk.guard import RiskGuard
             
             # Initialize Redis (with fallback for paper trading)
             from src.storage.redis_client import get_redis
@@ -73,7 +80,35 @@ class TrinityEngine:
             # Initialize exchange manager
             logger.info("Initializing exchange adapters...")
             self.exchange_manager = ExchangeManager()
-            
+
+            adapter_map = {
+                "binance": BinanceAdapter,
+                "bybit": BybitAdapter,
+                "okx": OkxAdapter,
+            }
+
+            for exchange_id in self.config.enabled_exchanges:
+                exchange_config = self.config.exchanges.get(exchange_id)
+                adapter_cls = adapter_map.get(exchange_id)
+
+                if not exchange_config:
+                    logger.warning("Missing exchange config", exchange=exchange_id)
+                    continue
+                if not adapter_cls:
+                    logger.warning("No adapter class registered", exchange=exchange_id)
+                    continue
+
+                self.exchange_manager.register_adapter(exchange_id, adapter_cls(exchange_config))
+
+            await self.exchange_manager.connect_all()
+
+            # Initialize execution controller
+            self.execution_controller = ExecutionController(self.exchange_manager, self.redis_client)
+
+            # Start risk guard loops
+            self.risk_guard = RiskGuard(self.exchange_manager, self.redis_client)
+            await self.risk_guard.start()
+
             # Log enabled exchanges
             logger.info(f"Enabled exchanges: {', '.join(self.config.enabled_exchanges)}")
             
@@ -119,6 +154,10 @@ class TrinityEngine:
             # Stop health monitor
             if self.health_monitor:
                 await self.health_monitor.stop()
+
+            # Stop risk guard
+            if self.risk_guard:
+                await self.risk_guard.stop()
             
             # Disconnect exchanges
             if self.exchange_manager:

@@ -137,6 +137,28 @@ class RedisClient:
         """Get exchange health status"""
         key = self._make_key("exchange", exchange, "health")
         return await self.redis.get(key)
+
+    # ==================== POSITION SNAPSHOTS ====================
+
+    async def set_position_snapshot(
+        self,
+        exchange: str,
+        symbol: str,
+        snapshot: Dict[str, Any],
+        ttl_sec: int = 300
+    ):
+        """Store latest position snapshot"""
+        key = self._make_key("position", exchange, symbol)
+        value = json.dumps(snapshot, cls=DecimalEncoder)
+        await self.redis.setex(key, ttl_sec, value)
+
+    async def get_position_snapshot(self, exchange: str, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get latest position snapshot"""
+        key = self._make_key("position", exchange, symbol)
+        value = await self.redis.get(key)
+        if value:
+            return json.loads(value)
+        return None
     
     # ==================== COOLDOWNS ====================
     
