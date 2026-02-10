@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Dict, Optional
 
 from src.core.config import get_config
+from src.core.contracts import OrderRequest, OrderSide
 from src.core.logging import get_logger
 from src.exchanges.base import ExchangeManager
 from src.storage.redis_client import RedisClient
@@ -73,10 +74,12 @@ class RiskGuard:
     async def _check_delta_neutrality(self):
         """Check portfolio delta neutrality across exchanges"""
         symbol_stats: Dict[str, Dict[str, Decimal]] = {}
+        positions_by_symbol: Dict[str, list] = {}
 
         for exchange_id, adapter in self.exchange_manager.adapters.items():
             positions = await adapter.get_positions()
             for pos in positions:
+                positions_by_symbol.setdefault(pos.symbol, []).append((exchange_id, pos))
                 if pos.symbol not in symbol_stats:
                     symbol_stats[pos.symbol] = {
                         "net_notional": Decimal("0"),
@@ -103,6 +106,54 @@ class RiskGuard:
                     delta_pct=float(delta_pct),
                     threshold_pct=float(threshold_pct),
                 )
+
+                await self._handle_delta_breach(symbol, positions_by_symbol.get(symbol, []))
+
+    async def _handle_delta_breach(self, symbol: str, positions):
+        """Handle delta breach with optional rebalance/close actions"""
+        if not positions:
+            return
+
+        if self.redis_client:
+            acquired = await self.redis_client.acquire_lock(f"panic:{symbol}")
+            if not acquired:
+                return
+        else:
+            acquired = False
+
+        try:
+            if self.config.risk_guard.enable_auto_rebalance and self.redis_client:
+                await self.redis_client.set_cooldown(symbol, self._cooldown_until())
+
+            if not self.config.risk_guard.enable_panic_close:
+                return
+
+            for exchange_id, pos in positions:
+                adapter = self.exchange_manager.get_adapter(exchange_id)
+                if not adapter:
+                    continue
+
+                close_order = OrderRequest(
+                    exchange=exchange_id,
+                    symbol=pos.symbol,
+                    side=OrderSide.LONG if pos.quantity < 0 else OrderSide.SHORT,
+                    quantity=abs(pos.quantity),
+                    price=None,
+                )
+
+                try:
+                    await adapter.place_order(close_order)
+                    logger.warning("Panic close executed", symbol=symbol, exchange=exchange_id)
+                except Exception as e:
+                    logger.error("Panic close failed", symbol=symbol, exchange=exchange_id, error=str(e))
+        finally:
+            if acquired and self.redis_client:
+                await self.redis_client.release_lock(f"panic:{symbol}")
+
+    def _cooldown_until(self):
+        """Cooldown expiry time for delta breach"""
+        from datetime import datetime, timedelta
+        return datetime.utcnow() + timedelta(hours=self.config.trading_params.cooldown_after_orphan_hours)
 
     async def _snapshot_positions(self):
         """Store position snapshots in Redis"""

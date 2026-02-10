@@ -64,6 +64,9 @@ exchanges:
     default_type: "future"
     rate_limit_ms: 50
     max_leverage: 20
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
 
   bybit:
     name: "Bybit USDT Perpetual"
@@ -71,6 +74,9 @@ exchanges:
     default_type: "swap"
     rate_limit_ms: 50
     max_leverage: 25
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "hedged"
 
   okx:
     name: "OKX Futures"
@@ -78,6 +84,9 @@ exchanges:
     default_type: "swap"
     rate_limit_ms: 100
     max_leverage: 20
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
 
 symbols:
   watchlist:

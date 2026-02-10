@@ -34,6 +34,34 @@ class CCXTProAdapter(ExchangeAdapter):
     Generic CCXT adapter for futures/swap exchanges
     """
 
+    async def _ensure_trading_settings(self, symbol: str):
+        """Ensure leverage/margin/position modes are set before trading"""
+        if self.exchange is None:
+            return
+
+        leverage = self.config.leverage or self.config.max_leverage
+
+        if leverage and self.exchange.has.get("setLeverage"):
+            try:
+                await self.exchange.set_leverage(leverage, symbol)
+            except Exception as e:
+                logger.warning("Failed to set leverage", exchange=self.exchange_id, symbol=symbol, error=str(e))
+
+        if self.config.margin_mode and self.exchange.has.get("setMarginMode"):
+            try:
+                await self.exchange.set_margin_mode(self.config.margin_mode, symbol)
+            except Exception as e:
+                logger.warning("Failed to set margin mode", exchange=self.exchange_id, symbol=symbol, error=str(e))
+
+        if self.config.position_mode and self.exchange.has.get("setPositionMode"):
+            try:
+                await self.exchange.set_position_mode(self.config.position_mode)
+            except Exception:
+                try:
+                    await self.exchange.set_position_mode(self.config.position_mode, symbol)
+                except Exception as e:
+                    logger.warning("Failed to set position mode", exchange=self.exchange_id, symbol=symbol, error=str(e))
+
     async def connect(self):
         """Initialize exchange connection"""
         if self.exchange:
@@ -178,6 +206,8 @@ class CCXTProAdapter(ExchangeAdapter):
 
         side = "buy" if order.side == OrderSide.LONG else "sell"
         order_type = "market" if order.price is None else "limit"
+
+        await self._ensure_trading_settings(order.symbol)
 
         return await self.exchange.create_order(
             symbol=order.symbol,

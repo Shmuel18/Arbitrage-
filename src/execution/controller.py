@@ -3,6 +3,7 @@ Execution Controller
 Responsible for placing paired orders across exchanges
 """
 
+import asyncio
 from decimal import Decimal
 from typing import Optional
 
@@ -53,10 +54,16 @@ class ExecutionController:
 
         trade.state = TradeState.PENDING_OPEN
 
-        try:
-            long_result = await long_adapter.place_order(long_order)
-            short_result = await short_adapter.place_order(short_order)
+        long_task = asyncio.create_task(long_adapter.place_order(long_order))
+        short_task = asyncio.create_task(short_adapter.place_order(short_order))
 
+        results = await asyncio.gather(long_task, short_task, return_exceptions=True)
+        long_result, short_result = results[0], results[1]
+
+        long_ok = not isinstance(long_result, Exception)
+        short_ok = not isinstance(short_result, Exception)
+
+        if long_ok and short_ok:
             trade.state = TradeState.OPEN_PARTIAL
             trade.expected_net_bps = opportunity.expected_net_bps
 
@@ -70,11 +77,50 @@ class ExecutionController:
             trade.state = TradeState.ACTIVE_HEDGED
             return trade
 
+        trade.state = TradeState.ERROR_RECOVERY
+
+        if not long_ok:
+            trade.errors.append(str(long_result))
+        if not short_ok:
+            trade.errors.append(str(short_result))
+
+        logger.error(
+            "Execution failed",
+            opportunity_id=str(opportunity.opportunity_id),
+            long_ok=long_ok,
+            short_ok=short_ok,
+        )
+
+        await self._attempt_recovery(
+            opportunity,
+            long_adapter,
+            short_adapter,
+            long_result if long_ok else None,
+            short_result if short_ok else None,
+        )
+
+        return trade
+
+    async def _attempt_recovery(
+        self,
+        opportunity: OpportunityCandidate,
+        long_adapter,
+        short_adapter,
+        long_result: Optional[dict],
+        short_result: Optional[dict],
+    ):
+        """Best-effort recovery when one leg fails"""
+        try:
+            if long_result and not short_result:
+                order_id = long_result.get("id")
+                if order_id:
+                    await long_adapter.cancel_order(opportunity.symbol, order_id)
+            if short_result and not long_result:
+                order_id = short_result.get("id")
+                if order_id:
+                    await short_adapter.cancel_order(opportunity.symbol, order_id)
         except Exception as e:
-            trade.state = TradeState.ERROR_RECOVERY
-            trade.errors.append(str(e))
-            logger.error("Execution failed", error=str(e), opportunity_id=str(opportunity.opportunity_id))
-            return trade
+            logger.error("Recovery failed", error=str(e), opportunity_id=str(opportunity.opportunity_id))
 
     async def estimate_execution_cost(self, opportunity: OpportunityCandidate) -> Decimal:
         """Estimate execution cost (simple placeholder)"""

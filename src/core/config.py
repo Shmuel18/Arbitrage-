@@ -82,6 +82,9 @@ class ExchangeConfig(BaseSettings):
     api_secret: Optional[str] = None
     api_passphrase: Optional[str] = None
     testnet: bool = False
+    leverage: Optional[int] = None
+    margin_mode: Optional[str] = None  # isolated | cross
+    position_mode: Optional[str] = None  # hedged | oneway
 
 
 class MonitoringConfig(BaseSettings):
