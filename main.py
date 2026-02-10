@@ -64,6 +64,7 @@ class TrinityEngine:
             from src.exchanges.binance import BinanceAdapter
             from src.exchanges.bybit import BybitAdapter
             from src.exchanges.okx import OkxAdapter
+            from src.exchanges.gateio import GateioAdapter
             from src.execution.controller import ExecutionController
             from src.risk.guard import RiskGuard
             
@@ -86,6 +87,7 @@ class TrinityEngine:
                 "binance": BinanceAdapter,
                 "bybit": BybitAdapter,
                 "okx": OkxAdapter,
+                "gateio": GateioAdapter,
             }
 
             for exchange_id in self.config.enabled_exchanges:

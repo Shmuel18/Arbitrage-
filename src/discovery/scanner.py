@@ -56,7 +56,7 @@ class DiscoveryScanner:
         self._scan_task = None
         
         self.scan_interval_sec = 10  # Scan every 10 seconds
-        self.min_net_bps = self.config.trading.min_net_bps
+        self.min_net_bps = self.config.trading_params.min_net_bps
     
     async def start(self):
         """Start the discovery scanner"""
@@ -150,23 +150,23 @@ class DiscoveryScanner:
                 continue
             
             try:
-                # Get instrument spec (contains funding rate)
+                # Get instrument spec
                 spec = await adapter.get_instrument_spec(symbol)
                 
-                # Get current price (use mark price for funding calculations)
-                # For now we'll use a simple approach - fetch ticker
-                if adapter.exchange and hasattr(adapter.exchange, 'fetch_ticker'):
-                    ticker = await adapter.exchange.fetch_ticker(symbol)
-                    mark_price = Decimal(str(ticker.get('last', 0)))
-                else:
-                    mark_price = Decimal('0')
+                # Get current funding rate from exchange
+                funding_data = await adapter.get_funding_rate(symbol)
+                funding_rate = Decimal(str(funding_data.get('fundingRate', 0))) if funding_data else Decimal('0')
+                
+                # Get current price
+                ticker = await adapter.get_ticker(symbol)
+                mark_price = Decimal(str(ticker.get('last', 0)))
                 
                 if mark_price <= 0:
                     continue
                 
                 exchange_data[exchange_id] = {
                     'spec': spec,
-                    'funding_rate': spec.funding_rate,
+                    'funding_rate': funding_rate,
                     'mark_price': mark_price
                 }
                 
@@ -243,19 +243,18 @@ class DiscoveryScanner:
             funding_hours=long_spec.funding_interval_hours
         )
         
-        # Calculate costs
-        total_cost_bps = self.calculator.calculate_total_cost(
-            long_spec=long_spec,
-            short_spec=short_spec,
-            long_price=long_price,
-            short_price=short_price
+        # Calculate costs (fees only - slippage requires orderbook data)
+        total_cost_bps = self.calculator.calculate_fees(
+            spec_long=long_spec,
+            spec_short=short_spec,
+            round_trip=True
         )
         
         # Net profit
         net_bps = funding_edge_bps - total_cost_bps
         
         # Use configured position size
-        notional_usd = Decimal(str(self.config.risk.max_position_size_usd))
+        notional_usd = Decimal(str(self.config.risk_limits.max_position_size_usd))
         
         if net_bps < self.min_net_bps:
             return None

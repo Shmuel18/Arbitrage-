@@ -4,7 +4,7 @@ Conservative profit/cost estimation
 """
 
 from decimal import Decimal
-from typing import Tuple
+from typing import Tuple, Dict, Optional
 
 from src.core.config import get_config
 from src.core.contracts import InstrumentSpec, StandardMarketEvent
