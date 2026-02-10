@@ -1,0 +1,49 @@
+# Trinity Arbitrage Engine V2.1-FINAL
+# Production Grade Dependencies
+
+# Core Exchange Integration
+ccxt==4.2.25
+ccxt[async]==4.2.25
+
+# Async Runtime
+asyncio==3.4.3
+aiohttp==3.9.3
+aiofiles==23.2.1
+websockets==12.0
+
+# Database
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+redis[hiredis]==5.0.1
+
+# Data Processing
+numpy==1.26.3
+pandas==2.1.4
+
+# Monitoring & Alerts
+prometheus-client==0.19.0
+python-telegram-bot==20.7
+sentry-sdk==1.39.2
+
+# Configuration & Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3
+ujson==5.9.0
+orjson==3.9.12
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# Development
+black==23.12.1
+flake8==7.0.0
+mypy==1.8.0
+pre-commit==3.6.0
