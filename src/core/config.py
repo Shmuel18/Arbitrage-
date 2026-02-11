@@ -8,6 +8,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+
 import yaml
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -206,11 +208,17 @@ class Config(BaseSettings):
         with open(config_path, 'r', encoding='utf-8') as f:
             yaml_data = yaml.safe_load(f)
         
+        # Load environment variables from .env
+        load_dotenv()
+        
         # Load environment variables
         env_overrides = cls._load_env_overrides()
         
         # Merge configurations (env takes priority)
         merged = cls._deep_merge(yaml_data, env_overrides)
+        
+        # Load exchange credentials
+        merged = cls._load_exchange_credentials(merged)
         
         # Handle exchanges structure
         if "exchanges" in merged and "enabled" in merged["exchanges"]:
@@ -299,6 +307,12 @@ class Config(BaseSettings):
             exchanges["okx"]["api_secret"] = os.getenv("OKX_API_SECRET")
             exchanges["okx"]["api_passphrase"] = os.getenv("OKX_PASSPHRASE")
             exchanges["okx"]["testnet"] = os.getenv("OKX_TESTNET", "false").lower() == "true"
+        
+        # GateIO
+        if "gateio" in exchanges:
+            exchanges["gateio"]["api_key"] = os.getenv("GATEIO_API_KEY")
+            exchanges["gateio"]["api_secret"] = os.getenv("GATEIO_API_SECRET")
+            exchanges["gateio"]["testnet"] = os.getenv("GATEIO_TESTNET", "false").lower() == "true"
         
         config["exchanges"] = exchanges
         return config
