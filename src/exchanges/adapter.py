@@ -27,7 +27,7 @@ class ExchangeAdapter:
         self._cfg = cfg
         self._exchange: Optional[ccxtpro.Exchange] = None
         self._instrument_cache: Dict[str, InstrumentSpec] = {}
-        self._settings_applied: bool = False
+        self._settings_applied: set = set()
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -46,12 +46,33 @@ class ExchangeAdapter:
 
         self._exchange = cls(opts)
         await self._exchange.load_markets()
+
+        # Filter to USDT-settled linear perpetuals only
+        filtered = {
+            k: v for k, v in self._exchange.markets.items()
+            if v.get("swap") and v.get("linear") and v.get("settle") == "USDT"
+        }
+        self._exchange.markets = filtered
+        self._exchange.symbols = list(filtered.keys())
+
         logger.info(
             f"Connected to {self.exchange_id}",
             extra={"exchange": self.exchange_id,
                    "action": "connect",
-                   "data": {"markets": len(self._exchange.markets)}},
+                   "data": {"markets": len(filtered)}},
         )
+
+    async def verify_credentials(self) -> bool:
+        """Test an authenticated call. Returns False if keys are invalid."""
+        try:
+            await self._exchange.fetch_balance()
+            return True
+        except Exception as e:
+            logger.warning(
+                f"Credentials invalid for {self.exchange_id}: {e}",
+                extra={"exchange": self.exchange_id, "action": "auth_fail"},
+            )
+            return False
 
     async def disconnect(self) -> None:
         if self._exchange:
@@ -63,24 +84,26 @@ class ExchangeAdapter:
 
     async def ensure_trading_settings(self, symbol: str) -> None:
         """Set leverage / margin-mode / position-mode (idempotent)."""
-        if self._settings_applied:
+        if symbol in self._settings_applied:
             return
         ex = self._exchange
         lev = self._cfg.get("leverage", 1)
         margin = self._cfg.get("margin_mode", "cross")
-        pos_mode = self._cfg.get("position_mode", "hedged")
+        pos_mode = self._cfg.get("position_mode", "oneway")
 
         try:
             if hasattr(ex, "set_leverage"):
                 await ex.set_leverage(lev, symbol)
             if hasattr(ex, "set_margin_mode"):
                 await ex.set_margin_mode(margin, symbol)
-            if hasattr(ex, "set_position_mode") and pos_mode == "hedged":
-                await ex.set_position_mode(True, symbol)
-            self._settings_applied = True
+            if hasattr(ex, "set_position_mode"):
+                hedged = (pos_mode == "hedged")
+                await ex.set_position_mode(hedged, symbol)
+            self._settings_applied.add(symbol)
         except Exception as e:
             # Many exchanges reject duplicate calls — that's fine.
-            if "No need to change" not in str(e):
+            msg = str(e)
+            if "No need to change" not in msg and "leverage not modified" not in msg:
                 logger.warning(f"Trading settings issue on {self.exchange_id}: {e}",
                                extra={"exchange": self.exchange_id, "symbol": symbol})
 
@@ -119,7 +142,33 @@ class ExchangeAdapter:
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
             "next_timestamp": data.get("fundingTimestamp"),
+            "interval_hours": self._get_funding_interval(symbol, data),
         }
+
+    def _get_funding_interval(self, symbol: str, funding_data: dict) -> int:
+        """Detect funding interval in hours from CCXT data."""
+        # 1) CCXT normalized 'interval' field (e.g. '1h', '4h', '8h')
+        interval_str = funding_data.get("interval") or ""
+        if interval_str:
+            try:
+                return int(interval_str.replace("h", ""))
+            except ValueError:
+                pass
+
+        # 2) Market info (Bybit provides fundingInterval in minutes)
+        mkt = self._exchange.market(symbol) if symbol in self._exchange.markets else None
+        if mkt:
+            info = mkt.get("info", {})
+            # Bybit: fundingInterval (minutes)
+            fi_min = info.get("fundingInterval")
+            if fi_min:
+                try:
+                    return max(1, int(fi_min) // 60)
+                except (ValueError, TypeError):
+                    pass
+
+        # 3) Default 8h
+        return 8
 
     # ── Account ──────────────────────────────────────────────────
 
@@ -170,10 +219,10 @@ class ExchangeAdapter:
         if req.reduce_only:
             params["reduceOnly"] = True
 
-        # Exchange-specific position side for hedged mode
-        pos_mode = self._cfg.get("position_mode", "hedged")
+        # Exchange-specific position side for hedged mode only
+        pos_mode = self._cfg.get("position_mode", "oneway")
         if pos_mode == "hedged":
-            if self.exchange_id == "binance":
+            if self.exchange_id == "binanceusdm":
                 if req.reduce_only:
                     params["positionSide"] = "LONG" if req.side == OrderSide.SELL else "SHORT"
                 else:
@@ -256,6 +305,22 @@ class ExchangeManager:
             except Exception as e:
                 logger.error(f"Failed to connect {adapter.exchange_id}: {e}",
                              extra={"exchange": adapter.exchange_id})
+
+    async def verify_all(self) -> list[str]:
+        """Verify credentials on every adapter; remove & disconnect failures.
+
+        Returns list of exchange ids that passed.
+        """
+        failed: list[str] = []
+        for eid, adapter in list(self._adapters.items()):
+            ok = await adapter.verify_credentials()
+            if not ok:
+                failed.append(eid)
+                await adapter.disconnect()
+                del self._adapters[eid]
+                logger.warning(f"Removed {eid} — invalid credentials",
+                               extra={"exchange": eid, "action": "exchange_removed"})
+        return list(self._adapters.keys())
 
     async def disconnect_all(self) -> None:
         for adapter in self._adapters.values():

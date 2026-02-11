@@ -10,7 +10,6 @@ class TestCalculateFundingEdge:
         result = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
-            funding_interval_hours=8,
         )
         assert result["edge_bps"] > 0
 
@@ -18,7 +17,6 @@ class TestCalculateFundingEdge:
         result = calculate_funding_edge(
             long_rate=Decimal("0.0005"),
             short_rate=Decimal("0.0001"),
-            funding_interval_hours=8,
         )
         assert result["edge_bps"] < 0
 
@@ -26,28 +24,44 @@ class TestCalculateFundingEdge:
         result = calculate_funding_edge(
             long_rate=Decimal("0.0003"),
             short_rate=Decimal("0.0003"),
-            funding_interval_hours=8,
         )
         assert result["edge_bps"] == 0
 
-    def test_1h_normalization_multiplies_by_8(self):
-        result_1h = calculate_funding_edge(
+    def test_different_intervals_normalized(self):
+        """Bybit 1h vs Binance 8h: same rate should produce zero edge."""
+        # Rate 0.0005 per 1h = 0.004 per 8h
+        # Rate 0.004 per 8h = 0.004 per 8h
+        result = calculate_funding_edge(
+            long_rate=Decimal("0.004"),
+            short_rate=Decimal("0.0005"),
+            long_interval_hours=8,
+            short_interval_hours=1,
+        )
+        assert result["edge_bps"] == 0
+
+    def test_1h_short_makes_edge_smaller(self):
+        """Short on 1h exchange: the cost is 8x per 8h, reducing edge."""
+        # Same rate on both, but short pays every 1h
+        result_same = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
-            funding_interval_hours=1,
+            long_interval_hours=8,
+            short_interval_hours=8,
         )
-        result_8h = calculate_funding_edge(
+        result_diff = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
-            funding_interval_hours=8,
+            long_interval_hours=8,
+            short_interval_hours=1,
         )
-        assert result_1h["edge_bps"] == result_8h["edge_bps"] * 8
+        # With 1h short interval, the short rate (positive) is multiplied by 8
+        # so we receive 8x more from the short side → edge is much bigger
+        assert result_diff["edge_bps"] > result_same["edge_bps"]
 
     def test_annualized_is_1095x_daily(self):
         result = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
-            funding_interval_hours=8,
         )
         # 3 settlements/day × 365 = 1095
         assert result["annualized_bps"] == result["edge_bps"] * 1095
@@ -56,7 +70,6 @@ class TestCalculateFundingEdge:
         result = calculate_funding_edge(
             long_rate=Decimal("-0.0002"),
             short_rate=Decimal("0.0003"),
-            funding_interval_hours=8,
         )
         # short pays us 0.0003, long negative means longs get paid → we receive both
         assert result["edge_bps"] > 0

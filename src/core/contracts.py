@@ -80,6 +80,10 @@ class OpportunityCandidate:
     net_edge_bps: Decimal
     suggested_qty: Decimal
     reference_price: Decimal
+    # Cherry-pick fields
+    mode: str = "hold"                    # "hold" or "cherry_pick"
+    exit_before: Optional[datetime] = None # when to exit (before costly payment)
+    n_collections: int = 0                 # how many income payments we'll collect
 
 
 # ── Trade record ─────────────────────────────────────────────────
@@ -96,3 +100,7 @@ class TradeRecord:
     entry_edge_bps: Decimal
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
+    mode: str = "hold"                     # "hold" or "cherry_pick"
+    exit_before: Optional[datetime] = None # exit BEFORE this time
+    next_funding_long: Optional[datetime] = None
+    next_funding_short: Optional[datetime] = None

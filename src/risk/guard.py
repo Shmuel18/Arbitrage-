@@ -9,6 +9,7 @@ Runs two loops:
 from __future__ import annotations
 
 import asyncio
+import time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, Optional
 
@@ -35,6 +36,7 @@ class RiskGuard:
         self._redis = redis
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        self._grace_timestamps: Dict[str, float] = {}  # symbol -> timestamp
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -53,6 +55,11 @@ class RiskGuard:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         logger.info("Risk guard stopped")
 
+    def mark_trade_opened(self, symbol: str) -> None:
+        """Mark symbol as having a recent trade - skip delta checks for 30s."""
+        self._grace_timestamps[symbol] = time.time()
+        logger.debug(f"Grace period started for {symbol} (30s)")
+
     # ── Fast loop (delta check) ──────────────────────────────────
 
     async def _fast_loop(self) -> None:
@@ -69,6 +76,7 @@ class RiskGuard:
     async def _check_delta(self) -> None:
         """Sum net exposure across all exchanges per symbol."""
         delta_by_symbol: Dict[str, Decimal] = {}
+        now = time.time()
 
         for eid, adapter in self._exchanges.all().items():
             try:
@@ -85,6 +93,13 @@ class RiskGuard:
         threshold = self._cfg.risk_limits.delta_threshold_pct / Decimal(100)
 
         for symbol, net in delta_by_symbol.items():
+            # Skip symbols in grace period (30 seconds after trade opened)
+            if symbol in self._grace_timestamps:
+                if now - self._grace_timestamps[symbol] < 30:
+                    continue
+                else:
+                    del self._grace_timestamps[symbol]
+            
             if abs(net) > threshold:
                 logger.warning(
                     f"Delta breach: {symbol} net={net}",

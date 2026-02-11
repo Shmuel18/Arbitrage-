@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from src.core.config import Config
     from src.exchanges.adapter import ExchangeManager
     from src.storage.redis_client import RedisClient
+    from src.risk.guard import RiskGuard
 
 logger = get_logger("execution")
 
@@ -45,10 +46,12 @@ class ExecutionController:
         config: "Config",
         exchange_mgr: "ExchangeManager",
         redis: "RedisClient",
+        risk_guard: Optional["RiskGuard"] = None,
     ):
         self._cfg = config
         self._exchanges = exchange_mgr
         self._redis = redis
+        self._risk_guard = risk_guard
         self._active_trades: Dict[str, TradeRecord] = {}
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
@@ -102,14 +105,34 @@ class ExecutionController:
                 logger.warning(f"Insufficient balance for {opp.symbol}")
                 return
 
+            # Harmonise quantity to the coarser lot step so both legs match
+            long_spec = await long_adapter.get_instrument_spec(opp.symbol)
+            short_spec = await short_adapter.get_instrument_spec(opp.symbol)
+            lot = max(
+                float(long_spec.lot_size) if long_spec else 0.001,
+                float(short_spec.lot_size) if short_spec else 0.001,
+            )
+            qty_float = float(opp.suggested_qty)
+            steps = int(qty_float / lot)               # floor to whole lot steps
+            qty_rounded = round(steps * lot, 8)         # kill float noise
+            qty_rounded = max(qty_rounded, lot)
+            order_qty = Decimal(str(qty_rounded))
+            
+            logger.debug(f"{opp.symbol}: raw_qty={opp.suggested_qty}, lot={lot}, order_qty={order_qty}")
+
             # Open both legs
+            
+            # Mark grace period BEFORE placing first order
+            if self._risk_guard:
+                self._risk_guard.mark_trade_opened(opp.symbol)
+            
             long_fill = await self._place_with_timeout(
                 long_adapter,
                 OrderRequest(
                     exchange=opp.long_exchange,
                     symbol=opp.symbol,
                     side=OrderSide.BUY,
-                    quantity=opp.suggested_qty,
+                    quantity=order_qty,
                     reduce_only=False,
                 ),
             )
@@ -122,7 +145,7 @@ class ExecutionController:
                     exchange=opp.short_exchange,
                     symbol=opp.symbol,
                     side=OrderSide.SELL,
-                    quantity=opp.suggested_qty,
+                    quantity=order_qty,
                     reduce_only=False,
                 ),
             )
@@ -135,9 +158,9 @@ class ExecutionController:
                 )
                 return
 
-            # Record trade with ACTUAL filled quantities
-            long_filled_qty = Decimal(str(long_fill.get("filled", 0) or opp.suggested_qty))
-            short_filled_qty = Decimal(str(short_fill.get("filled", 0) or opp.suggested_qty))
+            # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
+            long_filled_qty = Decimal(str(long_fill.get("filled", 0) or order_qty))
+            short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
 
             trade = TradeRecord(
                 trade_id=trade_id,
@@ -149,15 +172,23 @@ class ExecutionController:
                 short_qty=short_filled_qty,
                 entry_edge_bps=opp.net_edge_bps,
                 opened_at=datetime.now(timezone.utc),
+                mode=opp.mode,
+                exit_before=opp.exit_before,
             )
             self._active_trades[trade_id] = trade
             await self._persist_trade(trade)
+
+            mode_str = f" mode={opp.mode}"
+            if opp.exit_before:
+                mode_str += f" exit_before={opp.exit_before.strftime('%H:%M UTC')}"
+            if opp.n_collections > 0:
+                mode_str += f" collections={opp.n_collections}"
 
             logger.info(
                 f"Trade opened: {trade_id} {opp.symbol} "
                 f"L={opp.long_exchange}({long_filled_qty}) "
                 f"S={opp.short_exchange}({short_filled_qty}) "
-                f"edge={opp.net_edge_bps:.1f}bps",
+                f"edge={opp.net_edge_bps:.1f}bps{mode_str}",
                 extra={
                     "trade_id": trade_id,
                     "symbol": opp.symbol,
@@ -187,7 +218,32 @@ class ExecutionController:
             await asyncio.sleep(30)
 
     async def _check_exit(self, trade: TradeRecord) -> None:
-        """Close when edge has decayed below threshold on BOTH exchanges."""
+        """Check if trade should be closed.
+
+        Two modes:
+          CHERRY_PICK: exit BEFORE the costly funding payment
+          HOLD:        exit when edge reverses (both sides still income)
+        """
+        now = datetime.now(timezone.utc)
+
+        # ── CHERRY_PICK: time-based exit ─────────────────────────
+        if trade.mode == "cherry_pick" and trade.exit_before:
+            if now >= trade.exit_before:
+                logger.info(
+                    f"Cherry-pick exit for {trade.trade_id}: "
+                    f"exiting before costly payment at {trade.exit_before.strftime('%H:%M UTC')}",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
+                )
+                await self._close_trade(trade)
+                return
+            else:
+                remaining = (trade.exit_before - now).total_seconds() / 60
+                logger.debug(
+                    f"Trade {trade.trade_id}: cherry-pick — {remaining:.0f} min until exit"
+                )
+                return
+
+        # ── HOLD: wait for both sides to pay, then re-evaluate ───
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
 
@@ -198,10 +254,38 @@ class ExecutionController:
             logger.warning(f"Funding fetch failed for exit check on {trade.symbol}: {e}")
             return
 
+        # Track next funding time per exchange
+        if not trade.next_funding_long:
+            long_next = long_funding.get("next_timestamp")
+            if long_next:
+                trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
+                li = long_funding.get("interval_hours", "?")
+                logger.info(f"Trade {trade.trade_id}: {trade.long_exchange} next at "
+                            f"{trade.next_funding_long.strftime('%H:%M UTC')} (every {li}h)")
+
+        if not trade.next_funding_short:
+            short_next = short_funding.get("next_timestamp")
+            if short_next:
+                trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
+                si = short_funding.get("interval_hours", "?")
+                logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
+                            f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
+
+        # Wait until BOTH have paid at least once
+        long_paid = trade.next_funding_long and now >= trade.next_funding_long
+        short_paid = trade.next_funding_short and now >= trade.next_funding_short
+        if not (long_paid and short_paid):
+            return
+
+        # Both paid — check if still profitable to hold
+        long_interval = long_funding.get("interval_hours", 8)
+        short_interval = short_funding.get("interval_hours", 8)
+
         edge_info = calculate_funding_edge(
             long_funding["rate"], short_funding["rate"],
+            long_interval_hours=long_interval,
+            short_interval_hours=short_interval,
         )
-        current_bps = edge_info["edge_bps"]
 
         long_spec = await long_adapter.get_instrument_spec(trade.symbol)
         short_spec = await short_adapter.get_instrument_spec(trade.symbol)
@@ -209,18 +293,27 @@ class ExecutionController:
             return
 
         fees_bps = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net = current_bps - fees_bps
+        net = edge_info["edge_bps"] - fees_bps
 
-        # Exit if edge is gone (below 0 or below 20% of entry edge)
-        exit_threshold = trade.entry_edge_bps * Decimal("0.2")
-        if net > exit_threshold:
-            return
-
-        logger.info(
-            f"Exit signal for {trade.trade_id}: current_net={net:.1f}bps < threshold={exit_threshold:.1f}bps",
-            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
-        )
-        await self._close_trade(trade)
+        if net <= 0 or net < trade.entry_edge_bps * Decimal("0.1"):
+            logger.info(
+                f"Exit signal for {trade.trade_id}: net={net:.1f}bps — closing",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
+            )
+            await self._close_trade(trade)
+        else:
+            # Advance trackers to next payment
+            long_next = long_funding.get("next_timestamp")
+            short_next = short_funding.get("next_timestamp")
+            if long_next:
+                trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
+            if short_next:
+                trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
+            logger.info(
+                f"Trade {trade.trade_id}: Holding — net={net:.1f}bps. "
+                f"Next: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
+                f"{trade.short_exchange}={trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}"
+            )
 
     # ── Close trade ──────────────────────────────────────────────
 

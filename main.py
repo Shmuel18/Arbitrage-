@@ -42,7 +42,6 @@ async def main() -> None:
     if not cfg.paper_trading and not cfg.dry_run:
         print("\n⚠️  LIVE TRADING MODE — real money at risk!")
         print(f"   Exchanges : {cfg.enabled_exchanges}")
-        print(f"   Symbols   : {len(cfg.watchlist)}")
         print(f"   Max margin: {cfg.risk_limits.max_margin_usage}")
         answer = input("   Type YES to continue: ")
         if answer.strip() != "YES":
@@ -67,14 +66,25 @@ async def main() -> None:
 
     await mgr.connect_all()
 
+    # Verify credentials — remove exchanges with bad keys
+    verified = await mgr.verify_all()
+    cfg.enabled_exchanges = verified
+    if len(verified) < 2:
+        logger.error(f"Only {len(verified)} exchange(s) verified — need at least 2. Aborting.")
+        await mgr.disconnect_all()
+        await redis.disconnect()
+        return
+    logger.info(f"Verified {len(verified)} exchanges: {verified}",
+                extra={"action": "exchanges_verified", "data": {"exchanges": verified}})
+
     # Warm up instrument specs
     for adapter in mgr.all().values():
         await adapter.warm_up_symbols(cfg.watchlist)
 
     # ── Components ───────────────────────────────────────────────
-    controller = ExecutionController(cfg, mgr, redis)
-    scanner = Scanner(cfg, mgr, redis)
     guard = RiskGuard(cfg, mgr, redis)
+    controller = ExecutionController(cfg, mgr, redis, guard)
+    scanner = Scanner(cfg, mgr, redis)
 
     await controller.start()
     await guard.start()

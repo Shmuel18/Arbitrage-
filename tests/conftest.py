@@ -86,12 +86,16 @@ def mock_adapter(btc_spec):
     }
     adapter.get_ticker.return_value = {"last": 50000.0, "bid": 49999, "ask": 50001}
     adapter.get_funding_rate.return_value = {
-        "rate": Decimal("0.0001"), "timestamp": None, "datetime": None, "next_timestamp": None,
+        "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
+        "next_timestamp": None, "interval_hours": 8,
     }
     adapter.get_positions.return_value = []
     adapter.place_order.return_value = {
         "id": "order-123", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
+    # Mock exchange markets for scanner symbol intersection
+    adapter._exchange = MagicMock()
+    adapter._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
     return adapter
 
 
@@ -108,12 +112,16 @@ def mock_exchange_mgr(mock_adapter):
     }
     adapter_b.get_ticker.return_value = {"last": 50000.0}
     adapter_b.get_funding_rate.return_value = {
-        "rate": Decimal("0.0003"), "timestamp": None, "datetime": None, "next_timestamp": None,
+        "rate": Decimal("0.0003"), "timestamp": None, "datetime": None,
+        "next_timestamp": None, "interval_hours": 8,
     }
     adapter_b.get_positions.return_value = []
     adapter_b.place_order.return_value = {
         "id": "order-456", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
+    # Mock exchange markets for scanner symbol intersection
+    adapter_b._exchange = MagicMock()
+    adapter_b._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
 
     mgr.get.side_effect = lambda eid: mock_adapter if eid == "exchange_a" else adapter_b
     mgr.all.return_value = {"exchange_a": mock_adapter, "exchange_b": adapter_b}

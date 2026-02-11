@@ -1,6 +1,4 @@
-"""
-Funding-rate arithmetic — calculate edges and fees.
-"""
+"""Funding-rate arithmetic — calculate edges and fees."""
 
 from decimal import Decimal
 from typing import Dict, Any
@@ -9,35 +7,24 @@ from typing import Dict, Any
 def calculate_funding_edge(
     long_rate: Decimal,
     short_rate: Decimal,
-    funding_interval_hours: int = 8,
+    long_interval_hours: int = 8,
+    short_interval_hours: int = 8,
 ) -> Dict[str, Any]:
     """
-    Calculate the funding-rate edge in BPS.
+    Calculate the funding-rate edge in BPS (normalized to 8h).
 
-    Strategy: short the exchange paying high funding, long the exchange
-    paying low (or negative) funding. Normalize everything to 8 h.
+    Funding mechanics:
+      rate > 0 → shorts pay longs
+      rate < 0 → longs pay shorts
 
-    Parameters
-    ----------
-    long_rate   : funding rate on the exchange where we go long
-    short_rate  : funding rate on the exchange where we go short
-    funding_interval_hours : how often the exchange settles funding (1 or 8)
-
-    Returns
-    -------
-    dict with edge_bps, annualized_bps, long / short rates in bps
+    Per-payment PnL:
+      Long side : −rate  (positive rate = we pay, negative = we receive)
+      Short side: +rate  (positive rate = we receive, negative = we pay)
     """
-    # Normalize to 8-hour rate
-    multiplier = Decimal(8) / Decimal(funding_interval_hours)
-    norm_long = long_rate * multiplier
-    norm_short = short_rate * multiplier
+    norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
+    norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
 
-    # Edge = what the short pays us − what we pay on the long
-    #   short > 0 means shorts pay longs → we *receive* this when short
-    #   long  > 0 means shorts pay longs → we *pay* this when long
-    edge = (norm_short - norm_long) * Decimal("10000")     # convert to bps
-
-    # Annualised (3 settlements / day × 365)
+    edge = (norm_short - norm_long) * Decimal("10000")
     annual = edge * 3 * 365
 
     return {
@@ -46,6 +33,44 @@ def calculate_funding_edge(
         "long_rate_bps": norm_long * Decimal("10000"),
         "short_rate_bps": norm_short * Decimal("10000"),
     }
+
+
+def analyze_per_payment_pnl(
+    long_rate: Decimal,
+    short_rate: Decimal,
+) -> Dict[str, Any]:
+    """
+    Analyze which funding payments are income vs cost.
+
+    Returns per-payment PnL for each side (NOT normalized).
+
+      Long PnL per payment = −long_rate
+        rate > 0  → we pay   (PnL < 0)
+        rate < 0  → we receive (PnL > 0)
+
+      Short PnL per payment = +short_rate
+        rate > 0  → we receive (PnL > 0)
+        rate < 0  → we pay   (PnL < 0)
+    """
+    long_pnl = -long_rate
+    short_pnl = short_rate
+
+    return {
+        "long_pnl_per_payment": long_pnl,
+        "short_pnl_per_payment": short_pnl,
+        "long_is_income": long_pnl > 0,
+        "short_is_income": short_pnl > 0,
+        "both_income": long_pnl > 0 and short_pnl > 0,
+        "both_cost": long_pnl <= 0 and short_pnl <= 0,
+    }
+
+
+def calculate_cherry_pick_edge(
+    income_rate_per_payment: Decimal,
+    n_collections: int,
+) -> Decimal:
+    """Total collectible edge in BPS from cherry-pick strategy."""
+    return abs(income_rate_per_payment) * n_collections * Decimal("10000")
 
 
 def calculate_fees(
