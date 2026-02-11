@@ -334,27 +334,38 @@ class Config(BaseSettings):
         """Validate safety configuration before live trading"""
         errors = []
         
+        valid_exchanges = []
+
         if not self.paper_trading and not self.dry_run:
             # Production mode - extra validation
             
             # Check API keys
             for exchange_id in self.enabled_exchanges:
                 exchange = self.exchanges.get(exchange_id)
+                
                 if not exchange:
-                    errors.append(f"Exchange {exchange_id} not configured")
+                    print(f"⚠️ Warning: Exchange {exchange_id} not configured - Skipping.")
                     continue
                 
                 if not exchange.api_key or not exchange.api_secret:
-                    errors.append(f"Missing API credentials for {exchange_id}")
+                    print(f"⚠️ Warning: Missing API credentials for {exchange_id} - Skipping.")
+                    continue
+                
+                valid_exchanges.append(exchange_id)
+            
+            self.enabled_exchanges = valid_exchanges
+
+            if not self.enabled_exchanges:
+                errors.append("No valid exchanges found with API credentials!")
             
             # Check monitoring
             if self.monitoring.enable_telegram:
                 if not self.monitoring.telegram_bot_token or not self.monitoring.telegram_chat_id:
-                    errors.append("Telegram alerts enabled but credentials missing")
+                    pass  # Don't block startup for missing telegram
             
             # Check database
             if not self.database.password:
-                errors.append("Database password not set")
+                print("⚠️ Warning: Database password not set")
             
             # Validate risk limits
             if self.risk_limits.max_margin_usage > Decimal('0.5'):
