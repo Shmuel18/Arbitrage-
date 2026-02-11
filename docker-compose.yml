@@ -1,29 +1,6 @@
 version: "3.8"
 
 services:
-  # PostgreSQL Database
-  postgres:
-    image: timescale/timescaledb:latest-pg14
-    container_name: trinity-postgres
-    environment:
-      POSTGRES_DB: trinity_arbitrage
-      POSTGRES_USER: trinity
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
-      PGDATA: /var/lib/postgresql/data/pgdata
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U trinity"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - trinity-network
-
-  # Redis Cache & State Store
   redis:
     image: redis:7-alpine
     container_name: trinity-redis
@@ -38,56 +15,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
-    networks:
-      - trinity-network
-
-  # Prometheus (Optional - for metrics)
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: trinity-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-      - "--storage.tsdb.path=/prometheus"
-    restart: unless-stopped
-    networks:
-      - trinity-network
-    profiles:
-      - monitoring
-
-  # Grafana (Optional - for dashboards)
-  grafana:
-    image: grafana/grafana:latest
-    container_name: trinity-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-    restart: unless-stopped
-    networks:
-      - trinity-network
-    profiles:
-      - monitoring
 
 volumes:
-  postgres_data:
-    driver: local
   redis_data:
     driver: local
-  prometheus_data:
-    driver: local
-  grafana_data:
-    driver: local
-
-networks:
-  trinity-network:
-    driver: bridge

@@ -1,1 +1,1 @@
-"""Core system components"""
+"""Core system components."""

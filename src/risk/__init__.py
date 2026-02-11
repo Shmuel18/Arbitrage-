@@ -1,1 +1,1 @@
-"""Risk guard subsystem"""
+"""Risk management."""

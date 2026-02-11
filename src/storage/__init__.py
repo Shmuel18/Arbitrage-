@@ -1,1 +1,1 @@
-"""Storage layer components"""
+"""Storage layer."""

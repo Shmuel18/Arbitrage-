@@ -1,1 +1,1 @@
-"""Discovery and scanner components"""
+"""Discovery scanner."""

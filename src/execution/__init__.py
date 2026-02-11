@@ -1,1 +1,1 @@
-"""Execution subsystem"""
+"""Execution controller."""

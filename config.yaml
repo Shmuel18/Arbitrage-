@@ -1,56 +1,29 @@
-# Trinity Arbitrage Engine Configuration
-# Production-Grade Settings
+# Trinity Arbitrage Engine v3.0
 
 system:
-  name: "Trinity Arbitrage Engine V2.1-FINAL"
-  version: "2.1.0"
-  timezone: "UTC"
+  name: "Trinity Arbitrage Engine"
+  version: "3.0.0"
 
 risk_limits:
   max_margin_usage: 0.30
   max_position_size_usd: 10000
-  max_orphan_time_ms: 500
-  max_hedge_gap_ms: 1000
-  max_ws_staleness_ms: 500
   delta_threshold_pct: 5.0
-  min_liquidation_distance_pct: 25.0
 
 trading_params:
-  min_net_bps: 2.0 # Lowered for hourly funding opportunities
+  min_net_bps: 2.0
   slippage_buffer_bps: 1.5
   safety_buffer_bps: 2.0
   basis_buffer_bps: 1.0
-  max_chase_attempts: 3
-  max_open_time_ms: 1200
   cooldown_after_orphan_hours: 2
-  cooldown_after_outage_hours: 24
 
 execution:
   concurrent_opportunities: 3
-  order_retry_attempts: 3
   order_timeout_ms: 5000
-  cancel_timeout_ms: 2000
-  position_poll_interval_ms: 200
 
 risk_guard:
   fast_loop_interval_sec: 5
   deep_loop_interval_sec: 60
-  reconciliation_interval_sec: 5
-  enable_auto_rebalance: true
   enable_panic_close: true
-
-data_ingestion:
-  ws_reconnect_delay_sec: 5
-  ws_max_reconnects: 10
-  orderbook_depth: 10
-  health_check_interval_sec: 1
-  sequence_gap_tolerance: 0
-
-discovery:
-  scan_interval_ms: 200
-  min_opportunity_duration_sec: 60
-  min_orderbook_depth_usd: 5000
-  max_spread_bps: 10
 
 exchanges:
   enabled:
@@ -61,7 +34,7 @@ exchanges:
 
   binance:
     name: "Binance Futures"
-    ccxt_id: "binance"
+    ccxt_id: "binanceusdm"
     default_type: "future"
     rate_limit_ms: 50
     max_leverage: 20
@@ -122,44 +95,15 @@ symbols:
     - "NEAR/USDT"
     - "PEPE/USDT"
 
-  blacklist: []
-
-monitoring:
-  metrics_port: 9090
-  enable_prometheus: true
-  enable_telegram: true
-  enable_sentry: true
-  daily_summary_hour_utc: 0
-
-  alerts:
-    critical:
-      - orphan_detected
-      - margin_breach
-      - liquidation_risk
-    warning:
-      - high_slippage
-      - ws_degraded
-      - funding_missed
-
 logging:
-  level: "INFO" # DEBUG, INFO, WARNING, ERROR, CRITICAL
-  format: "json" # json, text
+  level: "INFO"
+  format: "json"
   console_output: true
   file_output: true
   log_dir: "logs"
   max_file_size_mb: 100
   backup_count: 10
-  audit_all_orders: true
-  audit_all_decisions: true
-
-database:
-  pool_size: 10
-  max_overflow: 20
-  pool_timeout_sec: 30
-  echo_sql: false
 
 redis:
   key_prefix: "trinity:"
-  default_ttl_sec: 3600
   lock_timeout_sec: 10
-  retry_attempts: 3
