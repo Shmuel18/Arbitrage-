@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Dict, List, Optional
 
 from src.core.config import get_config
-from src.core.contracts import OpportunityCandidate, OrderSide
+from src.core.contracts import OpportunityCandidate, OrderSide, TradeState
 from src.core.logging import get_logger
 from src.discovery.calculator import WorstCaseCalculator
 
@@ -47,6 +47,8 @@ class DiscoveryScanner:
     Continuously scans exchanges for funding arbitrage opportunities
     """
     
+    MAX_ACTIVE_TRADES = 3  # Maximum concurrent open trades
+    
     def __init__(self, exchange_manager, execution_controller):
         self.config = get_config()
         self.exchange_manager = exchange_manager
@@ -58,6 +60,9 @@ class DiscoveryScanner:
         
         self.scan_interval_sec = 10  # Scan every 10 seconds
         self.min_net_bps = self.config.trading_params.min_net_bps
+        
+        # Track symbols with active trades to prevent duplicates
+        self._active_symbols: set = set()
     
     async def start(self):
         """Start the discovery scanner"""
@@ -272,22 +277,100 @@ class DiscoveryScanner:
             short_funding=short_funding
         )
     
+    def _refresh_active_symbols(self):
+        """Sync active symbols from execution controller"""
+        self._active_symbols = set()
+        for active in self.execution_controller.active_trades:
+            self._active_symbols.add(active.opportunity.symbol)
+
+    async def _check_balance(self, exchange_id: str, required_margin_usd: Decimal) -> bool:
+        """Verify exchange has enough free margin"""
+        try:
+            adapter = self.exchange_manager.get_adapter(exchange_id)
+            if not adapter:
+                return False
+            balance = await adapter.get_balance()
+            free_usdt = balance.get('USDT', Decimal('0'))
+            if free_usdt < required_margin_usd:
+                logger.warning(
+                    "Insufficient balance",
+                    exchange=exchange_id,
+                    free=float(free_usdt),
+                    required=float(required_margin_usd),
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning("Balance check failed", exchange=exchange_id, error=str(e))
+            return False
+
     async def _execute_opportunities(self, opportunities: List[OpportunityEvent]):
         """Execute discovered opportunities"""
+        
+        # Refresh active symbols to prevent duplicates
+        self._refresh_active_symbols()
         
         # Sort by net BPS (best first)
         opportunities.sort(key=lambda x: x.net_bps, reverse=True)
         
         # Limit concurrent executions
         max_concurrent = self.config.execution.concurrent_opportunities
+        active_count = len(self.execution_controller.active_trades)
         
-        for opp in opportunities[:max_concurrent]:
+        if active_count >= self.MAX_ACTIVE_TRADES:
+            logger.debug("Max active trades reached", active=active_count)
+            return
+        
+        slots_available = min(max_concurrent, self.MAX_ACTIVE_TRADES - active_count)
+        executed = 0
+        
+        for opp in opportunities:
+            if executed >= slots_available:
+                break
+                
             try:
+                # DUPLICATE CHECK: Skip if already trading this symbol
+                if opp.symbol in self._active_symbols:
+                    logger.debug("Skipping duplicate", symbol=opp.symbol)
+                    continue
+                
                 # Calculate quantity from notional
                 avg_price = (opp.long_price + opp.short_price) / Decimal('2')
                 if avg_price <= 0:
                     continue
-                quantity = opp.notional_usd / avg_price
+                
+                # Get instrument specs for quantity normalization
+                long_adapter = self.exchange_manager.get_adapter(opp.long_exchange)
+                short_adapter = self.exchange_manager.get_adapter(opp.short_exchange)
+                if not long_adapter or not short_adapter:
+                    continue
+                
+                long_spec = await long_adapter.get_instrument_spec(opp.symbol)
+                short_spec = await short_adapter.get_instrument_spec(opp.symbol)
+                
+                # Calculate and NORMALIZE quantity to exchange step size
+                raw_quantity = opp.notional_usd / avg_price
+                quantity = long_spec.normalize_quantity(raw_quantity)
+                quantity = short_spec.normalize_quantity(quantity)
+                
+                # Verify quantity is above minimum notional
+                if quantity <= 0 or (quantity * avg_price) < max(long_spec.min_notional, short_spec.min_notional):
+                    logger.debug("Quantity below minimum", symbol=opp.symbol, quantity=float(quantity))
+                    continue
+                
+                # BALANCE CHECK on both exchanges
+                leverage = Decimal(str(self.config.exchanges.get(
+                    opp.long_exchange, self.config.exchanges.get(
+                        list(self.config.exchanges.keys())[0]
+                    )
+                ).leverage or 5))
+                required_margin = opp.notional_usd / leverage
+                
+                long_ok = await self._check_balance(opp.long_exchange, required_margin)
+                short_ok = await self._check_balance(opp.short_exchange, required_margin)
+                
+                if not long_ok or not short_ok:
+                    continue
 
                 # Build proper OpportunityCandidate for the controller
                 candidate = OpportunityCandidate(
@@ -313,11 +396,16 @@ class DiscoveryScanner:
                     long_exchange=opp.long_exchange,
                     short_exchange=opp.short_exchange,
                     net_bps=float(opp.net_bps),
+                    quantity=float(quantity),
                     notional_usd=float(opp.notional_usd)
                 )
                 
                 # Execute through controller
-                await self.execution_controller.execute_opportunity(candidate)
+                result = await self.execution_controller.execute_opportunity(candidate)
+                
+                if result.state == TradeState.ACTIVE_HEDGED:
+                    self._active_symbols.add(opp.symbol)
+                    executed += 1
                 
             except Exception as e:
                 logger.error(

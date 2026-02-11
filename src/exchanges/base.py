@@ -79,8 +79,8 @@ class ExchangeAdapter(ABC):
         pass
     
     @abstractmethod
-    async def place_order(self, order: OrderRequest) -> Dict:
-        """Place order"""
+    async def place_order(self, order: OrderRequest, reduce_only: bool = False) -> Dict:
+        """Place order. Set reduce_only=True for closing positions safely."""
         pass
     
     @abstractmethod

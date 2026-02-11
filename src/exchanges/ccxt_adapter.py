@@ -214,6 +214,12 @@ class CCXTProAdapter(ExchangeAdapter):
             qty = _safe_decimal(raw.get("contracts") or raw.get("positionAmt"), default="0")
             if qty == 0:
                 continue
+            # Ensure short positions have negative quantity
+            side = raw.get("side", "").lower()
+            if side == "short" and qty > 0:
+                qty = -qty
+            elif side == "long" and qty < 0:
+                qty = abs(qty)
             positions.append(
                 Position(
                     exchange=self.exchange_id,
@@ -237,8 +243,8 @@ class CCXTProAdapter(ExchangeAdapter):
         totals = balance.get("total", {})
         return {asset: _safe_decimal(value) for asset, value in totals.items()}
 
-    async def place_order(self, order: OrderRequest) -> Dict:
-        """Place order"""
+    async def place_order(self, order: OrderRequest, reduce_only: bool = False) -> Dict:
+        """Place order with optional reduceOnly for safe closes"""
         if self.exchange is None:
             await self.connect()
 
@@ -247,13 +253,36 @@ class CCXTProAdapter(ExchangeAdapter):
 
         await self._ensure_trading_settings(order.symbol)
 
-        return await self.exchange.create_order(
+        params = {}
+        if reduce_only:
+            params['reduceOnly'] = True
+
+        result = await self.exchange.create_order(
             symbol=order.symbol,
             type=order_type,
             side=side,
             amount=float(order.quantity),
             price=float(order.price) if order.price else None,
+            params=params,
         )
+
+        # Log fill status
+        status = result.get('status', 'unknown')
+        filled = result.get('filled', 0)
+        logger.info(
+            "Order placed",
+            exchange=self.exchange_id,
+            symbol=order.symbol,
+            side=side,
+            type=order_type,
+            amount=float(order.quantity),
+            filled=filled,
+            status=status,
+            order_id=result.get('id'),
+            reduce_only=reduce_only,
+        )
+
+        return result
 
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancel order"""

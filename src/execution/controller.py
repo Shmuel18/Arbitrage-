@@ -27,6 +27,8 @@ class ActiveTrade:
         self.opened_at = datetime.utcnow()
         self.funding_collected = False
         self.close_after: Optional[datetime] = None
+        self.close_attempts = 0
+        self.max_close_attempts = 5
 
 
 class ExecutionController:
@@ -77,6 +79,18 @@ class ExecutionController:
             opp = active.opportunity
 
             if active.close_after and now >= active.close_after:
+                # Check retry limit
+                if active.close_attempts >= active.max_close_attempts:
+                    logger.error(
+                        "CRITICAL: Max close attempts reached! Manual intervention needed.",
+                        symbol=opp.symbol,
+                        attempts=active.close_attempts,
+                    )
+                    trades_to_remove.append(active)
+                    continue
+
+                active.close_attempts += 1
+
                 # Time to close - funding has been paid
                 logger.info(
                     "Closing trade after funding",
@@ -164,7 +178,7 @@ class ExecutionController:
             logger.error("Missing adapter for close", symbol=opp.symbol)
             return False
 
-        # Close long = sell, Close short = buy
+        # Close long = sell, Close short = buy (with reduceOnly for safety)
         close_long = OrderRequest(
             exchange=opp.exchange_long,
             symbol=opp.symbol,
@@ -180,9 +194,14 @@ class ExecutionController:
             price=None,  # market order
         )
 
-        # Execute both closes simultaneously
-        long_task = asyncio.create_task(long_adapter.place_order(close_long))
-        short_task = asyncio.create_task(short_adapter.place_order(close_short))
+        # Execute both closes simultaneously with timeout
+        timeout_sec = self.config.execution.order_timeout_ms / 1000
+        long_task = asyncio.create_task(
+            long_adapter.place_order(close_long, reduce_only=True)
+        )
+        short_task = asyncio.create_task(
+            short_adapter.place_order(close_short, reduce_only=True)
+        )
 
         results = await asyncio.gather(long_task, short_task, return_exceptions=True)
         long_result, short_result = results[0], results[1]
@@ -240,14 +259,14 @@ class ExecutionController:
             symbol=opportunity.symbol,
             side=OrderSide.LONG,
             quantity=opportunity.quantity,
-            price=opportunity.long_entry_price,
+            price=None,  # Market order for reliable fills
         )
         short_order = OrderRequest(
             exchange=opportunity.exchange_short,
             symbol=opportunity.symbol,
             side=OrderSide.SHORT,
             quantity=opportunity.quantity,
-            price=opportunity.short_entry_price,
+            price=None,  # Market order for reliable fills
         )
 
         trade.state = TradeState.PENDING_OPEN
