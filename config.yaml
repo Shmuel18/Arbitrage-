@@ -16,9 +16,9 @@ risk_limits:
   min_liquidation_distance_pct: 25.0
 
 trading_params:
-  min_net_bps: 5.0
-  slippage_buffer_bps: 2.0
-  safety_buffer_bps: 3.0
+  min_net_bps: 2.0 # Lowered for hourly funding opportunities
+  slippage_buffer_bps: 1.5
+  safety_buffer_bps: 2.0
   basis_buffer_bps: 1.0
   max_chase_attempts: 3
   max_open_time_ms: 1200
@@ -57,6 +57,7 @@ exchanges:
     - binance
     - bybit
     - gateio
+    - okx
 
   binance:
     name: "Binance Futures"
@@ -75,8 +76,8 @@ exchanges:
     rate_limit_ms: 50
     max_leverage: 25
     leverage: 5
-    margin_mode: "isolated"
-    position_mode: "hedged"
+    margin_mode: "cross"
+    position_mode: "oneway"
 
   okx:
     name: "OKX Futures"
@@ -104,6 +105,22 @@ symbols:
     - "ETH/USDT"
     - "SOL/USDT"
     - "BNB/USDT"
+    - "XRP/USDT"
+    - "DOGE/USDT"
+    - "ADA/USDT"
+    - "AVAX/USDT"
+    - "LINK/USDT"
+    - "MATIC/USDT"
+    - "DOT/USDT"
+    - "UNI/USDT"
+    - "ATOM/USDT"
+    - "FIL/USDT"
+    - "ARB/USDT"
+    - "OP/USDT"
+    - "APT/USDT"
+    - "SUI/USDT"
+    - "NEAR/USDT"
+    - "PEPE/USDT"
 
   blacklist: []
 

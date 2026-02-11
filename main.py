@@ -107,6 +107,7 @@ class TrinityEngine:
 
             # Initialize execution controller
             self.execution_controller = ExecutionController(self.exchange_manager, self.redis_client)
+            await self.execution_controller.start_exit_monitor()
 
             # Start risk guard loops
             self.risk_guard = RiskGuard(self.exchange_manager, self.redis_client)
@@ -164,6 +165,10 @@ class TrinityEngine:
             if self.discovery_scanner:
                 await self.discovery_scanner.stop()
             
+            # Stop exit monitor
+            if self.execution_controller:
+                await self.execution_controller.stop_exit_monitor()
+
             # Stop health monitor
             if self.health_monitor:
                 await self.health_monitor.stop()

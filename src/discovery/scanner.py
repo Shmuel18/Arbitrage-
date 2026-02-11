@@ -4,11 +4,12 @@ Continuously scans for funding arbitrage opportunities
 """
 
 import asyncio
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional
 
 from src.core.config import get_config
-from src.core.contracts import OrderSide
+from src.core.contracts import OpportunityCandidate, OrderSide
 from src.core.logging import get_logger
 from src.discovery.calculator import WorstCaseCalculator
 
@@ -280,30 +281,48 @@ class DiscoveryScanner:
         # Limit concurrent executions
         max_concurrent = self.config.execution.concurrent_opportunities
         
-        for opportunity in opportunities[:max_concurrent]:
+        for opp in opportunities[:max_concurrent]:
             try:
+                # Calculate quantity from notional
+                avg_price = (opp.long_price + opp.short_price) / Decimal('2')
+                if avg_price <= 0:
+                    continue
+                quantity = opp.notional_usd / avg_price
+
+                # Build proper OpportunityCandidate for the controller
+                candidate = OpportunityCandidate(
+                    symbol=opp.symbol,
+                    exchange_long=opp.long_exchange,
+                    exchange_short=opp.short_exchange,
+                    quantity=quantity,
+                    size_usd=opp.notional_usd,
+                    expected_net_bps=opp.net_bps,
+                    funding_edge_bps=opp.net_bps,
+                    total_fees_bps=Decimal('0'),
+                    total_slippage_bps=Decimal('0'),
+                    total_buffer_bps=Decimal('0'),
+                    max_slippage_bps=Decimal('10'),
+                    deadline_timestamp=datetime.utcnow() + timedelta(minutes=5),
+                    long_entry_price=opp.long_price,
+                    short_entry_price=opp.short_price,
+                )
+
                 logger.info(
                     "Executing opportunity",
-                    symbol=opportunity.symbol,
-                    long_exchange=opportunity.long_exchange,
-                    short_exchange=opportunity.short_exchange,
-                    net_bps=float(opportunity.net_bps),
-                    notional_usd=float(opportunity.notional_usd)
+                    symbol=opp.symbol,
+                    long_exchange=opp.long_exchange,
+                    short_exchange=opp.short_exchange,
+                    net_bps=float(opp.net_bps),
+                    notional_usd=float(opp.notional_usd)
                 )
                 
                 # Execute through controller
-                await self.execution_controller.execute_opportunity(
-                    symbol=opportunity.symbol,
-                    long_exchange=opportunity.long_exchange,
-                    short_exchange=opportunity.short_exchange,
-                    notional_usd=opportunity.notional_usd,
-                    expected_net_bps=opportunity.net_bps
-                )
+                await self.execution_controller.execute_opportunity(candidate)
                 
             except Exception as e:
                 logger.error(
                     "Failed to execute opportunity",
-                    symbol=opportunity.symbol,
+                    symbol=opp.symbol,
                     error=str(e),
                     exc_info=True
                 )
