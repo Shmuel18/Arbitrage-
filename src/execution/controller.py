@@ -164,11 +164,8 @@ class ExecutionController:
         if not funding_data:
             return None
 
-        # Try multiple fields
-        next_funding_ts = funding_data.get('nextFundingTimestamp') or funding_data.get('fundingTimestamp')
-        if next_funding_ts is None:
-            info = funding_data.get('info', {})
-            next_funding_ts = info.get('nextFundingTime') or info.get('fundingTimestamp')
+        # Our adapter returns 'next_timestamp' (mapped from ccxt fundingTimestamp)
+        next_funding_ts = funding_data.get('next_timestamp') or funding_data.get('timestamp')
 
         return self._parse_funding_timestamp(next_funding_ts)
 
@@ -432,12 +429,9 @@ class ExecutionController:
         if not short_ok:
             trade.errors.append(str(short_result))
 
-        logger.error(
-            "Execution failed",
-            opportunity_id=str(opportunity.opportunity_id),
-            long_ok=long_ok,
-            short_ok=short_ok,
-        )
+        # Build descriptive error message
+        err_detail = f"symbol={opportunity.symbol} long({opportunity.exchange_long})={'OK' if long_ok else str(long_result)[:200]} short({opportunity.exchange_short})={'OK' if short_ok else str(short_result)[:200]}"
+        logger.error(f"Execution failed: {err_detail}")
 
         await self._attempt_recovery(
             opportunity,

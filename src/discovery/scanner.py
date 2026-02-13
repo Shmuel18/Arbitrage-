@@ -64,6 +64,10 @@ class DiscoveryScanner:
         # Track symbols with active trades to prevent duplicates
         self._active_symbols: set = set()
         
+        # Runtime blacklist: symbols that failed execution (delisted, etc.)
+        # Cleared on restart, persists across scan cycles
+        self._failed_symbols: set = set()
+        
         # Top-5 overview every 5 minutes
         self._overview_interval_sec = 300  # 5 minutes
         self._last_overview_time: Optional[datetime] = None  # None = fire on first scan
@@ -454,8 +458,8 @@ class DiscoveryScanner:
         chosen_opp = None
         
         for opp in opportunities:
-            # DUPLICATE CHECK
-            if opp.symbol in self._active_symbols:
+            # DUPLICATE / BLACKLIST CHECK
+            if opp.symbol in self._active_symbols or opp.symbol in self._failed_symbols:
                 continue
             
             # COOLDOWN CHECK
@@ -558,15 +562,14 @@ class DiscoveryScanner:
                 self._active_symbols.add(candidate.symbol)
                 logger.info("Trade opened successfully", symbol=candidate.symbol)
             else:
+                # Blacklist this symbol so next scan picks a different one
+                self._failed_symbols.add(candidate.symbol)
                 logger.warning(
-                    "Trade execution did not succeed — will retry next scan",
-                    symbol=candidate.symbol,
-                    state=result.state.value if hasattr(result.state, 'value') else str(result.state),
-                    errors=result.errors[:3] if hasattr(result, 'errors') else [],
+                    f"Execution failed for {candidate.symbol} — blacklisted for future scans. "
+                    f"Errors: {result.errors[:3] if hasattr(result, 'errors') else []}"
                 )
         except Exception as e:
+            self._failed_symbols.add(candidate.symbol)
             logger.error(
-                "Failed to execute opportunity",
-                symbol=candidate.symbol,
-                error=str(e),
+                f"Exception executing {candidate.symbol} — blacklisted. Error: {e}",
             )

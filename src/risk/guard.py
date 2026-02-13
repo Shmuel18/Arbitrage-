@@ -175,13 +175,13 @@ class RiskGuard:
             except Exception as e:
                 logger.debug("Failed to fetch positions for snapshot", exchange=exchange_id, error=str(e))
                 continue
-            for pos in positions:
-                await self.redis_client.set_position_snapshot(
-                    exchange_id,
-                    pos.symbol,
-                    {
-                        "quantity": str(pos.quantity),
-                        "entry_price": str(pos.entry_price),
-                        "side": pos.side.value,
-                    },
-                )
+            snapshot = [
+                {
+                    "symbol": pos.symbol,
+                    "side": pos.side.value,
+                    "quantity": str(pos.quantity),
+                    "entry_price": str(pos.entry_price),
+                }
+                for pos in positions
+            ]
+            await self.redis_client.set_position_snapshot(exchange_id, snapshot)
