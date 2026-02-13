@@ -12,11 +12,12 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from decimal import Decimal
 from typing import Optional
 
 from src.core.config import init_config
 from src.core.logging import get_logger
-from src.discovery.scanner import Scanner
+from src.discovery.scanner import DiscoveryScanner as Scanner
 from src.exchanges.adapter import ExchangeManager
 from src.execution.controller import ExecutionController
 from src.risk.guard import RiskGuard
@@ -66,9 +67,29 @@ async def main() -> None:
 
     await mgr.connect_all()
 
+    # Remove exchanges that failed to connect (_exchange is None)
+    for eid in list(mgr.all().keys()):
+        adapter = mgr.get(eid)
+        if adapter._exchange is None:
+            logger.warning(f"Removing {eid} — connection failed")
+            cfg.enabled_exchanges = [e for e in cfg.enabled_exchanges if e != eid]
+            try:
+                await adapter.disconnect()
+            except Exception:
+                pass
+            mgr.unregister(eid)
+
     # Verify credentials — remove exchanges with bad keys
-    verified = await mgr.verify_all()
-    cfg.enabled_exchanges = verified
+    failed = await mgr.verify_all()
+    for bad_eid in failed:
+        logger.warning(f"Removing {bad_eid} — credentials failed")
+        cfg.enabled_exchanges = [e for e in cfg.enabled_exchanges if e != bad_eid]
+        try:
+            await mgr.get(bad_eid).disconnect()
+        except Exception:
+            pass
+        mgr.unregister(bad_eid)
+    verified = cfg.enabled_exchanges
     if len(verified) < 2:
         logger.error(f"Only {len(verified)} exchange(s) verified — need at least 2. Aborting.")
         await mgr.disconnect_all()
@@ -77,16 +98,33 @@ async def main() -> None:
     logger.info(f"Verified {len(verified)} exchanges: {verified}",
                 extra={"action": "exchanges_verified", "data": {"exchanges": verified}})
 
+    # Log portfolio size (USDT) per exchange
+    total_usdt = Decimal("0")
+    for eid, adapter in mgr.all().items():
+        try:
+            bal = await adapter.get_balance()
+            total_usdt += bal["total"]
+            logger.info(
+                f"{eid} balance — total={bal['total']} free={bal['free']} used={bal['used']}",
+                extra={"action": "balance", "data": {"exchange": eid, "total": str(bal["total"]), "free": str(bal["free"]), "used": str(bal["used"])}},
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to fetch balance for {eid}: {exc}")
+    logger.info(
+        f"Total portfolio USDT (sum of exchanges): {total_usdt}",
+        extra={"action": "balance_total", "data": {"total_usdt": str(total_usdt)}},
+    )
+
     # Warm up instrument specs
     for adapter in mgr.all().values():
         await adapter.warm_up_symbols(cfg.watchlist)
 
     # ── Components ───────────────────────────────────────────────
-    guard = RiskGuard(cfg, mgr, redis)
-    controller = ExecutionController(cfg, mgr, redis, guard)
-    scanner = Scanner(cfg, mgr, redis)
+    guard = RiskGuard(mgr, redis)
+    controller = ExecutionController(mgr, redis)
+    scanner = Scanner(mgr, controller)
 
-    await controller.start()
+    await controller.start_exit_monitor()
     await guard.start()
 
     # ── Shutdown signal ──────────────────────────────────────────
@@ -105,22 +143,18 @@ async def main() -> None:
             signal.signal(sig, lambda s, f: shutdown_event.set())
 
     # ── Run scanner in background ────────────────────────────────
-    scan_task = asyncio.create_task(
-        scanner.start(controller.handle_opportunity), name="scanner",
-    )
+    await scanner.start()
 
     logger.info("Bot is running — press Ctrl+C to stop")
     await shutdown_event.wait()
 
     # ── Graceful shutdown ────────────────────────────────────────
     logger.info("Shutting down…")
-    scanner.stop()
-    scan_task.cancel()
-    await asyncio.gather(scan_task, return_exceptions=True)
+    await scanner.stop()
 
     # Close all open positions before exiting
     await controller.close_all_positions()
-    await controller.stop()
+    await controller.stop_exit_monitor()
     await guard.stop()
     await mgr.disconnect_all()
     await redis.disconnect()
@@ -132,4 +166,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
+        print("\nInterrupted by user")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise

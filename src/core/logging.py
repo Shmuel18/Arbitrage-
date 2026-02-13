@@ -34,6 +34,28 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(doc, default=str, ensure_ascii=False)
 
 
+class StructlogAdapter(logging.LoggerAdapter):
+    """Accept structlog-style keyword args and funnel them into extra."""
+
+    def process(self, msg, kwargs):
+        # Move any non-standard kwargs into extra dict
+        extra = kwargs.pop("extra", {})
+        # Pull out standard logging kwargs
+        exc_info = kwargs.pop("exc_info", None)
+        stack_info = kwargs.pop("stack_info", False)
+        stacklevel = kwargs.pop("stacklevel", 1)
+        # Everything else is a structlog-style kwarg → pack into extra
+        extra.update(kwargs)
+        kwargs.clear()
+        result_kwargs: Dict[str, Any] = {"extra": extra}
+        if exc_info is not None:
+            result_kwargs["exc_info"] = exc_info
+        if stack_info:
+            result_kwargs["stack_info"] = stack_info
+        result_kwargs["stacklevel"] = stacklevel
+        return msg, result_kwargs
+
+
 def get_logger(
     name: str,
     level: str = "INFO",
@@ -42,21 +64,21 @@ def get_logger(
     file_output: bool = True,
     max_mb: int = 100,
     backup_count: int = 10,
-) -> logging.Logger:
+) -> StructlogAdapter:
     """Return a configured logger, creating it only once per name."""
 
-    logger = logging.getLogger(name)
-    if logger.handlers:
-        return logger                    # already set up
+    base = logging.getLogger(name)
+    if base.handlers:
+        return StructlogAdapter(base, {})   # already set up
 
-    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-    logger.propagate = False
+    base.setLevel(getattr(logging, level.upper(), logging.INFO))
+    base.propagate = False
     fmt = JsonFormatter()
 
     if console:
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(fmt)
-        logger.addHandler(sh)
+        base.addHandler(sh)
 
     if file_output:
         log_path = Path(log_dir)
@@ -68,6 +90,6 @@ def get_logger(
             encoding="utf-8",
         )
         fh.setFormatter(fmt)
-        logger.addHandler(fh)
+        base.addHandler(fh)
 
-    return logger
+    return StructlogAdapter(base, {})

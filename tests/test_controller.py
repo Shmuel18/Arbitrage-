@@ -55,14 +55,21 @@ class TestHandleOpportunity:
     async def test_uses_filled_qty_not_requested(self, controller, sample_opportunity, mock_exchange_mgr):
         """Critical safety: trade record should use actual filled qty."""
         long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        
+        # Both must fill the same quantity for trade to open
         long_adapter.place_order.return_value = {
             "id": "o1", "filled": 0.008, "average": 50000, "status": "closed",
+        }
+        short_adapter.place_order.return_value = {
+            "id": "o2", "filled": 0.008, "average": 50000, "status": "closed",
         }
 
         await controller.handle_opportunity(sample_opportunity)
 
         trade = list(controller._active_trades.values())[0]
         assert trade.long_qty == Decimal("0.008")
+        assert trade.short_qty == Decimal("0.008")
 
 
 class TestCloseOrphan:

@@ -5,16 +5,20 @@ system:
   version: "3.0.0"
 
 risk_limits:
-  max_margin_usage: 0.30
+  max_margin_usage: 0.70
   max_position_size_usd: 10000
   delta_threshold_pct: 5.0
 
 trading_params:
-  min_net_bps: 0.5
-  slippage_buffer_bps: 1.5
+  min_net_bps: 0.0
+  min_gross_bps: 50.0
+  slippage_buffer_bps: 2.0
   safety_buffer_bps: 2.0
   basis_buffer_bps: 1.0
   cooldown_after_orphan_hours: 2
+  enter_before_funding_minutes: 15
+  exit_after_funding_minutes: 15
+  min_rate_diff_pct: 0.005
 
 execution:
   concurrent_opportunities: 1
@@ -31,6 +35,7 @@ exchanges:
     - bybit
     - gateio
     - okx
+    - kucoin
 
   binance:
     name: "Binance Futures"
@@ -68,6 +73,16 @@ exchanges:
     default_type: "swap"
     rate_limit_ms: 100
     max_leverage: 25
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
+
+  kucoin:
+    name: "KuCoin Futures"
+    ccxt_id: "kucoinfutures"
+    default_type: "swap"
+    rate_limit_ms: 100
+    max_leverage: 20
     leverage: 5
     margin_mode: "isolated"
     position_mode: "oneway"

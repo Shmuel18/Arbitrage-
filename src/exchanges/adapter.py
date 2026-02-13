@@ -74,6 +74,13 @@ class ExchangeAdapter:
             )
             return False
 
+    @property
+    def symbols(self) -> List[str]:
+        """All available USDT-settled perpetual symbols on this exchange."""
+        if self._exchange:
+            return list(self._exchange.symbols)
+        return []
+
     async def disconnect(self) -> None:
         if self._exchange:
             await self._exchange.close()
@@ -87,25 +94,49 @@ class ExchangeAdapter:
         if symbol in self._settings_applied:
             return
         ex = self._exchange
-        lev = self._cfg.get("leverage", 1)
+        lev = max(1, int(self._cfg.get("leverage", 1) or 1))  # must be >= 1
         margin = self._cfg.get("margin_mode", "cross")
         pos_mode = self._cfg.get("position_mode", "oneway")
 
-        try:
-            if hasattr(ex, "set_leverage"):
-                await ex.set_leverage(lev, symbol)
-            if hasattr(ex, "set_margin_mode"):
-                await ex.set_margin_mode(margin, symbol)
-            if hasattr(ex, "set_position_mode"):
-                hedged = (pos_mode == "hedged")
-                await ex.set_position_mode(hedged, symbol)
+        # Each setting independently — don't let one failure block the rest
+        ok = True
+        steps = [
+            ("leverage", self._set_leverage(ex, lev, symbol)),
+            ("margin_mode", self._set_margin_mode(ex, margin, lev, symbol)),
+            ("position_mode", self._set_position_mode(ex, pos_mode, symbol)),
+        ]
+        for step, coro in steps:
+            try:
+                await coro
+            except Exception as e:
+                msg = str(e)
+                # Ignore idempotent errors (already set to this value)
+                benign = any(k in msg.lower() for k in [
+                    "no need to change", "not modified", "leverage not modified",
+                    "already", "same", "no changes",
+                ])
+                if not benign:
+                    logger.debug(f"Trading setting '{step}' on {self.exchange_id}/{symbol}: {e}",
+                                 extra={"exchange": self.exchange_id, "symbol": symbol})
+                    ok = False
+
+        if ok:
             self._settings_applied.add(symbol)
-        except Exception as e:
-            # Many exchanges reject duplicate calls — that's fine.
-            msg = str(e)
-            if "No need to change" not in msg and "leverage not modified" not in msg:
-                logger.warning(f"Trading settings issue on {self.exchange_id}: {e}",
-                               extra={"exchange": self.exchange_id, "symbol": symbol})
+
+    @staticmethod
+    async def _set_leverage(ex, lev, symbol):
+        if hasattr(ex, "set_leverage"):
+            await ex.set_leverage(lev, symbol)
+
+    @staticmethod
+    async def _set_margin_mode(ex, margin, lev, symbol):
+        if hasattr(ex, "set_margin_mode"):
+            await ex.set_margin_mode(margin, symbol, {"lever": lev})
+
+    @staticmethod
+    async def _set_position_mode(ex, pos_mode, symbol):
+        if hasattr(ex, "set_position_mode"):
+            await ex.set_position_mode(pos_mode == "hedged", symbol)
 
     # ── Market data ──────────────────────────────────────────────
 
@@ -292,8 +323,20 @@ class ExchangeManager:
         self._adapters[exchange_id] = adapter
         return adapter
 
+    def unregister(self, exchange_id: str) -> None:
+        self._adapters.pop(exchange_id, None)
+
     def get(self, exchange_id: str) -> ExchangeAdapter:
         return self._adapters[exchange_id]
+
+    def get_adapter(self, exchange_id: str) -> Optional[ExchangeAdapter]:
+        """Compat alias — returns None instead of raising if missing."""
+        return self._adapters.get(exchange_id)
+
+    @property
+    def adapters(self) -> Dict[str, ExchangeAdapter]:
+        """Compat alias for _adapters."""
+        return self._adapters
 
     def all(self) -> Dict[str, ExchangeAdapter]:
         return dict(self._adapters)
@@ -307,24 +350,13 @@ class ExchangeManager:
                              extra={"exchange": adapter.exchange_id})
 
     async def verify_all(self) -> list[str]:
-        """Verify credentials on every adapter; remove & disconnect failures.
-
-        Returns list of exchange ids that passed.
-        """
-        failed: list[str] = []
-        for eid, adapter in list(self._adapters.items()):
+        failed = []
+        for eid, adapter in self._adapters.items():
             ok = await adapter.verify_credentials()
             if not ok:
                 failed.append(eid)
-                await adapter.disconnect()
-                del self._adapters[eid]
-                logger.warning(f"Removed {eid} — invalid credentials",
-                               extra={"exchange": eid, "action": "exchange_removed"})
-        return list(self._adapters.keys())
+        return failed
 
     async def disconnect_all(self) -> None:
         for adapter in self._adapters.values():
-            try:
-                await adapter.disconnect()
-            except Exception:
-                pass
+            await adapter.disconnect()

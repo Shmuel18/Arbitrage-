@@ -32,13 +32,14 @@ class TestScanAll:
         # rate_a=0.0001, rate_b=0.0050 → both positive
         # Best direction: long A, short B (short_pnl=+0.005 income, long_pnl=-0.0001 cost)
         # Cherry-pick: need next_timestamp on cost side (A) to know when it charges us
+        # Must be within 5 minutes to enter (micro-trade window)
         adapter_a.get_funding_rate.return_value = {
             "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
-            "next_timestamp": _future_ms(8), "interval_hours": 8,
+            "next_timestamp": _future_ms(0.05), "interval_hours": 8,  # 3 min from now
         }
         adapter_b.get_funding_rate.return_value = {
             "rate": Decimal("0.0050"), "timestamp": None, "datetime": None,
-            "next_timestamp": _future_ms(1), "interval_hours": 1,
+            "next_timestamp": _future_ms(0.03), "interval_hours": 1,  # 1.8 min from now
         }
         adapter_a.get_ticker.return_value = {"last": 50000.0}
         adapter_b.get_ticker.return_value = {"last": 50000.0}
@@ -100,13 +101,14 @@ class TestIntervalFromFunding:
 
         # rate_a=0.0001, rate_b=0.0050 → cherry-pick (short B is income)
         # B pays every 1h, A charges every 8h → 7 collections before cost
+        # Must be within 5 minutes to enter (micro-trade window)
         adapter_a.get_funding_rate.return_value = {
             "rate": Decimal("0.0001"), "timestamp": None,
-            "datetime": None, "next_timestamp": _future_ms(8), "interval_hours": 8,
+            "datetime": None, "next_timestamp": _future_ms(0.05), "interval_hours": 8,  # 3 min from now
         }
         adapter_b.get_funding_rate.return_value = {
             "rate": Decimal("0.0050"), "timestamp": None,
-            "datetime": None, "next_timestamp": _future_ms(1), "interval_hours": 1,
+            "datetime": None, "next_timestamp": _future_ms(0.03), "interval_hours": 1,  # 1.8 min from now
         }
         adapter_a.get_ticker.return_value = {"last": 50000.0}
         adapter_b.get_ticker.return_value = {"last": 50000.0}
@@ -115,5 +117,5 @@ class TestIntervalFromFunding:
 
         results = await scanner.scan_all()
         # With 1h interval on B (income side), we collect ~7 payments before
-        # the 8h cost payment on A → huge cherry-pick edge
+        # the 8h cost payment on A → huge cherry-pick edge, within 5-min window
         assert len(results) >= 1

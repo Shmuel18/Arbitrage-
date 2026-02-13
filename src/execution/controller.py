@@ -1,474 +1,591 @@
 """
-Execution controller — open, monitor, and close funding-arb trades.
-
-Safety features retained from review:
-  • partial-fill detection (use actual filled qty, not requested)
-  • order timeout with auto-cancel
-  • both-exchange exit monitoring (checks funding on BOTH legs)
-  • reduceOnly on every close
-  • Redis persistence of active trades (crash recovery)
-  • orphan detection and alerting
-  • cooldown after orphan
+Execution Controller
+Responsible for placing paired orders across exchanges
+and managing the full trade lifecycle (open → funding → close)
 """
 
-from __future__ import annotations
-
 import asyncio
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from src.core.contracts import (
-    OpportunityCandidate,
-    OrderRequest,
-    OrderSide,
-    TradeRecord,
-    TradeState,
-)
+from src.core.config import get_config
+from src.core.contracts import OrderRequest, OrderSide, OpportunityCandidate, TradeRecord, TradeState
 from src.core.logging import get_logger
-from src.discovery.calculator import calculate_fees, calculate_funding_edge
+from src.exchanges.adapter import ExchangeManager
+from src.storage.redis_client import RedisClient
 
-if TYPE_CHECKING:
-    from src.core.config import Config
-    from src.exchanges.adapter import ExchangeManager
-    from src.storage.redis_client import RedisClient
-    from src.risk.guard import RiskGuard
+logger = get_logger("execution_controller")
 
-logger = get_logger("execution")
 
-_ORDER_TIMEOUT_SEC = 5
+class ActiveTrade:
+    """Tracks an active hedged position awaiting funding payment"""
+
+    def __init__(self, opportunity: OpportunityCandidate, trade: TradeRecord):
+        self.opportunity = opportunity
+        self.trade = trade
+        self.opened_at = datetime.utcnow()
+        self.funding_collected = False
+        self.close_after: Optional[datetime] = None
+        self.close_attempts = 0
+        self.max_close_attempts = 5
+        # Actual filled quantities (may differ from requested due to partial fills/rounding)
+        self.long_filled_qty: Optional[Decimal] = None
+        self.short_filled_qty: Optional[Decimal] = None
 
 
 class ExecutionController:
-    def __init__(
-        self,
-        config: "Config",
-        exchange_mgr: "ExchangeManager",
-        redis: "RedisClient",
-        risk_guard: Optional["RiskGuard"] = None,
-    ):
-        self._cfg = config
-        self._exchanges = exchange_mgr
-        self._redis = redis
-        self._risk_guard = risk_guard
-        self._active_trades: Dict[str, TradeRecord] = {}
-        self._running = False
-        self._monitor_task: Optional[asyncio.Task] = None
+    """Executes opportunities across exchanges and manages trade lifecycle"""
 
-    # ── Lifecycle ────────────────────────────────────────────────
+    def __init__(self, exchange_manager: ExchangeManager, redis_client: Optional[RedisClient] = None):
+        self.config = get_config()
+        self.exchange_manager = exchange_manager
+        self.redis_client = redis_client
 
-    async def start(self) -> None:
-        self._running = True
-        await self._recover_trades()
-        self._monitor_task = asyncio.create_task(
-            self._exit_monitor_loop(), name="exit-monitor",
-        )
-        logger.info("Execution controller started")
+        # Track active trades for exit management
+        self.active_trades: List[ActiveTrade] = []
+        self._exit_task: Optional[asyncio.Task] = None
 
-    async def stop(self) -> None:
-        self._running = False
-        if self._monitor_task:
-            self._monitor_task.cancel()
-            await asyncio.gather(self._monitor_task, return_exceptions=True)
-        logger.info("Execution controller stopped")
+    async def start_exit_monitor(self):
+        """Start background loop that monitors and closes trades after funding"""
+        if self._exit_task is None:
+            self._exit_task = asyncio.create_task(self._exit_monitor_loop())
+            logger.info("Exit monitor started")
 
-    # ── Open trade ───────────────────────────────────────────────
+    async def stop_exit_monitor(self):
+        """Stop exit monitor"""
+        if self._exit_task:
+            self._exit_task.cancel()
+            try:
+                await self._exit_task
+            except asyncio.CancelledError:
+                pass
+            self._exit_task = None
 
-    async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
-        """Validate and execute a new funding-arb trade."""
-        # Duplicate guard
-        for t in self._active_trades.values():
-            if t.symbol == opp.symbol:
-                logger.debug(f"Already have active trade for {opp.symbol}")
-                return
+    async def _exit_monitor_loop(self):
+        """Check every 10 seconds if any trade should be closed"""
+        while True:
+            try:
+                await self._check_exits()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Exit monitor error", error=str(e))
+            await asyncio.sleep(10)
 
-        # Concurrency cap
-        if len(self._active_trades) >= self._cfg.execution.concurrent_opportunities:
-            return
+    async def _check_exits(self):
+        """Check all active trades and close those that have collected funding"""
+        now = datetime.utcnow()
+        trades_to_remove = []
 
-        # Acquire lock
-        lock_key = f"trade:{opp.symbol}"
-        if not await self._redis.acquire_lock(lock_key):
-            return
+        for active in self.active_trades:
+            opp = active.opportunity
 
-        trade_id = str(uuid.uuid4())[:12]
-        try:
-            # Balance pre-check (use 'free', not 'total')
-            long_adapter = self._exchanges.get(opp.long_exchange)
-            short_adapter = self._exchanges.get(opp.short_exchange)
-            long_bal = await long_adapter.get_balance()
-            short_bal = await short_adapter.get_balance()
+            if active.close_after and now >= active.close_after:
+                # Check retry limit
+                if active.close_attempts >= active.max_close_attempts:
+                    logger.critical(
+                        "Max close attempts reached! ORPHANED POSITION - manual intervention needed!",
+                        symbol=opp.symbol,
+                        exchange_long=opp.exchange_long,
+                        exchange_short=opp.exchange_short,
+                        quantity=float(opp.quantity),
+                        attempts=active.close_attempts,
+                    )
+                    # Persist orphan to Redis so it survives restart
+                    await self._persist_orphan(active, "max_close_attempts_exceeded")
+                    trades_to_remove.append(active)
+                    continue
 
-            notional = opp.suggested_qty * opp.reference_price
-            if long_bal["free"] < notional or short_bal["free"] < notional:
-                logger.warning(f"Insufficient balance for {opp.symbol}")
-                return
+                active.close_attempts += 1
 
-            # Harmonise quantity to the coarser lot step so both legs match
-            long_spec = await long_adapter.get_instrument_spec(opp.symbol)
-            short_spec = await short_adapter.get_instrument_spec(opp.symbol)
-            lot = max(
-                float(long_spec.lot_size) if long_spec else 0.001,
-                float(short_spec.lot_size) if short_spec else 0.001,
-            )
-            qty_float = float(opp.suggested_qty)
-            steps = int(qty_float / lot)               # floor to whole lot steps
-            qty_rounded = round(steps * lot, 8)         # kill float noise
-            qty_rounded = max(qty_rounded, lot)
-            order_qty = Decimal(str(qty_rounded))
-            
-            logger.debug(f"{opp.symbol}: raw_qty={opp.suggested_qty}, lot={lot}, order_qty={order_qty}")
-
-            # Open both legs
-            
-            # Mark grace period BEFORE placing first order
-            if self._risk_guard:
-                self._risk_guard.mark_trade_opened(opp.symbol)
-            
-            long_fill = await self._place_with_timeout(
-                long_adapter,
-                OrderRequest(
-                    exchange=opp.long_exchange,
+                # Time to close - funding has been paid
+                logger.info(
+                    "Closing trade after funding",
                     symbol=opp.symbol,
-                    side=OrderSide.BUY,
-                    quantity=order_qty,
-                    reduce_only=False,
-                ),
-            )
-            if not long_fill:
-                return
-
-            short_fill = await self._place_with_timeout(
-                short_adapter,
-                OrderRequest(
-                    exchange=opp.short_exchange,
-                    symbol=opp.symbol,
-                    side=OrderSide.SELL,
-                    quantity=order_qty,
-                    reduce_only=False,
-                ),
-            )
-            if not short_fill:
-                # Orphan: long filled but short didn't → close long
-                logger.error(f"Short leg failed — closing orphan long for {opp.symbol}")
-                await self._close_orphan(
-                    long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, long_fill,
+                    long_exchange=opp.exchange_long,
+                    short_exchange=opp.exchange_short,
+                    held_minutes=int((now - active.opened_at).total_seconds() / 60),
                 )
-                return
 
-            # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
-            long_filled_qty = Decimal(str(long_fill.get("filled", 0) or order_qty))
-            short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
+                success = await self._close_trade(active)
+                if success:
+                    await self._log_trade_summary(active)
+                    trades_to_remove.append(active)
+                continue
 
-            trade = TradeRecord(
-                trade_id=trade_id,
-                symbol=opp.symbol,
-                state=TradeState.OPEN,
-                long_exchange=opp.long_exchange,
-                short_exchange=opp.short_exchange,
-                long_qty=long_filled_qty,
-                short_qty=short_filled_qty,
-                entry_edge_bps=opp.net_edge_bps,
-                opened_at=datetime.now(timezone.utc),
-                mode=opp.mode,
-                exit_before=opp.exit_before,
+            if active.close_after is None:
+                # Determine when to close based on next funding time
+                close_time = await self._get_close_time(active)
+                if close_time:
+                    active.close_after = close_time
+                    mins = int((close_time - now).total_seconds() / 60)
+                    logger.info(
+                        "Scheduled trade exit",
+                        symbol=opp.symbol,
+                        close_in_minutes=mins,
+                    )
+                else:
+                    # Fallback: close after max 60 minutes if can't determine funding time
+                    age_minutes = (now - active.opened_at).total_seconds() / 60
+                    if age_minutes > 60:
+                        logger.warning("Trade too old, force closing", symbol=opp.symbol)
+                        success = await self._close_trade(active)
+                        if success:
+                            trades_to_remove.append(active)
+
+        for trade in trades_to_remove:
+            self.active_trades.remove(trade)
+
+    def _parse_funding_timestamp(self, ts) -> Optional[datetime]:
+        """Parse funding timestamp from various formats into naive UTC datetime"""
+        if ts is None:
+            return None
+        if isinstance(ts, (int, float)):
+            if ts > 1e12:
+                ts = ts / 1000  # ms to sec
+            return datetime.utcfromtimestamp(ts)
+        if isinstance(ts, str):
+            parsed = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+            # Convert timezone-aware to naive UTC
+            if parsed.tzinfo is not None:
+                from datetime import timezone
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+        return None
+
+    async def _get_funding_time_for_exchange(self, exchange_id: str, symbol: str) -> Optional[datetime]:
+        """Get next funding timestamp from a specific exchange"""
+        adapter = self.exchange_manager.get_adapter(exchange_id)
+        if not adapter:
+            return None
+
+        funding_data = await adapter.get_funding_rate(symbol)
+        if not funding_data:
+            return None
+
+        # Try multiple fields
+        next_funding_ts = funding_data.get('nextFundingTimestamp') or funding_data.get('fundingTimestamp')
+        if next_funding_ts is None:
+            info = funding_data.get('info', {})
+            next_funding_ts = info.get('nextFundingTime') or info.get('fundingTimestamp')
+
+        return self._parse_funding_timestamp(next_funding_ts)
+
+    async def _get_close_time(self, active: ActiveTrade) -> Optional[datetime]:
+        """Determine when to close based on next funding timestamp from BOTH exchanges"""
+        opp = active.opportunity
+        try:
+            # Check funding time from BOTH exchanges, close after the LATER one
+            times = []
+            for exchange_id in [opp.exchange_long, opp.exchange_short]:
+                dt = await self._get_funding_time_for_exchange(exchange_id, opp.symbol)
+                if dt:
+                    times.append(dt)
+
+            if not times:
+                return None
+
+            # Close 30 seconds AFTER the later funding payment
+            return max(times) + timedelta(seconds=30)
+
+        except Exception as e:
+            logger.debug("Could not determine close time", error=str(e))
+            return None
+
+    async def _close_trade(self, active: ActiveTrade) -> bool:
+        """Close both legs of a trade"""
+        opp = active.opportunity
+
+        long_adapter = self.exchange_manager.get_adapter(opp.exchange_long)
+        short_adapter = self.exchange_manager.get_adapter(opp.exchange_short)
+
+        if not long_adapter or not short_adapter:
+            logger.error("Missing adapter for close", symbol=opp.symbol)
+            return False
+
+        # Close long = sell, Close short = buy (with reduceOnly for safety)
+        # Use actual filled qty, fallback to original requested qty
+        long_close_qty = active.long_filled_qty or opp.quantity
+        short_close_qty = active.short_filled_qty or opp.quantity
+
+        close_long = OrderRequest(
+            exchange=opp.exchange_long,
+            symbol=opp.symbol,
+            side=OrderSide.SELL,  # sell to close long
+            quantity=long_close_qty,
+            reduce_only=True,
+        )
+        close_short = OrderRequest(
+            exchange=opp.exchange_short,
+            symbol=opp.symbol,
+            side=OrderSide.BUY,  # buy to close short
+            quantity=short_close_qty,
+            reduce_only=True,
+        )
+
+        # Execute both closes simultaneously with timeout
+        timeout_sec = self.config.execution.order_timeout_ms / 1000
+        long_task = asyncio.create_task(
+            long_adapter.place_order(close_long)
+        )
+        short_task = asyncio.create_task(
+            short_adapter.place_order(close_short)
+        )
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(long_task, short_task, return_exceptions=True),
+                timeout=timeout_sec,
             )
-            self._active_trades[trade_id] = trade
-            await self._persist_trade(trade)
+        except asyncio.TimeoutError:
+            logger.error("Close order timed out!", symbol=opp.symbol, timeout_sec=timeout_sec)
+            long_task.cancel()
+            short_task.cancel()
+            return False
 
-            mode_str = f" mode={opp.mode}"
-            if opp.exit_before:
-                mode_str += f" exit_before={opp.exit_before.strftime('%H:%M UTC')}"
-            if opp.n_collections > 0:
-                mode_str += f" collections={opp.n_collections}"
+        long_result, short_result = results[0], results[1]
+
+        long_ok = not isinstance(long_result, Exception)
+        short_ok = not isinstance(short_result, Exception)
+
+        if long_ok and short_ok:
+            logger.info(
+                "Trade closed successfully",
+                symbol=opp.symbol,
+                long_exchange=opp.exchange_long,
+                short_exchange=opp.exchange_short,
+            )
+            active.trade.state = TradeState.CLOSED
+            return True
+
+        # Partial close - retry the failed leg (always reduceOnly for safety)
+        if long_ok and not short_ok:
+            logger.error("Failed to close short leg, retrying...", error=str(short_result))
+            try:
+                await short_adapter.place_order(close_short)
+                active.trade.state = TradeState.CLOSED
+                return True
+            except Exception as e:
+                logger.error("Retry close short failed", error=str(e))
+
+        if short_ok and not long_ok:
+            logger.error("Failed to close long leg, retrying...", error=str(long_result))
+            try:
+                await long_adapter.place_order(close_long)
+                active.trade.state = TradeState.CLOSED
+                return True
+            except Exception as e:
+                logger.error("Retry close long failed", error=str(e))
+
+        logger.error("CRITICAL: Trade close failed on both legs!", symbol=opp.symbol)
+        return False
+
+    async def _log_trade_summary(self, active: ActiveTrade) -> None:
+        """Log PnL summary after closing a trade"""
+        opp = active.opportunity
+        held_secs = (datetime.utcnow() - active.opened_at).total_seconds()
+        held_mins = int(held_secs / 60)
+
+        # Fetch current balances from both exchanges
+        balance_lines = []
+        total_usdt = Decimal('0')
+        for eid, adapter in self.exchange_manager.adapters.items():
+            try:
+                bal = await adapter.get_balance()
+                total_usdt += bal['total']
+                balance_lines.append(f"    {eid}: {bal['total']:.2f} USDT (free={bal['free']:.2f})")
+            except Exception:
+                balance_lines.append(f"    {eid}: (failed to fetch)")
+
+        summary = (
+            f"\n╔══════════ TRADE SUMMARY ══════════╗"
+            f"\n║ Symbol   : {opp.symbol}"
+            f"\n║ Long     : {opp.exchange_long}"
+            f"\n║ Short    : {opp.exchange_short}"
+            f"\n║ Quantity : {float(active.long_filled_qty or opp.quantity):.4f}"
+            f"\n║ Expected : {float(opp.expected_net_bps):.1f} bps"
+            f"\n║ Held     : {held_mins} min"
+            f"\n╠══════════ BALANCES ═══════════════╣"
+        )
+        for bl in balance_lines:
+            summary += f"\n║{bl}"
+        summary += (
+            f"\n║ Total portfolio: {total_usdt:.2f} USDT"
+            f"\n╚══════════════════════════════════╝"
+        )
+        logger.info(summary)
+
+    async def execute_opportunity(self, opportunity: OpportunityCandidate) -> TradeRecord:
+        """Execute an opportunity (paired long/short) and schedule exit"""
+        trade = TradeRecord(opportunity=opportunity, state=TradeState.PRE_FLIGHT)
+
+        long_adapter = self.exchange_manager.get_adapter(opportunity.exchange_long)
+        short_adapter = self.exchange_manager.get_adapter(opportunity.exchange_short)
+
+        if not long_adapter or not short_adapter:
+            trade.state = TradeState.ERROR_RECOVERY
+            trade.errors.append("Missing exchange adapter")
+            logger.error("Missing exchange adapter", opportunity_id=str(opportunity.opportunity_id))
+            return trade
+
+        long_order = OrderRequest(
+            exchange=opportunity.exchange_long,
+            symbol=opportunity.symbol,
+            side=OrderSide.BUY,
+            quantity=opportunity.quantity,
+        )
+        short_order = OrderRequest(
+            exchange=opportunity.exchange_short,
+            symbol=opportunity.symbol,
+            side=OrderSide.SELL,
+            quantity=opportunity.quantity,
+        )
+
+        trade.state = TradeState.PENDING_OPEN
+
+        long_task = asyncio.create_task(long_adapter.place_order(long_order))
+        short_task = asyncio.create_task(short_adapter.place_order(short_order))
+
+        # Wrap entry in timeout
+        timeout_sec = self.config.execution.order_timeout_ms / 1000
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(long_task, short_task, return_exceptions=True),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            logger.error("Entry order timed out!", symbol=opportunity.symbol, timeout_sec=timeout_sec)
+            long_task.cancel()
+            short_task.cancel()
+            trade.state = TradeState.ERROR_RECOVERY
+            trade.errors.append("Order timeout")
+            return trade
+
+        long_result, short_result = results[0], results[1]
+
+        long_ok = not isinstance(long_result, Exception)
+        short_ok = not isinstance(short_result, Exception)
+
+        if long_ok and short_ok:
+            # A3: Verify fills - check for partial fills
+            # Handle None from exchanges that don't immediately report fills
+            long_filled_raw = long_result.get('filled')
+            short_filled_raw = short_result.get('filled')
+            long_filled = Decimal(str(long_filled_raw)) if long_filled_raw is not None else opportunity.quantity
+            short_filled = Decimal(str(short_filled_raw)) if short_filled_raw is not None else opportunity.quantity
+
+            if long_filled <= 0 or short_filled <= 0:
+                logger.error(
+                    "Zero fill detected!",
+                    long_filled=float(long_filled),
+                    short_filled=float(short_filled),
+                )
+                trade.state = TradeState.ERROR_RECOVERY
+                trade.errors.append(f"Zero fill: long={long_filled}, short={short_filled}")
+                await self._attempt_recovery(
+                    opportunity, long_adapter, short_adapter,
+                    long_result if long_filled > 0 else None,
+                    short_result if short_filled > 0 else None,
+                )
+                return trade
+
+            # Warn if partial fill (not 100%)
+            if long_filled < opportunity.quantity or short_filled < opportunity.quantity:
+                logger.warning(
+                    "Partial fill detected - using actual filled quantities",
+                    requested=float(opportunity.quantity),
+                    long_filled=float(long_filled),
+                    short_filled=float(short_filled),
+                )
+
+            trade.state = TradeState.ACTIVE_HEDGED
+            trade.expected_net_bps = opportunity.expected_net_bps
 
             logger.info(
-                f"Trade opened: {trade_id} {opp.symbol} "
-                f"L={opp.long_exchange}({long_filled_qty}) "
-                f"S={opp.short_exchange}({short_filled_qty}) "
-                f"edge={opp.net_edge_bps:.1f}bps{mode_str}",
-                extra={
-                    "trade_id": trade_id,
+                "Executed paired orders - now tracking for exit",
+                opportunity_id=str(opportunity.opportunity_id),
+                long_order_id=long_result.get("id"),
+                short_order_id=short_result.get("id"),
+                long_filled=float(long_filled),
+                short_filled=float(short_filled),
+            )
+
+            # Register for exit monitoring with actual filled quantities
+            active = ActiveTrade(opportunity, trade)
+            active.long_filled_qty = long_filled
+            active.short_filled_qty = short_filled
+            self.active_trades.append(active)
+
+            # Persist to Redis so trades survive restarts
+            await self._persist_trade(active)
+
+            # Start exit monitor if not running
+            await self.start_exit_monitor()
+
+            return trade
+
+        trade.state = TradeState.ERROR_RECOVERY
+
+        if not long_ok:
+            trade.errors.append(str(long_result))
+        if not short_ok:
+            trade.errors.append(str(short_result))
+
+        logger.error(
+            "Execution failed",
+            opportunity_id=str(opportunity.opportunity_id),
+            long_ok=long_ok,
+            short_ok=short_ok,
+        )
+
+        await self._attempt_recovery(
+            opportunity,
+            long_adapter,
+            short_adapter,
+            long_result if long_ok else None,
+            short_result if short_ok else None,
+        )
+
+        return trade
+
+    async def _attempt_recovery(
+        self,
+        opportunity: OpportunityCandidate,
+        long_adapter,
+        short_adapter,
+        long_result: Optional[dict],
+        short_result: Optional[dict],
+    ):
+        """Best-effort recovery when one leg fails"""
+        try:
+            if long_result and not short_result:
+                filled_raw = long_result.get('filled')
+                filled = Decimal(str(filled_raw)) if filled_raw is not None else opportunity.quantity
+                if filled > 0:
+                    close_order = OrderRequest(
+                        exchange=opportunity.exchange_long,
+                        symbol=opportunity.symbol,
+                        side=OrderSide.SELL,
+                        quantity=filled,
+                        reduce_only=True,
+                    )
+                    await long_adapter.place_order(close_order)
+                    logger.info("Recovery: closed orphaned long leg", filled=float(filled))
+
+            if short_result and not long_result:
+                filled_raw = short_result.get('filled')
+                filled = Decimal(str(filled_raw)) if filled_raw is not None else opportunity.quantity
+                if filled > 0:
+                    close_order = OrderRequest(
+                        exchange=opportunity.exchange_short,
+                        symbol=opportunity.symbol,
+                        side=OrderSide.BUY,
+                        quantity=filled,
+                        reduce_only=True,
+                    )
+                    await short_adapter.place_order(close_order)
+                    logger.info("Recovery: closed orphaned short leg", filled=float(filled))
+        except Exception as e:
+            logger.critical(
+                "Recovery FAILED - orphaned position may exist!",
+                error=str(e),
+                opportunity_id=str(opportunity.opportunity_id),
+                symbol=opportunity.symbol,
+            )
+            # Persist orphan info to Redis
+            if self.redis_client:
+                try:
+                    await self.redis_client.set_trade_state(
+                        opportunity.opportunity_id or "unknown",
+                        {
+                            "type": "orphan_recovery_failed",
+                            "symbol": opportunity.symbol,
+                            "exchange_long": opportunity.exchange_long,
+                            "exchange_short": opportunity.exchange_short,
+                            "quantity": str(opportunity.quantity),
+                            "error": str(e),
+                            "timestamp": datetime.utcnow().isoformat(),
+                        },
+                    )
+                except Exception:
+                    pass
+
+    async def estimate_execution_cost(self, opportunity: OpportunityCandidate) -> Decimal:
+        """Estimate execution cost (simple placeholder)"""
+        return opportunity.total_fees_bps + opportunity.total_slippage_bps
+
+    # ==================== PERSISTENCE ====================
+
+    async def _persist_trade(self, active: ActiveTrade):
+        """Persist active trade to Redis so it survives process restart"""
+        if not self.redis_client:
+            return
+        try:
+            opp = active.opportunity
+            await self.redis_client.set_trade_state(
+                active.trade.trade_id,
+                {
+                    "type": "active_trade",
                     "symbol": opp.symbol,
-                    "action": "trade_opened",
+                    "exchange_long": opp.exchange_long,
+                    "exchange_short": opp.exchange_short,
+                    "quantity": str(opp.quantity),
+                    "long_filled_qty": str(active.long_filled_qty or opp.quantity),
+                    "short_filled_qty": str(active.short_filled_qty or opp.quantity),
+                    "opened_at": active.opened_at.isoformat(),
+                    "state": active.trade.state.value,
+                    "expected_net_bps": str(opp.expected_net_bps),
                 },
             )
         except Exception as e:
-            logger.error(f"Trade execution failed for {opp.symbol}: {e}",
-                         extra={"symbol": opp.symbol})
-        finally:
-            await self._redis.release_lock(lock_key)
+            logger.warning("Failed to persist trade to Redis", error=str(e))
 
-    # ── Exit monitor ─────────────────────────────────────────────
-
-    async def _exit_monitor_loop(self) -> None:
-        while self._running:
-            try:
-                for trade_id in list(self._active_trades):
-                    trade = self._active_trades.get(trade_id)
-                    if not trade or trade.state != TradeState.OPEN:
-                        continue
-                    await self._check_exit(trade)
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                logger.error(f"Exit monitor error: {e}")
-            await asyncio.sleep(30)
-
-    async def _check_exit(self, trade: TradeRecord) -> None:
-        """Check if trade should be closed.
-
-        Two modes:
-          CHERRY_PICK: exit BEFORE the costly funding payment
-          HOLD:        exit when edge reverses (both sides still income)
-        """
-        now = datetime.now(timezone.utc)
-
-        # ── CHERRY_PICK: time-based exit ─────────────────────────
-        if trade.mode == "cherry_pick" and trade.exit_before:
-            if now >= trade.exit_before:
-                logger.info(
-                    f"Cherry-pick exit for {trade.trade_id}: "
-                    f"exiting before costly payment at {trade.exit_before.strftime('%H:%M UTC')}",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
-                )
-                await self._close_trade(trade)
-                return
-            else:
-                remaining = (trade.exit_before - now).total_seconds() / 60
-                logger.debug(
-                    f"Trade {trade.trade_id}: cherry-pick — {remaining:.0f} min until exit"
-                )
-                return
-
-        # ── HOLD: wait for both sides to pay, then re-evaluate ───
-        long_adapter = self._exchanges.get(trade.long_exchange)
-        short_adapter = self._exchanges.get(trade.short_exchange)
-
+    async def _persist_orphan(self, active: ActiveTrade, reason: str):
+        """Persist orphaned trade info to Redis for manual recovery"""
+        if not self.redis_client:
+            return
         try:
-            long_funding = await long_adapter.get_funding_rate(trade.symbol)
-            short_funding = await short_adapter.get_funding_rate(trade.symbol)
+            opp = active.opportunity
+            await self.redis_client.set_trade_state(
+                active.trade.trade_id,
+                {
+                    "type": "orphan",
+                    "reason": reason,
+                    "symbol": opp.symbol,
+                    "exchange_long": opp.exchange_long,
+                    "exchange_short": opp.exchange_short,
+                    "quantity": str(opp.quantity),
+                    "long_filled_qty": str(active.long_filled_qty or opp.quantity),
+                    "short_filled_qty": str(active.short_filled_qty or opp.quantity),
+                    "opened_at": active.opened_at.isoformat(),
+                    "close_attempts": active.close_attempts,
+                    "timestamp": datetime.utcnow().isoformat(),
+                },
+            )
+            logger.critical(
+                "Orphaned trade persisted to Redis",
+                trade_id=str(active.trade.trade_id),
+                symbol=opp.symbol,
+                reason=reason,
+            )
         except Exception as e:
-            logger.warning(f"Funding fetch failed for exit check on {trade.symbol}: {e}")
+            logger.error("Failed to persist orphan to Redis", error=str(e))
+
+    async def close_all_positions(self):
+        """Emergency close all active positions — used during shutdown"""
+        if not self.active_trades:
             return
 
-        # Track next funding time per exchange
-        if not trade.next_funding_long:
-            long_next = long_funding.get("next_timestamp")
-            if long_next:
-                trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
-                li = long_funding.get("interval_hours", "?")
-                logger.info(f"Trade {trade.trade_id}: {trade.long_exchange} next at "
-                            f"{trade.next_funding_long.strftime('%H:%M UTC')} (every {li}h)")
-
-        if not trade.next_funding_short:
-            short_next = short_funding.get("next_timestamp")
-            if short_next:
-                trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
-                si = short_funding.get("interval_hours", "?")
-                logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
-                            f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
-
-        # Wait until BOTH have paid at least once
-        long_paid = trade.next_funding_long and now >= trade.next_funding_long
-        short_paid = trade.next_funding_short and now >= trade.next_funding_short
-        if not (long_paid and short_paid):
-            return
-
-        # Both paid — check if still profitable to hold
-        long_interval = long_funding.get("interval_hours", 8)
-        short_interval = short_funding.get("interval_hours", 8)
-
-        edge_info = calculate_funding_edge(
-            long_funding["rate"], short_funding["rate"],
-            long_interval_hours=long_interval,
-            short_interval_hours=short_interval,
-        )
-
-        long_spec = await long_adapter.get_instrument_spec(trade.symbol)
-        short_spec = await short_adapter.get_instrument_spec(trade.symbol)
-        if not long_spec or not short_spec:
-            return
-
-        fees_bps = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net = edge_info["edge_bps"] - fees_bps
-
-        if net <= 0 or net < trade.entry_edge_bps * Decimal("0.1"):
-            logger.info(
-                f"Exit signal for {trade.trade_id}: net={net:.1f}bps — closing",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
-            )
-            await self._close_trade(trade)
-        else:
-            # Advance trackers to next payment
-            long_next = long_funding.get("next_timestamp")
-            short_next = short_funding.get("next_timestamp")
-            if long_next:
-                trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
-            if short_next:
-                trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
-            logger.info(
-                f"Trade {trade.trade_id}: Holding — net={net:.1f}bps. "
-                f"Next: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
-                f"{trade.short_exchange}={trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}"
-            )
-
-    # ── Close trade ──────────────────────────────────────────────
-
-    async def _close_trade(self, trade: TradeRecord) -> None:
-        trade.state = TradeState.CLOSING
-        await self._persist_trade(trade)
-
-        long_adapter = self._exchanges.get(trade.long_exchange)
-        short_adapter = self._exchanges.get(trade.short_exchange)
-
-        long_ok = await self._close_leg(
-            long_adapter, trade.long_exchange, trade.symbol,
-            OrderSide.SELL, trade.long_qty, trade.trade_id,
-        )
-        short_ok = await self._close_leg(
-            short_adapter, trade.short_exchange, trade.symbol,
-            OrderSide.BUY, trade.short_qty, trade.trade_id,
-        )
-
-        if long_ok and short_ok:
-            trade.state = TradeState.CLOSED
-            trade.closed_at = datetime.now(timezone.utc)
-            await self._redis.delete_trade_state(trade.trade_id)
-            del self._active_trades[trade.trade_id]
-            logger.info(f"Trade closed: {trade.trade_id}", extra={
-                "trade_id": trade.trade_id, "action": "trade_closed",
-            })
-        else:
-            trade.state = TradeState.ERROR
-            await self._persist_trade(trade)
-            logger.error(
-                f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED",
-                extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
-            )
-            cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
-            await self._redis.set_cooldown(trade.symbol, cooldown_sec)
-
-    async def _close_leg(
-        self, adapter, exchange: str, symbol: str,
-        side: OrderSide, qty: Decimal, trade_id: str,
-    ) -> bool:
-        """Close one leg with retry (3×). Always reduceOnly."""
-        for attempt in range(3):
+        logger.warning("Closing all active positions before shutdown", count=len(self.active_trades))
+        for active in list(self.active_trades):
             try:
-                req = OrderRequest(
-                    exchange=exchange,
-                    symbol=symbol,
-                    side=side,
-                    quantity=qty,
-                    reduce_only=True,
-                )
-                result = await self._place_with_timeout(adapter, req)
-                if result:
-                    return True
+                success = await self._close_trade(active)
+                if success:
+                    logger.info("Shutdown: closed trade", symbol=active.opportunity.symbol)
+                else:
+                    logger.error("Shutdown: failed to close trade", symbol=active.opportunity.symbol)
+                    await self._persist_orphan(active, "shutdown_close_failed")
             except Exception as e:
-                logger.warning(
-                    f"Close attempt {attempt+1}/3 failed {exchange}/{symbol}: {e}",
-                    extra={"trade_id": trade_id, "exchange": exchange},
-                )
-                await asyncio.sleep(1)
-        return False
-
-    # ── Close all (shutdown) ─────────────────────────────────────
-
-    async def close_all_positions(self) -> None:
-        """Close every active trade — called during graceful shutdown."""
-        for trade_id, trade in list(self._active_trades.items()):
-            if trade.state == TradeState.OPEN:
-                logger.info(f"Shutdown: closing trade {trade_id}")
-                await self._close_trade(trade)
-
-    # ── Helpers ──────────────────────────────────────────────────
-
-    async def _place_with_timeout(self, adapter, req: OrderRequest) -> Optional[dict]:
-        """Place order with timeout. Returns fill dict or None."""
-        timeout = self._cfg.execution.order_timeout_ms / 1000
-        try:
-            return await asyncio.wait_for(adapter.place_order(req), timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.error(
-                f"Order timeout ({timeout}s) on {req.exchange}/{req.symbol}",
-                extra={"exchange": req.exchange, "symbol": req.symbol, "action": "order_timeout"},
-            )
-            return None
-
-    async def _close_orphan(
-        self, adapter, exchange: str, symbol: str,
-        side: OrderSide, fill: dict,
-    ) -> None:
-        """Emergency close of a single orphaned leg."""
-        filled_qty = Decimal(str(fill.get("filled", 0)))
-        if filled_qty <= 0:
-            return
-        try:
-            req = OrderRequest(
-                exchange=exchange,
-                symbol=symbol,
-                side=side,
-                quantity=filled_qty,
-                reduce_only=True,
-            )
-            await adapter.place_order(req)
-            logger.info(f"Orphan closed: {filled_qty} {symbol} on {exchange}",
-                        extra={"exchange": exchange, "symbol": symbol, "action": "orphan_closed"})
-        except Exception as e:
-            logger.error(f"ORPHAN CLOSE FAILED {exchange}/{symbol}: {e} — MANUAL INTERVENTION",
-                         extra={"exchange": exchange, "symbol": symbol})
-        cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
-        await self._redis.set_cooldown(symbol, cooldown_sec)
-
-    # ── Persistence ──────────────────────────────────────────────
-
-    async def _persist_trade(self, trade: TradeRecord) -> None:
-        await self._redis.set_trade_state(trade.trade_id, {
-            "symbol": trade.symbol,
-            "state": trade.state.value,
-            "long_exchange": trade.long_exchange,
-            "short_exchange": trade.short_exchange,
-            "long_qty": str(trade.long_qty),
-            "short_qty": str(trade.short_qty),
-            "entry_edge_bps": str(trade.entry_edge_bps),
-            "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
-        })
-
-    async def _recover_trades(self) -> None:
-        """Recover active trades from Redis after crash/restart."""
-        stored = await self._redis.get_all_trades()
-        for trade_id, data in stored.items():
-            state_val = data.get("state", "")
-            if state_val not in (TradeState.OPEN.value, TradeState.CLOSING.value):
-                continue
-
-            trade = TradeRecord(
-                trade_id=trade_id,
-                symbol=data["symbol"],
-                state=TradeState(state_val),
-                long_exchange=data["long_exchange"],
-                short_exchange=data["short_exchange"],
-                long_qty=Decimal(data["long_qty"]),
-                short_qty=Decimal(data["short_qty"]),
-                entry_edge_bps=Decimal(data.get("entry_edge_bps", "0")),
-                opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else None,
-            )
-            self._active_trades[trade_id] = trade
-            logger.info(
-                f"Recovered trade {trade_id} ({trade.symbol}) state={trade.state.value}",
-                extra={"trade_id": trade_id, "action": "trade_recovered"},
-            )
-
-            if trade.state == TradeState.CLOSING:
-                logger.warning(
-                    f"Trade {trade_id} was mid-close — retrying",
-                    extra={"trade_id": trade_id},
-                )
-                asyncio.create_task(self._close_trade(trade))
-
-        if stored:
-            logger.info(f"Recovered {len(self._active_trades)} active trades")
+                logger.error("Shutdown: exception closing trade", symbol=active.opportunity.symbol, error=str(e))
+                await self._persist_orphan(active, f"shutdown_exception: {e}")
