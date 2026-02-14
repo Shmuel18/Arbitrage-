@@ -43,6 +43,20 @@ class RedisClient:
         except Exception:
             return False
 
+    # ── Generic passthroughs (API publisher support) ────────────
+
+    async def set(self, key: str, value: str, ex: Optional[int] = None) -> None:
+        """Set a raw key/value (no prefix applied)."""
+        await self._client.set(key, value, ex=ex)
+
+    async def zadd(self, key: str, mapping: Dict[str, float]) -> None:
+        """Add to a sorted set (no prefix applied)."""
+        await self._client.zadd(key, mapping)
+
+    def pubsub(self):
+        """Return a pubsub instance (no prefix applied)."""
+        return self._client.pubsub()
+
     # ── Trade state (crash recovery) ─────────────────────────────
 
     async def set_trade_state(self, trade_id: str, state: Dict[str, Any]) -> None:

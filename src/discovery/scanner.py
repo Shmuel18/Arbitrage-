@@ -40,29 +40,86 @@ class Scanner:
         config: "Config",
         exchange_mgr: "ExchangeManager",
         redis: "RedisClient",
+        publisher=None,
     ):
         self._cfg = config
         self._exchanges = exchange_mgr
         self._redis = redis
         self._running = False
+        self._publisher = publisher
 
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def start(self, callback) -> None:
         """Continuously scan; call *callback(opp)* when an opportunity is found."""
         self._running = True
-        logger.info("Scanner started", extra={"action": "scanner_start"})
+        scan_interval = getattr(self._cfg.risk_guard, 'scanner_interval_sec', 30)
+        logger.info(f"Scanner started (interval: {scan_interval}s)", extra={"action": "scanner_start"})
 
         while self._running:
             try:
                 opps = await self.scan_all()
-                for opp in opps:
-                    await callback(opp)
+                
+                # Sort by net_edge_bps and display top 5 opportunities
+                if opps:
+                    opps.sort(key=lambda o: o.net_edge_bps, reverse=True)
+                    top_5 = opps[:5]
+                    
+                    logger.info("📊 TOP 5 OPPORTUNITIES", extra={"action": "top_opportunities"})
+                    for idx, opp in enumerate(top_5, 1):
+                        logger.info(
+                            f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
+                            f"Edge: {opp.net_edge_bps:.2f} bps",
+                            extra={
+                                "action": "opportunity",
+                                "data": {
+                                    "rank": idx,
+                                    "symbol": opp.symbol,
+                                    "edge_bps": opp.net_edge_bps,
+                                    "pair": f"{opp.long_exchange}_{opp.short_exchange}"
+                                }
+                            }
+                        )
+                    
+                    # Publish opportunities to Redis for frontend
+                    if self._publisher:
+                        opp_data = [
+                            {
+                                "symbol": o.symbol,
+                                "long_exchange": o.long_exchange,
+                                "short_exchange": o.short_exchange,
+                                "net_bps": float(o.net_edge_bps),
+                                "gross_bps": float(o.gross_edge_bps),
+                                "long_rate": float(o.long_funding_rate),
+                                "short_rate": float(o.short_funding_rate),
+                                "price": float(o.reference_price),
+                                "mode": o.mode,
+                            }
+                            for o in top_5
+                        ]
+                        await self._publisher.publish_opportunities(opp_data)
+                        await self._publisher.publish_log(
+                            "INFO",
+                            f"Scan complete: {len(opps)} opportunities found. Best: {opps[0].symbol} {opps[0].net_edge_bps:.2f} bps"
+                        )
+                    
+                    # Only execute the best opportunity
+                    best_opp = opps[0]
+                    await callback(best_opp)
+                else:
+                    if self._publisher:
+                        await self._publisher.publish_opportunities([])
+                        await self._publisher.publish_log("INFO", "Scan complete: 0 opportunities found")
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error(f"Scan cycle error: {e}")
-            await asyncio.sleep(30)
+                if self._publisher:
+                    try:
+                        await self._publisher.publish_log("ERROR", f"Scan error: {e}")
+                    except Exception:
+                        pass
+            await asyncio.sleep(scan_interval)
 
     def stop(self) -> None:
         self._running = False
@@ -80,48 +137,78 @@ class Scanner:
         symbol_sets = [set(adapters[eid]._exchange.markets.keys()) for eid in exchange_ids]
         common_symbols = set.intersection(*symbol_sets)
         
-        logger.info(f"Scanning {len(common_symbols)} common symbols across {len(exchange_ids)} exchanges")
+        # Parallelism for faster scanning
+        parallelism = getattr(self._cfg.execution, 'scan_parallelism', 10)
+        logger.debug(f"Scanning {len(common_symbols)} common symbols across {len(exchange_ids)} exchanges (parallelism={parallelism})")
 
         results: List[OpportunityCandidate] = []
-
-        for symbol in common_symbols:
-            # Cooldown check
-            if await self._redis.is_cooled_down(symbol):
+        
+        # Scan symbols in parallel batches
+        symbol_list = list(common_symbols)
+        scan_tasks = [
+            self._scan_symbol(symbol, adapters, exchange_ids)
+            for symbol in symbol_list
+        ]
+        
+        # Use semaphore to limit concurrent scans
+        semaphore = asyncio.Semaphore(parallelism)
+        async def bounded_scan(task):
+            async with semaphore:
+                return await task
+        
+        gathered = await asyncio.gather(*[bounded_scan(t) for t in scan_tasks], return_exceptions=True)
+        
+        for symbol_results in gathered:
+            if isinstance(symbol_results, Exception):
+                logger.debug(f"Symbol scan error: {symbol_results}")
                 continue
-
-            # Fetch funding across all exchanges in parallel
-            funding: Dict[str, dict] = {}
-            tasks = {eid: adapters[eid].get_funding_rate(symbol) for eid in exchange_ids}
-            gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-            for eid, result in zip(tasks.keys(), gathered):
-                if isinstance(result, Exception):
-                    logger.debug(f"Funding fetch failed {eid}/{symbol}: {result}")
-                    continue
-                if self._is_stale(result):
-                    logger.debug(f"Stale funding data for {eid}/{symbol}")
-                    continue
-                funding[eid] = result
-
-            if len(funding) < 2:
-                continue
-
-            # Try every pair
-            eids = list(funding.keys())
-            for i in range(len(eids)):
-                for j in range(i + 1, len(eids)):
-                    opp = await self._evaluate_pair(
-                        symbol, eids[i], eids[j], funding, adapters,
-                    )
-                    if opp:
-                        results.append(opp)
+            if symbol_results:
+                results.extend(symbol_results)
 
         if results:
             results.sort(key=lambda o: o.net_edge_bps, reverse=True)
-            logger.info(
+            logger.debug(
                 f"Found {len(results)} opportunities, best={results[0].net_edge_bps:.1f} bps",
                 extra={"action": "scan_result", "data": {"count": len(results)}},
             )
+        return results
+
+    async def _scan_symbol(
+        self, symbol: str, adapters: Dict[str, "ExchangeAdapter"], exchange_ids: List[str]
+    ) -> List[OpportunityCandidate]:
+        """Scan a single symbol for opportunities."""
+        # Cooldown check
+        if await self._redis.is_cooled_down(symbol):
+            return []
+
+        # Fetch funding across all exchanges in parallel
+        funding: Dict[str, dict] = {}
+        tasks = {eid: adapters[eid].get_funding_rate(symbol) for eid in exchange_ids}
+        gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        for eid, result in zip(tasks.keys(), gathered):
+            if isinstance(result, Exception):
+                logger.debug(f"Funding fetch failed {eid}/{symbol}: {result}")
+                continue
+            if self._is_stale(result):
+                logger.debug(f"Stale funding data for {eid}/{symbol}")
+                continue
+            funding[eid] = result
+
+        if len(funding) < 2:
+            return []
+
+        # Try every pair
+        results = []
+        eids = list(funding.keys())
+        for i in range(len(eids)):
+            for j in range(i + 1, len(eids)):
+                opp = await self._evaluate_pair(
+                    symbol, eids[i], eids[j], funding, adapters,
+                )
+                if opp:
+                    results.append(opp)
+        
         return results
 
     # ── Evaluate a single pair ───────────────────────────────────
@@ -284,13 +371,19 @@ class Scanner:
         exit_before: Optional[datetime] = None,
         n_collections: int = 0,
     ) -> Optional[OpportunityCandidate]:
-        """Build opportunity with position sizing."""
+        """Build opportunity with position sizing (70% of min balance × leverage)."""
         long_bal = await adapters[long_eid].get_balance()
         short_bal = await adapters[short_eid].get_balance()
         free_usd = min(long_bal["free"], short_bal["free"])
+
+        # Position sizing: position_size_pct (70%) of smallest balance × leverage
+        position_pct = self._cfg.risk_limits.position_size_pct  # 0.70
+        long_exc_cfg = self._cfg.exchanges.get(long_eid)
+        leverage = Decimal(str(long_exc_cfg.leverage if long_exc_cfg and long_exc_cfg.leverage else 5))
+        margin = free_usd * position_pct          # 70% of min balance as margin
+        notional = margin * leverage              # multiply by leverage for actual position size
         max_pos = self._cfg.risk_limits.max_position_size_usd
-        margin_cap = free_usd * self._cfg.risk_limits.max_margin_usage
-        notional = min(max_pos, margin_cap)
+        notional = min(max_pos, notional)
 
         long_ticker = await adapters[long_eid].get_ticker(symbol)
         price = Decimal(str(long_ticker.get("last", 0)))

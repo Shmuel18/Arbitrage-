@@ -21,6 +21,7 @@ from src.exchanges.adapter import ExchangeManager
 from src.execution.controller import ExecutionController
 from src.risk.guard import RiskGuard
 from src.storage.redis_client import RedisClient
+from src.api.publisher import APIPublisher
 
 logger = get_logger("main")
 
@@ -82,9 +83,10 @@ async def main() -> None:
         await adapter.warm_up_symbols(cfg.watchlist)
 
     # ── Components ───────────────────────────────────────────────
+    publisher = APIPublisher(redis)
     guard = RiskGuard(cfg, mgr, redis)
     controller = ExecutionController(cfg, mgr, redis, guard)
-    scanner = Scanner(cfg, mgr, redis)
+    scanner = Scanner(cfg, mgr, redis, publisher=publisher)
 
     await controller.start()
     await guard.start()
@@ -108,6 +110,59 @@ async def main() -> None:
     scan_task = asyncio.create_task(
         scanner.start(controller.handle_opportunity), name="scanner",
     )
+    
+    # ── Run status publisher in background ─────────────────────────
+    async def publish_status_loop():
+        """Publish bot status + balances + summary to Redis every 5 seconds"""
+        while not shutdown_event.is_set():
+            try:
+                # Get real active positions count
+                active_count = len(controller._active_trades)
+                
+                # Publish bot status
+                await publisher.publish_status(
+                    running=True,
+                    exchanges=cfg.enabled_exchanges,
+                    positions_count=active_count,
+                )
+                
+                # Fetch and publish real balances
+                balances = {}
+                for eid in cfg.enabled_exchanges:
+                    adapter = mgr.get(eid)
+                    if adapter:
+                        try:
+                            bal = await adapter.get_balance()
+                            balances[eid] = float(bal.get("free", 0))
+                        except Exception:
+                            balances[eid] = 0.0
+                
+                await publisher.publish_balances(balances)
+                await publisher.publish_summary(balances, active_count)
+                
+                # Publish active positions details
+                positions_data = []
+                for tid, trade in controller._active_trades.items():
+                    positions_data.append({
+                        "id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "long_exchange": trade.long_exchange,
+                        "short_exchange": trade.short_exchange,
+                        "long_qty": str(trade.long_qty),
+                        "short_qty": str(trade.short_qty),
+                        "entry_edge_bps": str(trade.entry_edge_bps),
+                        "mode": trade.mode,
+                        "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+                        "state": trade.state.value,
+                    })
+                await publisher.publish_positions(positions_data)
+                
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(f"Error publishing status: {e}")
+                await asyncio.sleep(1)
+    
+    status_task = asyncio.create_task(publish_status_loop(), name="status_publisher")
 
     logger.info("Bot is running — press Ctrl+C to stop")
     await shutdown_event.wait()
@@ -116,7 +171,8 @@ async def main() -> None:
     logger.info("Shutting down…")
     scanner.stop()
     scan_task.cancel()
-    await asyncio.gather(scan_task, return_exceptions=True)
+    status_task.cancel()
+    await asyncio.gather(scan_task, status_task, return_exceptions=True)
 
     # Close all open positions before exiting
     await controller.close_all_positions()

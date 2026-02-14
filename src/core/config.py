@@ -22,6 +22,7 @@ class RiskLimits(BaseSettings):
     max_margin_usage: Decimal = Decimal("0.30")
     max_position_size_usd: Decimal = Decimal("10000")
     delta_threshold_pct: Decimal = Decimal("5.0")
+    position_size_pct: Decimal = Decimal("0.70")
 
 
 class TradingParams(BaseSettings):
@@ -30,17 +31,24 @@ class TradingParams(BaseSettings):
     safety_buffer_bps: Decimal = Decimal("3.0")
     basis_buffer_bps: Decimal = Decimal("1.0")
     cooldown_after_orphan_hours: int = 2
+    entry_offset_seconds: int = 900
+    exit_offset_seconds: int = 900
+    top_opportunities_display: int = 5
+    execute_only_best_opportunity: bool = True
 
 
 class ExecutionConfig(BaseSettings):
     concurrent_opportunities: int = 3
     order_timeout_ms: int = 5000
+    batch_scan_concurrent: bool = True
+    scan_parallelism: int = 10
 
 
 class RiskGuardConfig(BaseSettings):
     fast_loop_interval_sec: int = 5
     deep_loop_interval_sec: int = 60
     enable_panic_close: bool = True
+    scanner_interval_sec: int = 10
 
 
 class ExchangeConfig(BaseSettings):
@@ -80,6 +88,9 @@ class LoggingConfig(BaseSettings):
     log_dir: str = "logs"
     max_file_size_mb: int = 100
     backup_count: int = 10
+    log_balances_on_startup: bool = True
+    log_balances_after_trade: bool = True
+    log_top_opportunities: bool = True
 
 
 # ── Master config ────────────────────────────────────────────────

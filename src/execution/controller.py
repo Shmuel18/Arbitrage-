@@ -14,8 +14,9 @@ Safety features retained from review:
 from __future__ import annotations
 
 import asyncio
+import time as _time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -64,6 +65,11 @@ class ExecutionController:
         self._monitor_task = asyncio.create_task(
             self._exit_monitor_loop(), name="exit-monitor",
         )
+        
+        # Log balances on startup (if enabled in config)
+        if hasattr(self._cfg.logging, 'log_balances_on_startup') and self._cfg.logging.log_balances_on_startup:
+            await self._log_exchange_balances()
+        
         logger.info("Execution controller started")
 
     async def stop(self) -> None:
@@ -87,6 +93,51 @@ class ExecutionController:
         if len(self._active_trades) >= self._cfg.execution.concurrent_opportunities:
             return
 
+        # ── Entry timing gate: only enter within entry_offset before funding ──
+        entry_offset = self._cfg.trading_params.entry_offset_seconds  # 900 = 15 min
+        long_adapter = self._exchanges.get(opp.long_exchange)
+        short_adapter = self._exchanges.get(opp.short_exchange)
+        
+        try:
+            long_funding = await long_adapter.get_funding_rate(opp.symbol)
+            short_funding = await short_adapter.get_funding_rate(opp.symbol)
+        except Exception as e:
+            logger.debug(f"Cannot fetch funding time for {opp.symbol}: {e}")
+            return
+        
+        now_ms = _time.time() * 1000
+        
+        # Check if we're within entry_offset seconds before ANY funding payment
+        long_next = long_funding.get("next_timestamp")
+        short_next = short_funding.get("next_timestamp")
+        
+        in_entry_window = False
+        if long_next:
+            seconds_until_long = (long_next - now_ms) / 1000
+            if 0 < seconds_until_long <= entry_offset:
+                in_entry_window = True
+        if short_next:
+            seconds_until_short = (short_next - now_ms) / 1000
+            if 0 < seconds_until_short <= entry_offset:
+                in_entry_window = True
+        
+        if not in_entry_window:
+            next_str = ""
+            if long_next:
+                next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
+            if short_next:
+                next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
+            logger.debug(
+                f"Skipping {opp.symbol}: not in entry window (next funding: {next_str}). "
+                f"Entry allowed {entry_offset}s before payment."
+            )
+            return
+        
+        logger.info(
+            f"Entry window OPEN for {opp.symbol} — funding in "
+            f"{int(min(s for s in [(long_next-now_ms)/1000 if long_next else 99999, (short_next-now_ms)/1000 if short_next else 99999] if s > 0))}s"
+        )
+
         # Acquire lock
         lock_key = f"trade:{opp.symbol}"
         if not await self._redis.acquire_lock(lock_key):
@@ -94,14 +145,24 @@ class ExecutionController:
 
         trade_id = str(uuid.uuid4())[:12]
         try:
-            # Balance pre-check (use 'free', not 'total')
-            long_adapter = self._exchanges.get(opp.long_exchange)
-            short_adapter = self._exchanges.get(opp.short_exchange)
+            # ── Position sizing: 70% of smallest balance × leverage ──
             long_bal = await long_adapter.get_balance()
             short_bal = await short_adapter.get_balance()
-
-            notional = opp.suggested_qty * opp.reference_price
-            if long_bal["free"] < notional or short_bal["free"] < notional:
+            
+            position_pct = float(self._cfg.risk_limits.position_size_pct)  # 0.70
+            leverage = self._cfg.exchanges.get(opp.long_exchange)
+            lev = leverage.leverage if leverage and leverage.leverage else 5
+            
+            # Use 70% of the SMALLEST balance with leverage
+            min_balance = min(float(long_bal["free"]), float(short_bal["free"]))
+            notional = Decimal(str(min_balance * position_pct * lev))
+            
+            logger.info(
+                f"{opp.symbol}: Sizing — min_bal=${min_balance:.2f}, "
+                f"{int(position_pct*100)}% × {lev}x = ${float(notional):.2f} notional"
+            )
+            
+            if notional <= 0:
                 logger.warning(f"Insufficient balance for {opp.symbol}")
                 return
 
@@ -112,7 +173,7 @@ class ExecutionController:
                 float(long_spec.lot_size) if long_spec else 0.001,
                 float(short_spec.lot_size) if short_spec else 0.001,
             )
-            qty_float = float(opp.suggested_qty)
+            qty_float = float(notional / opp.reference_price)
             steps = int(qty_float / lot)               # floor to whole lot steps
             qty_rounded = round(steps * lot, 8)         # kill float noise
             qty_rounded = max(qty_rounded, lot)
@@ -195,6 +256,10 @@ class ExecutionController:
                     "action": "trade_opened",
                 },
             )
+            
+            # Log balances after trade opened (if enabled)
+            if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:
+                await self._log_exchange_balances()
         except Exception as e:
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
@@ -271,13 +336,32 @@ class ExecutionController:
                 logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
                             f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
 
-        # Wait until BOTH have paid at least once
-        long_paid = trade.next_funding_long and now >= trade.next_funding_long
-        short_paid = trade.next_funding_short and now >= trade.next_funding_short
-        if not (long_paid and short_paid):
+        # Wait until BOTH have paid, then wait exit_offset (15 min) after payment
+        exit_offset = self._cfg.trading_params.exit_offset_seconds  # 900 = 15 min
+        
+        if trade.next_funding_long:
+            long_exit_time = trade.next_funding_long + timedelta(seconds=exit_offset)
+            long_paid = now >= long_exit_time
+        else:
+            long_paid = False
+        
+        if trade.next_funding_short:
+            short_exit_time = trade.next_funding_short + timedelta(seconds=exit_offset)
+            short_paid = now >= short_exit_time
+        else:
+            short_paid = False
+
+        # Exit once ANY funding has paid + offset elapsed (grab and run)
+        if not (long_paid or short_paid):
             return
 
-        # Both paid — check if still profitable to hold
+        which_paid = "long" if long_paid else "short"
+        logger.info(
+            f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — closing",
+            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
+        )
+
+        # Check if still profitable to hold
         long_interval = long_funding.get("interval_hours", 8)
         short_interval = short_funding.get("interval_hours", 8)
 
@@ -341,6 +425,10 @@ class ExecutionController:
             logger.info(f"Trade closed: {trade.trade_id}", extra={
                 "trade_id": trade.trade_id, "action": "trade_closed",
             })
+            
+            # Log balances after trade closure (if enabled)
+            if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:
+                await self._log_exchange_balances()
         else:
             trade.state = TradeState.ERROR
             await self._persist_trade(trade)
@@ -472,3 +560,31 @@ class ExecutionController:
 
         if stored:
             logger.info(f"Recovered {len(self._active_trades)} active trades")
+
+    # ── Balance logging ───────────────────────────────────────────
+
+    async def _log_exchange_balances(self) -> None:
+        """Log current USDT balances for all exchanges."""
+        try:
+            logger.info("💰 EXCHANGE BALANCES", extra={"action": "balance_log"})
+            
+            for exchange_id in self._cfg.enabled_exchanges:
+                adapter = self._exchanges.get(exchange_id)
+                if not adapter:
+                    continue
+                
+                try:
+                    balance = await adapter.get_balance()
+                    usdt_balance = balance.get("free", 0)
+                    logger.info(
+                        f"  {exchange_id.upper()}: ${usdt_balance:,.2f}",
+                        extra={
+                            "action": "exchange_balance",
+                            "exchange": exchange_id,
+                            "balance_usdt": usdt_balance
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to fetch balance for {exchange_id}: {e}")
+        except Exception as e:
+            logger.error(f"Balance logging error: {e}")
