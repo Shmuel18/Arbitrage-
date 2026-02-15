@@ -133,6 +133,25 @@ class ExecutionController:
         if len(self._active_trades) >= self._cfg.execution.concurrent_opportunities:
             return
 
+        # ── Funding spread gate (safety check) ──
+        # For HOLD mode: raw funding_spread_pct must meet threshold
+        # For CHERRY_PICK: gross_edge_pct (total collections) must meet threshold
+        tp = self._cfg.trading_params
+        if opp.mode == "cherry_pick":
+            if opp.gross_edge_pct < tp.min_funding_spread:
+                logger.debug(
+                    f"Skipping {opp.symbol}: cherry-pick gross {opp.gross_edge_pct:.4f}% "
+                    f"< min_funding_spread {tp.min_funding_spread}%"
+                )
+                return
+        else:
+            if opp.funding_spread_pct < tp.min_funding_spread:
+                logger.debug(
+                    f"Skipping {opp.symbol}: spread {opp.funding_spread_pct:.4f}% "
+                    f"< min_funding_spread {tp.min_funding_spread}%"
+                )
+                return
+
         # ── Entry timing gate: only enter within entry_offset before funding ──
         entry_offset = self._cfg.trading_params.entry_offset_seconds  # 900 = 15 min
         long_adapter = self._exchanges.get(opp.long_exchange)

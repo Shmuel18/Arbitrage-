@@ -312,6 +312,8 @@ class Scanner:
                 long_rate, short_rate,
                 funding_spread, fees_pct, net_pct,
                 adapters, mode="hold",
+                long_interval_hours=long_interval,
+                short_interval_hours=short_interval,
             )
             return opp
 
@@ -325,6 +327,8 @@ class Scanner:
                     long_rate, short_rate,
                     funding_spread, fees_pct, net_pct,
                     adapters, mode="hold",
+                    long_interval_hours=long_interval,
+                    short_interval_hours=short_interval,
                 )
                 return opp
 
@@ -388,6 +392,8 @@ class Scanner:
                 adapters, mode="cherry_pick",
                 exit_before=exit_before,
                 n_collections=n_collections,
+                long_interval_hours=long_interval,
+                short_interval_hours=short_interval,
             )
             return opp
 
@@ -401,6 +407,8 @@ class Scanner:
         mode: str = "hold",
         exit_before: Optional[datetime] = None,
         n_collections: int = 0,
+        long_interval_hours: int = 8,
+        short_interval_hours: int = 8,
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
         long_bal = await adapters[long_eid].get_balance()
@@ -425,8 +433,8 @@ class Scanner:
         # Compute the pure funding spread for this pair (always, regardless of mode)
         spread_info = calculate_funding_spread(
             long_rate, short_rate,
-            long_interval_hours=8,  # already normalized in _evaluate_direction
-            short_interval_hours=8,
+            long_interval_hours=long_interval_hours,
+            short_interval_hours=short_interval_hours,
         )
 
         return OpportunityCandidate(
