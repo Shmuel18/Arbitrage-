@@ -22,13 +22,13 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
     }
   }, [logs]);
 
-  const getLevelColor = (level: string) => {
+  const getLevelClass = (level: string) => {
     switch (level.toUpperCase()) {
-      case 'INFO': return 'text-cyan-400';
-      case 'SUCCESS': return 'text-green-400';
-      case 'WARNING': return 'text-yellow-400';
-      case 'ERROR': return 'text-red-400';
-      default: return 'text-gray-400';
+      case 'INFO': return 'log-info';
+      case 'SUCCESS': return 'log-success';
+      case 'WARNING': return 'log-warning';
+      case 'ERROR': return 'log-error';
+      default: return '';
     }
   };
 
@@ -36,20 +36,20 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
   const winRate = summary?.win_rate ? (summary.win_rate * 100).toFixed(1) : '0.0';
 
   return (
-    <div className="flex flex-col h-full panel panel-strong">
-      <div className="panel-header text-xs px-4 py-2 border-b border-cyan-500/30 flex justify-between">
-        <div>{t.systemLogs}</div>
-        <div className="text-gray-500">{t.totalTradesLabel}: {tradeCount} | {t.winRate}: {winRate}%</div>
+    <div className="logs-container" style={{ height: '280px' }}>
+      <div className="flex justify-between items-center px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)' }}>
+        <div className="card-header">{t.systemLogs}</div>
+        <div className="text-xs text-secondary">{t.totalTradesLabel}: {tradeCount} | {t.winRate}: {winRate}%</div>
       </div>
 
-      <div ref={containerRef} className="flex-1 overflow-auto px-4 py-2 mono text-xs scrollbar-thin">
+      <div ref={containerRef} className="flex-1 overflow-auto px-5 py-3 scrollbar-thin">
         {logs.length === 0 ? (
-          <div className="text-gray-600">{t.waitingLogs}</div>
+          <div className="text-muted text-sm">{t.waitingLogs}</div>
         ) : (
           logs.map((log, index) => (
-            <div key={index} className="mb-1">
-              <span className="text-gray-600">[{log.timestamp}]</span>
-              <span className={` ${getLevelColor(log.level)}`}> {log.message}</span>
+            <div key={index} className="log-entry mb-1">
+              <span className="log-timestamp">[{log.timestamp}]</span>
+              <span className={getLevelClass(log.level)}> {log.message}</span>
             </div>
           ))
         )}

@@ -20,27 +20,27 @@ const StatsCards: React.FC<StatsCardsProps> = ({ totalBalance, dailyPnl, activeT
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-      <div className="neon-card p-4">
-        <div className="text-cyan-300 text-xs mono">{t.totalBalance}</div>
-        <div className="text-2xl font-bold text-white mt-2">{formatCurrency(totalBalance)}</div>
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="stat-card stat-card--blue">
+        <div className="stat-card-label">{t.totalBalance}</div>
+        <div className="stat-card-value">{formatCurrency(totalBalance)}</div>
       </div>
 
-      <div className="neon-card neon-card--green p-4">
-        <div className="text-cyan-300 text-xs mono">{t.dailyPnl}</div>
-        <div className={`text-2xl font-bold mt-2 ${dailyPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+      <div className="stat-card stat-card--green">
+        <div className="stat-card-label">{t.dailyPnl}</div>
+        <div className="stat-card-value" style={{ color: dailyPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
           {formatCurrency(dailyPnl)}
         </div>
       </div>
 
-      <div className="neon-card p-4">
-        <div className="text-cyan-300 text-xs mono">{t.activeTrades}</div>
-        <div className="text-2xl font-bold text-white mt-2">{activeTrades}</div>
+      <div className="stat-card stat-card--teal">
+        <div className="stat-card-label">{t.activeTrades}</div>
+        <div className="stat-card-value">{activeTrades}</div>
       </div>
 
-      <div className="neon-card neon-card--purple p-4">
-        <div className="text-cyan-300 text-xs mono">{t.systemStatus}</div>
-        <div className={`text-2xl font-bold mt-2 flex items-center ${systemRunning ? 'text-green-400' : 'text-red-400'}`}>
+      <div className="stat-card stat-card--purple">
+        <div className="stat-card-label">{t.systemStatus}</div>
+        <div className="stat-card-value" style={{ color: systemRunning ? 'var(--green)' : 'var(--red)', display: 'flex', alignItems: 'center', gap: 8 }}>
           {systemRunning ? t.running : t.stopped}
           <span className="status-dot" />
         </div>

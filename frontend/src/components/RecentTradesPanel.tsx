@@ -61,56 +61,56 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
   };
 
   return (
-    <div className="panel panel-strong">
-      <div className="panel-header text-xs px-4 py-3 border-b border-cyan-500/20">
+    <div className="card">
+      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
         {t.last10Trades}
       </div>
       <div className="overflow-auto scrollbar-thin">
-        <table className="neon-table w-full text-xs mono">
-          <thead className="sticky top-0 bg-slate-900/80">
-            <tr className="border-b border-cyan-500/10 text-gray-500">
-              <th className="text-left py-2 px-3">{t.symbol}</th>
-              <th className="text-left py-2 px-3">{t.longShort}</th>
-              <th className="text-right py-2 px-3">{t.entryLS}</th>
-              <th className="text-right py-2 px-3">{t.exitLS}</th>
-              <th className="text-right py-2 px-3">{t.fundingLS}</th>
-              <th className="text-right py-2 px-3">{t.fundingNet}</th>
-              <th className="text-right py-2 px-3">{t.fees}</th>
-              <th className="text-right py-2 px-3">{t.opened}</th>
-              <th className="text-right py-2 px-3">{t.closed}</th>
+        <table className="corp-table">
+          <thead>
+            <tr>
+              <th>{t.symbol}</th>
+              <th>{t.longShort}</th>
+              <th className="text-end">{t.entryLS}</th>
+              <th className="text-end">{t.exitLS}</th>
+              <th className="text-end">{t.fundingLS}</th>
+              <th className="text-end">{t.fundingNet}</th>
+              <th className="text-end">{t.fees}</th>
+              <th className="text-end">{t.opened}</th>
+              <th className="text-end">{t.closed}</th>
             </tr>
           </thead>
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-center text-gray-500 py-6">{t.noTradesYet}</td>
+                <td colSpan={9} className="text-center text-secondary py-8">{t.noTradesYet}</td>
               </tr>
             ) : (
               trades.map((tr) => (
-                <tr key={tr.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
-                  <td className="py-2 px-3 text-cyan-300">{tr.symbol}</td>
-                  <td className="py-2 px-3 text-gray-300">
+                <tr key={tr.id}>
+                  <td className="font-semibold text-accent">{tr.symbol}</td>
+                  <td>
                     {tr.long_exchange?.toUpperCase()} / {tr.short_exchange?.toUpperCase()}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
+                  <td className="text-end mono">
                     {formatCurrency(tr.entry_price_long)} / {formatCurrency(tr.entry_price_short)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
+                  <td className="text-end mono">
                     {formatCurrency(tr.exit_price_long)} / {formatCurrency(tr.exit_price_short)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
+                  <td className="text-end mono">
                     {formatRate(tr.long_funding_rate)} / {formatRate(tr.short_funding_rate)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
+                  <td className="text-end mono">
                     {formatFunding(tr.funding_received_total)} / {formatFunding(tr.funding_paid_total)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
+                  <td className="text-end mono">
                     {formatFunding(tr.fees_paid_total)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-400">
+                  <td className="text-end text-secondary">
                     {formatDate(tr.opened_at)}
                   </td>
-                  <td className="py-2 px-3 text-right text-gray-400">
+                  <td className="text-end text-secondary">
                     {formatDate(tr.closed_at)}
                   </td>
                 </tr>
@@ -119,7 +119,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
           </tbody>
         </table>
       </div>
-      <div className="text-xs text-gray-500 px-4 py-2">
+      <div className="text-xs text-muted px-5 py-3">
         {t.fundingEstimated}
       </div>
     </div>

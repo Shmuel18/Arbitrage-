@@ -103,9 +103,9 @@ class Scanner:
                             f"Scan complete: {len(opps)} opportunities found. Best: {opps[0].symbol} {opps[0].net_edge_pct:.4f}%"
                         )
                     
-                    # Only execute the best opportunity
-                    best_opp = opps[0]
-                    await callback(best_opp)
+                    # Try top opportunities — controller filters blacklisted/duplicate/capped
+                    for opp in top_5:
+                        await callback(opp)
                 else:
                     if self._publisher:
                         await self._publisher.publish_opportunities([])

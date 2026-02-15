@@ -44,31 +44,31 @@ const ControlPanel: React.FC = () => {
   };
 
   return (
-    <div className="panel panel-strong p-4">
-      <div className="panel-header text-xs mb-3">{t.controlPanel}</div>
+    <div className="card p-5">
+      <div className="card-header mb-4">{t.controlPanel}</div>
 
       <div className="flex gap-2 mb-3">
-        <button onClick={startBot} className="flex-1 px-3 py-2 bg-green-500/15 text-green-300 border border-green-500/30 rounded mono">
+        <button onClick={startBot} className="btn btn-success flex-1">
           {t.startBot}
         </button>
-        <button onClick={stopBot} className="flex-1 px-3 py-2 bg-red-500/15 text-red-300 border border-red-500/30 rounded mono">
+        <button onClick={stopBot} className="btn btn-danger flex-1">
           {t.stopBot}
         </button>
       </div>
 
-      <button onClick={panicStop} className="w-full px-3 py-2 mb-3 bg-red-600/25 text-red-200 border border-red-500/40 rounded mono">
+      <button onClick={panicStop} className="btn btn-danger w-full mb-4">
         {t.emergencyStop}
       </button>
 
-      <div className="border-t border-slate-800/60 pt-3 mt-3">
-        <div className="text-xs text-gray-400 mb-2 mono">{t.strategyToggle}</div>
-        <button onClick={toggleStrategy} className="w-full px-3 py-2 bg-cyan-500/10 text-cyan-200 border border-cyan-500/30 rounded mono">
+      <div className="section-divider pt-4 mt-1">
+        <div className="text-xs text-secondary mb-2">{t.strategyToggle}</div>
+        <button onClick={toggleStrategy} className="btn btn-outline w-full mono">
           {t.mode}: {strategy.toUpperCase()}
         </button>
       </div>
 
-      <div className="border-t border-slate-800/60 pt-3 mt-3">
-        <div className="text-xs text-gray-400 mb-2 mono">{t.maxConcurrentTrades}</div>
+      <div className="section-divider pt-4 mt-4">
+        <div className="text-xs text-secondary mb-2">{t.maxConcurrentTrades}</div>
         <div className="flex gap-2">
           <input
             type="number"
@@ -76,15 +76,15 @@ const ControlPanel: React.FC = () => {
             max={10}
             value={maxConcurrent}
             onChange={(e) => setMaxConcurrent(Number(e.target.value))}
-            className="flex-1 bg-slate-950 border border-cyan-500/30 rounded px-2 py-1 text-sm text-gray-200 mono"
+            className="input flex-1"
           />
-          <button onClick={applyMaxConcurrent} className="px-3 py-1 bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 rounded mono">
+          <button onClick={applyMaxConcurrent} className="btn btn-primary">
             {t.apply}
           </button>
         </div>
       </div>
 
-      {status && <div className="text-xs text-gray-400 mt-3">{status}</div>}
+      {status && <div className="text-xs text-secondary mt-3">{status}</div>}
     </div>
   );
 };

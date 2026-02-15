@@ -36,44 +36,36 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   };
 
   return (
-    <div className="panel panel-strong">
-      <div className="panel-header text-xs px-4 py-3 border-b border-cyan-500/20">
+    <div className="card">
+      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
         {t.activePositions}
       </div>
       <div className="overflow-auto scrollbar-thin">
-        <table className="neon-table w-full text-xs mono">
-          <thead className="sticky top-0 bg-slate-900/80">
-            <tr className="border-b border-cyan-500/10 text-gray-500">
-              <th className="text-left py-2 px-3">{t.symbol}</th>
-              <th className="text-left py-2 px-3">{t.longShort}</th>
-              <th className="text-right py-2 px-3">{t.qtyLS}</th>
-              <th className="text-right py-2 px-3">{t.entryFunding}</th>
-              <th className="text-right py-2 px-3">{t.fundingLS}</th>
-              <th className="text-right py-2 px-3">{t.state}</th>
+        <table className="corp-table">
+          <thead>
+            <tr>
+              <th>{t.symbol}</th>
+              <th>{t.longShort}</th>
+              <th className="text-end">{t.qtyLS}</th>
+              <th className="text-end">{t.entryFunding}</th>
+              <th className="text-end">{t.fundingLS}</th>
+              <th className="text-end">{t.state}</th>
             </tr>
           </thead>
           <tbody>
             {positions.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center text-gray-500 py-6">{t.noOpenPositions}</td>
+                <td colSpan={6} className="text-center text-secondary py-8">{t.noOpenPositions}</td>
               </tr>
             ) : (
               positions.map((p) => (
-                <tr key={p.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
-                  <td className="py-2 px-3 text-cyan-300">{p.symbol}</td>
-                  <td className="py-2 px-3 text-gray-300">
-                    {p.long_exchange?.toUpperCase()} / {p.short_exchange?.toUpperCase()}
-                  </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
-                    {p.long_qty} / {p.short_qty}
-                  </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
-                    {formatEdgePct(p.entry_edge_pct)}
-                  </td>
-                  <td className="py-2 px-3 text-right text-gray-300">
-                    {formatFunding(p.long_funding_rate)} / {formatFunding(p.short_funding_rate)}
-                  </td>
-                  <td className="py-2 px-3 text-right text-gray-400">{p.state}</td>
+                <tr key={p.id}>
+                  <td className="font-semibold text-accent">{p.symbol}</td>
+                  <td>{p.long_exchange?.toUpperCase()} / {p.short_exchange?.toUpperCase()}</td>
+                  <td className="text-end mono">{p.long_qty} / {p.short_qty}</td>
+                  <td className="text-end mono">{formatEdgePct(p.entry_edge_pct)}</td>
+                  <td className="text-end mono">{formatFunding(p.long_funding_rate)} / {formatFunding(p.short_funding_rate)}</td>
+                  <td className="text-end text-secondary">{p.state}</td>
                 </tr>
               ))
             )}

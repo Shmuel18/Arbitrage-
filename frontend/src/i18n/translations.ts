@@ -1,7 +1,8 @@
 export type Lang = 'en' | 'he';
 
 export interface Translations {
-  // Header
+  // Sidebar / Header
+  dashboard: string;
   trinityTitle: string;
   arbitrageEngine: string;
   running: string;
@@ -86,6 +87,7 @@ export interface Translations {
 }
 
 const en: Translations = {
+  dashboard: 'Dashboard',
   trinityTitle: 'TRINITY',
   arbitrageEngine: 'ARBITRAGE ENGINE',
   running: 'RUNNING',
@@ -162,6 +164,7 @@ const en: Translations = {
 };
 
 const he: Translations = {
+  dashboard: 'לוח מחוונים',
   trinityTitle: 'TRINITY',
   arbitrageEngine: 'מנוע ארביטראז׳',
   running: 'פועל',

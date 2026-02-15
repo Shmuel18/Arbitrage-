@@ -13,20 +13,20 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value);
 
   return (
-    <div className="panel panel-strong p-4">
-      <div className="panel-header text-xs mb-3">{t.exchangePortfolio}</div>
-      <div className="flex justify-between text-xs text-gray-400 mb-3 mono">
+    <div className="card p-5">
+      <div className="card-header mb-4">{t.exchangePortfolio}</div>
+      <div className="flex justify-between text-xs text-secondary mb-4 mono">
         <span>{t.total}</span>
-        <span className="text-cyan-300 font-mono">{formatCurrency(total)}</span>
+        <span className="font-semibold text-accent">{formatCurrency(total)}</span>
       </div>
       {entries.length === 0 ? (
-        <div className="text-gray-500 text-sm">{t.noBalancesYet}</div>
+        <div className="text-muted text-sm">{t.noBalancesYet}</div>
       ) : (
-        <div className="space-y-2 text-sm mono">
+        <div className="space-y-3 text-sm">
           {entries.map(([name, value]) => (
-            <div key={name} className="flex justify-between">
-              <span className="text-gray-300">{name.toUpperCase()}</span>
-              <span className="text-cyan-400 font-mono">{formatCurrency(value)}</span>
+            <div key={name} className="flex justify-between items-center">
+              <span className="text-secondary font-medium">{name.toUpperCase()}</span>
+              <span className="mono font-semibold" style={{ color: 'var(--text-primary)' }}>{formatCurrency(value)}</span>
             </div>
           ))}
         </div>

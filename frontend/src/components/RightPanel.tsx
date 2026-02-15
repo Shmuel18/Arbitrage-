@@ -27,48 +27,48 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
-  const getRateColor = (rate: number) => {
-    if (rate > 0) return 'text-green-400';
-    if (rate < 0) return 'text-red-400';
-    return 'text-gray-400';
+  const getRateStyle = (rate: number): React.CSSProperties => {
+    if (rate > 0) return { color: 'var(--green)' };
+    if (rate < 0) return { color: 'var(--red)' };
+    return { color: 'var(--text-muted)' };
   };
 
   return (
-    <div className="panel panel-strong p-4 h-full flex flex-col">
-      <div className="panel-header text-xs mb-3 pb-2 border-b border-cyan-500/20">
-        {t.liveOpportunities} ({count})
+    <div className="card flex flex-col">
+      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
+        {t.liveOpportunities} <span className="card-header-muted">({count})</span>
       </div>
 
       <div className="flex-1 overflow-auto scrollbar-thin">
         {opps.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-500 text-sm font-mono">
+          <div className="flex items-center justify-center py-12 text-muted text-sm mono">
             {t.scanning}
           </div>
         ) : (
-          <table className="neon-table w-full text-xs mono">
-            <thead className="sticky top-0 bg-slate-900/80">
-              <tr className="border-b border-cyan-500/10">
-                <th className="text-left text-gray-500 py-1 px-1">{t.pair}</th>
-                <th className="text-left text-gray-500 py-1 px-1">{t.long}</th>
-                <th className="text-left text-gray-500 py-1 px-1">{t.short}</th>
-                <th className="text-right text-gray-500 py-1 px-1">{t.fundingL}</th>
-                <th className="text-right text-gray-500 py-1 px-1">{t.fundingS}</th>
-                <th className="text-right text-gray-500 py-1 px-1">{t.netPct}</th>
+          <table className="corp-table">
+            <thead>
+              <tr>
+                <th>{t.pair}</th>
+                <th>{t.long}</th>
+                <th>{t.short}</th>
+                <th className="text-end">{t.fundingL}</th>
+                <th className="text-end">{t.fundingS}</th>
+                <th className="text-end">{t.netPct}</th>
               </tr>
             </thead>
             <tbody>
               {opps.map((opp, i) => (
-                <tr key={i} className="border-b border-slate-800/30 hover:bg-slate-800/20 transition">
-                  <td className="py-2 px-1 text-cyan-400">{opp.symbol}</td>
-                  <td className="py-2 px-1 text-gray-300">{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
-                  <td className="py-2 px-1 text-gray-300">{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
-                  <td className={`py-2 px-1 text-right ${getRateColor(opp.long_rate)}`}>
+                <tr key={i}>
+                  <td className="font-semibold text-accent">{opp.symbol}</td>
+                  <td>{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
+                  <td>{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
+                  <td className="text-end mono" style={getRateStyle(opp.long_rate)}>
                     {formatFunding(opp.long_rate)}
                   </td>
-                  <td className={`py-2 px-1 text-right ${getRateColor(opp.short_rate)}`}>
+                  <td className="text-end mono" style={getRateStyle(opp.short_rate)}>
                     {formatFunding(opp.short_rate)}
                   </td>
-                  <td className={`py-2 px-1 text-right font-semibold ${getRateColor(opp.short_rate - opp.long_rate)}`}>
+                  <td className="text-end mono font-semibold" style={getRateStyle(opp.short_rate - opp.long_rate)}>
                     {formatFunding(opp.short_rate - opp.long_rate)}
                   </td>
                 </tr>

@@ -57,6 +57,8 @@ class ExecutionController:
         self._active_trades: Dict[str, TradeRecord] = {}
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
+        # Runtime blacklist: maps "symbol:exchange" -> expiry timestamp
+        self._blacklist: Dict[str, float] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -80,10 +82,47 @@ class ExecutionController:
             await asyncio.gather(self._monitor_task, return_exceptions=True)
         logger.info("Execution controller stopped")
 
+    # ── Blacklist helpers ────────────────────────────────────────
+
+    _BLACKLIST_DURATION_SEC = 6 * 3600  # 6 hours default
+
+    def _add_to_blacklist(self, symbol: str, exchange: str) -> None:
+        key = f"{symbol}:{exchange}"
+        expiry = _time.time() + self._BLACKLIST_DURATION_SEC
+        self._blacklist[key] = expiry
+        logger.warning(
+            f"⛔ Blacklisted {symbol} on {exchange} for "
+            f"{self._BLACKLIST_DURATION_SEC // 3600}h",
+            extra={"symbol": symbol, "exchange": exchange, "action": "blacklisted"},
+        )
+
+    def _is_blacklisted(self, symbol: str, long_ex: str, short_ex: str) -> bool:
+        now = _time.time()
+        # Clean expired entries
+        expired = [k for k, v in self._blacklist.items() if v < now]
+        for k in expired:
+            del self._blacklist[k]
+            sym, ex = k.rsplit(":", 1)
+            logger.info(f"✅ Blacklist expired for {sym} on {ex}")
+
+        for ex in (long_ex, short_ex):
+            key = f"{symbol}:{ex}"
+            if key in self._blacklist:
+                remaining = int((self._blacklist[key] - now) / 60)
+                logger.debug(
+                    f"Skipping {symbol}: {ex} is blacklisted ({remaining}min left)"
+                )
+                return True
+        return False
+
     # ── Open trade ───────────────────────────────────────────────
 
     async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
         """Validate and execute a new funding-arb trade."""
+        # Blacklist guard — skip symbols/exchanges flagged as delisting etc.
+        if self._is_blacklisted(opp.symbol, opp.long_exchange, opp.short_exchange):
+            return
+
         # Duplicate guard
         for t in self._active_trades.values():
             if t.symbol == opp.symbol:
@@ -270,6 +309,16 @@ class ExecutionController:
             if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:
                 await self._log_exchange_balances()
         except Exception as e:
+            err_str = str(e).lower()
+            # Detect exchange-level delisting / restricted errors
+            if any(kw in err_str for kw in [
+                "delisting", "delist", "30228",     # Bybit delisting
+                "symbol is not available",            # Binance
+                "contract is being settled",           # OKX
+                "reduce-only", "reduce only",         # generic restrict
+            ]):
+                self._add_to_blacklist(opp.symbol, opp.long_exchange)
+                self._add_to_blacklist(opp.symbol, opp.short_exchange)
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
@@ -586,6 +635,26 @@ class ExecutionController:
                 f"Order timeout ({timeout}s) on {req.exchange}/{req.symbol}",
                 extra={"exchange": req.exchange, "symbol": req.symbol, "action": "order_timeout"},
             )
+            return None
+        except Exception as e:
+            err_str = str(e).lower()
+            # Detect delisting / restricted errors and blacklist
+            if any(kw in err_str for kw in [
+                "delisting", "delist", "30228",
+                "symbol is not available",
+                "contract is being settled",
+                "reduce-only", "reduce only",
+            ]):
+                self._add_to_blacklist(req.symbol, req.exchange)
+                logger.warning(
+                    f"Blacklisted {req.symbol} on {req.exchange} (delisting/restricted): {e}",
+                    extra={"exchange": req.exchange, "symbol": req.symbol, "action": "blacklisted"},
+                )
+            else:
+                logger.error(
+                    f"Order failed on {req.exchange}/{req.symbol}: {e}",
+                    extra={"exchange": req.exchange, "symbol": req.symbol},
+                )
             return None
 
     async def _close_orphan(
