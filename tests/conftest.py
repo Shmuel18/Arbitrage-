@@ -3,6 +3,7 @@ Shared fixtures for all tests.
 """
 
 import asyncio
+import time
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -78,6 +79,11 @@ def btc_spec():
 
 # ── Mock exchange adapter ───────────────────────────────────────
 
+# Helper: timestamp N seconds from now (in ms)
+def _future_ms(seconds: float = 30) -> float:
+    return time.time() * 1000 + seconds * 1000
+
+
 @pytest.fixture
 def mock_adapter(btc_spec):
     adapter = AsyncMock()
@@ -89,7 +95,7 @@ def mock_adapter(btc_spec):
     adapter.get_ticker.return_value = {"last": 50000.0, "bid": 49999, "ask": 50001}
     adapter.get_funding_rate.return_value = {
         "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
-        "next_timestamp": None, "interval_hours": 8,
+        "next_timestamp": _future_ms(300), "interval_hours": 8,  # 5 min in future (within 15 min window)
     }
     adapter.get_positions.return_value = []
     adapter.place_order.return_value = {
@@ -98,6 +104,9 @@ def mock_adapter(btc_spec):
     # Mock exchange markets for scanner symbol intersection
     adapter._exchange = MagicMock()
     adapter._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
+    # Add funding rate cache for WebSocket-based scanner
+    adapter._funding_rate_cache = {}
+    adapter.get_funding_rate_cached = lambda sym: adapter._funding_rate_cache.get(sym)
     return adapter
 
 
@@ -115,7 +124,7 @@ def mock_exchange_mgr(mock_adapter):
     adapter_b.get_ticker.return_value = {"last": 50000.0}
     adapter_b.get_funding_rate.return_value = {
         "rate": Decimal("0.0003"), "timestamp": None, "datetime": None,
-        "next_timestamp": None, "interval_hours": 8,
+        "next_timestamp": _future_ms(300), "interval_hours": 8,
     }
     adapter_b.get_positions.return_value = []
     adapter_b.place_order.return_value = {
@@ -124,6 +133,9 @@ def mock_exchange_mgr(mock_adapter):
     # Mock exchange markets for scanner symbol intersection
     adapter_b._exchange = MagicMock()
     adapter_b._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
+    # Add funding rate cache for WebSocket-based scanner
+    adapter_b._funding_rate_cache = {}
+    adapter_b.get_funding_rate_cached = lambda sym: adapter_b._funding_rate_cache.get(sym)
 
     mgr.get.side_effect = lambda eid: mock_adapter if eid == "exchange_a" else adapter_b
     mgr.all.return_value = {"exchange_a": mock_adapter, "exchange_b": adapter_b}
@@ -139,6 +151,8 @@ def mock_redis():
     r.acquire_lock.return_value = True
     r.get_all_trades.return_value = {}
     r.health_check.return_value = True
+    r.set_trade_state = AsyncMock(return_value=True)
+    r.set_cooldown = AsyncMock(return_value=True)
     return r
 
 

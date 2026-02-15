@@ -54,7 +54,21 @@ class Scanner:
         """Continuously scan; call *callback(opp)* when an opportunity is found."""
         self._running = True
         scan_interval = getattr(self._cfg.risk_guard, 'scanner_interval_sec', 30)
-        logger.info(f"Scanner started (interval: {scan_interval}s)", extra={"action": "scanner_start"})
+        
+        # Start WebSocket watchers for all symbols
+        adapters = self._exchanges.all()
+        all_symbols = set()
+        for adapter in adapters.values():
+            all_symbols.update(adapter._exchange.symbols)
+        
+        for adapter in adapters.values():
+            try:
+                await adapter.start_funding_rate_watchers(list(all_symbols))
+            except Exception as e:
+                logger.warning(f"Failed to start watchers for {adapter.exchange_id}: {e}")
+        
+        logger.info(f"Scanner started (interval: {scan_interval}s, WebSocket monitoring {len(all_symbols)} symbols)", 
+                   extra={"action": "scanner_start"})
 
         while self._running:
             try:
@@ -126,6 +140,10 @@ class Scanner:
 
     def stop(self) -> None:
         self._running = False
+        # Cancel all WebSocket watcher tasks
+        for adapter in self._exchanges.all().values():
+            for task in adapter._ws_tasks:
+                task.cancel()
 
     # ── Scan logic ───────────────────────────────────────────────
 
@@ -181,30 +199,40 @@ class Scanner:
     async def _scan_symbol(
         self, symbol: str, adapters: Dict[str, "ExchangeAdapter"], exchange_ids: List[str]
     ) -> List[OpportunityCandidate]:
-        """Scan a single symbol for opportunities."""
+        """Scan a single symbol for opportunities using WebSocket-cached rates."""
         # Cooldown check
         if await self._redis.is_cooled_down(symbol):
             return []
 
-        # Fetch funding only from exchanges that have this symbol
+        # Fetch funding from in-memory cache (updated by WebSocket)
         funding: Dict[str, dict] = {}
         eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid]._exchange.markets]
         if len(eligible_eids) < 2:
             return []
-        tasks = {eid: adapters[eid].get_funding_rate(symbol) for eid in eligible_eids}
-        gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-        for eid, result in zip(tasks.keys(), gathered):
-            if isinstance(result, Exception):
-                logger.debug(f"Funding fetch failed {eid}/{symbol}: {result}")
-                continue
-            if self._is_stale(result):
-                logger.debug(f"Stale funding data for {eid}/{symbol}")
-                continue
-            funding[eid] = result
+        
+        for eid in eligible_eids:
+            cached = adapters[eid].get_funding_rate_cached(symbol)
+            if cached:
+                funding[eid] = cached
+            else:
+                # Fallback: fetch from REST if cache empty (e.g., on first run)
+                try:
+                    data = await adapters[eid].get_funding_rate(symbol)
+                    if not self._is_stale(data):
+                        funding[eid] = data
+                except Exception as e:
+                    logger.debug(f"Funding fetch failed {eid}/{symbol}: {e}")
+                    continue
 
         if len(funding) < 2:
             return []
+
+        # Debug: show all available funding rates for this symbol
+        funding_display = " | ".join(
+            f"{eid}={funding[eid]['rate']:.6f} ({funding[eid].get('interval_hours', 8)}h)"
+            for eid in sorted(funding.keys())
+        )
+        logger.debug(f"[{symbol}] Available rates: {funding_display}")
 
         # Try every pair
         results = []
@@ -280,6 +308,14 @@ class Scanner:
             short_interval_hours=short_interval,
         )
         funding_spread = spread_info["funding_spread_pct"]
+        
+        # Log funding rates for clarity
+        logger.debug(
+            f"[{symbol}] Pair evaluation: "
+            f"LONG({long_eid}, {long_interval}h)={long_rate:.6f} | "
+            f"SHORT({short_eid}, {short_interval}h)={short_rate:.6f} | "
+            f"Spread={funding_spread:.4f}% (normalized to 8h)"
+        )
 
         # ── Per-payment analysis ─────────────────────────────────
         pnl = analyze_per_payment_pnl(long_rate, short_rate)
@@ -301,10 +337,18 @@ class Scanner:
             # ── HOLD mode: both sides are income ────────────────
             # Gate: funding spread must pass threshold
             if funding_spread < tp.min_funding_spread:
+                logger.debug(
+                    f"[{symbol}] Rejected (HOLD): spread={funding_spread:.4f}% < "
+                    f"min_threshold={tp.min_funding_spread:.4f}%"
+                )
                 return None
 
             net_pct = funding_spread - total_cost_pct
             if net_pct < tp.min_net_pct:
+                logger.debug(
+                    f"[{symbol}] Rejected (HOLD): net={net_pct:.4f}% < "
+                    f"min_net={tp.min_net_pct:.4f}% (spread={funding_spread:.4f}%, fees={total_cost_pct:.4f}%)"
+                )
                 return None
 
             opp = await self._build_opportunity(
@@ -314,6 +358,11 @@ class Scanner:
                 adapters, mode="hold",
                 long_interval_hours=long_interval,
                 short_interval_hours=short_interval,
+            )
+            logger.info(
+                f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
+                f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
+                f"SPREAD={funding_spread:.4f}% | FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
             )
             return opp
 
@@ -329,6 +378,11 @@ class Scanner:
                     adapters, mode="hold",
                     long_interval_hours=long_interval,
                     short_interval_hours=short_interval,
+                )
+                logger.info(
+                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
+                    f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
+                    f"SPREAD={funding_spread:.4f}% | FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
                 )
                 return opp
 

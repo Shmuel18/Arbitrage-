@@ -33,14 +33,21 @@ class TestScanAll:
         # rate_a=0.0001, rate_b=0.0050 → both positive
         # Best direction: long A, short B (short_pnl=+0.005 income, long_pnl=-0.0001 cost)
         # Funding spread = (-0.0001) + 0.005 = 0.0049 → 0.49% (huge)
-        adapter_a.get_funding_rate.return_value = {
+        funding_data_a = {
             "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
             "next_timestamp": _future_ms(8), "interval_hours": 8,
         }
-        adapter_b.get_funding_rate.return_value = {
+        funding_data_b = {
             "rate": Decimal("0.0050"), "timestamp": None, "datetime": None,
             "next_timestamp": _future_ms(1), "interval_hours": 1,
         }
+        
+        # Set both cache and REST fallback
+        adapter_a._funding_rate_cache["ETH/USDT"] = funding_data_a
+        adapter_b._funding_rate_cache["ETH/USDT"] = funding_data_b
+        adapter_a.get_funding_rate.return_value = funding_data_a
+        adapter_b.get_funding_rate.return_value = funding_data_b
+        
         adapter_a.get_ticker.return_value = {"last": 50000.0}
         adapter_b.get_ticker.return_value = {"last": 50000.0}
         adapter_a.get_balance.return_value = {"total": Decimal("10000"), "free": Decimal("8000"), "used": Decimal("2000")}
@@ -62,14 +69,20 @@ class TestScanAll:
 
         # rate_a=0.0001, rate_b=0.0003 → spread = (-0.0001 + 0.0003) * 100 = 0.02%
         # This is below min_funding_spread of 1.0 → SKIP
-        adapter_a.get_funding_rate.return_value = {
+        funding_data_a = {
             "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
             "next_timestamp": _future_ms(8), "interval_hours": 8,
         }
-        adapter_b.get_funding_rate.return_value = {
+        funding_data_b = {
             "rate": Decimal("0.0003"), "timestamp": None, "datetime": None,
             "next_timestamp": _future_ms(8), "interval_hours": 8,
         }
+        
+        # Set cache
+        adapter_a._funding_rate_cache["ETH/USDT"] = funding_data_a
+        adapter_b._funding_rate_cache["ETH/USDT"] = funding_data_b
+        adapter_a.get_funding_rate.return_value = funding_data_a
+        adapter_b.get_funding_rate.return_value = funding_data_b
 
         results = await scanner.scan_all()
         assert len(results) == 0
@@ -79,12 +92,15 @@ class TestScanAll:
         adapter_a = mock_exchange_mgr.get("exchange_a")
         adapter_b = mock_exchange_mgr.get("exchange_b")
 
-        adapter_a.get_funding_rate.return_value = {
+        funding_data = {
             "rate": Decimal("0.0001"), "timestamp": None, "datetime": None, "next_timestamp": None,
         }
-        adapter_b.get_funding_rate.return_value = {
-            "rate": Decimal("0.0001"), "timestamp": None, "datetime": None, "next_timestamp": None,
-        }
+        
+        # Set cache for both
+        adapter_a._funding_rate_cache["ETH/USDT"] = funding_data
+        adapter_b._funding_rate_cache["ETH/USDT"] = funding_data
+        adapter_a.get_funding_rate.return_value = funding_data
+        adapter_b.get_funding_rate.return_value = funding_data
 
         results = await scanner.scan_all()
         assert len(results) == 0
@@ -126,14 +142,21 @@ class TestIntervalFromFunding:
 
         # rate_a=0.0001, rate_b=0.0050 → cherry-pick (short B is income)
         # B pays every 1h, A charges every 8h → 7 collections before cost
-        adapter_a.get_funding_rate.return_value = {
+        funding_data_a = {
             "rate": Decimal("0.0001"), "timestamp": None,
             "datetime": None, "next_timestamp": _future_ms(8), "interval_hours": 8,
         }
-        adapter_b.get_funding_rate.return_value = {
+        funding_data_b = {
             "rate": Decimal("0.0050"), "timestamp": None,
             "datetime": None, "next_timestamp": _future_ms(1), "interval_hours": 1,
         }
+        
+        # Set cache
+        adapter_a._funding_rate_cache["ETH/USDT"] = funding_data_a
+        adapter_b._funding_rate_cache["ETH/USDT"] = funding_data_b
+        adapter_a.get_funding_rate.return_value = funding_data_a
+        adapter_b.get_funding_rate.return_value = funding_data_b
+        
         adapter_a.get_ticker.return_value = {"last": 50000.0}
         adapter_b.get_ticker.return_value = {"last": 50000.0}
         adapter_a.get_balance.return_value = {"total": Decimal("10000"), "free": Decimal("8000"), "used": Decimal("2000")}

@@ -10,6 +10,7 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+import asyncio
 
 import ccxt.pro as ccxtpro
 
@@ -28,6 +29,8 @@ class ExchangeAdapter:
         self._exchange: Optional[ccxtpro.Exchange] = None
         self._instrument_cache: Dict[str, InstrumentSpec] = {}
         self._settings_applied: set = set()
+        self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
+        self._ws_tasks: List = []  # Track running WebSocket tasks
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -78,6 +81,80 @@ class ExchangeAdapter:
                 extra={"exchange": self.exchange_id, "action": "auth_fail"},
             )
             return False
+
+    async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
+        """Start WebSocket watchers for funding rates on specified symbols."""
+        logger.info(
+            f"Starting funding rate WebSocket watchers for {len(symbols)} symbols",
+            extra={"exchange": self.exchange_id, "action": "ws_start"},
+        )
+        for symbol in symbols:
+            # Start watcher as a background task
+            task = asyncio.create_task(self._watch_funding_rate_loop(symbol))
+            self._ws_tasks.append(task)
+
+    async def _watch_funding_rate_loop(self, symbol: str) -> None:
+        """Continuously watch funding rate for a symbol via WebSocket."""
+        retry_count = 0
+        max_retries = 5
+        
+        while retry_count < max_retries:
+            try:
+                # Try WebSocket if available (ccxt.pro)
+                if hasattr(self._exchange, 'watch_funding_rate'):
+                    await self._watch_funding_rate_websocket(symbol)
+                else:
+                    # Fallback: fast polling every 5 seconds
+                    await self._watch_funding_rate_polling(symbol)
+            except asyncio.CancelledError:
+                logger.debug(f"Funding watcher cancelled for {symbol}")
+                return
+            except Exception as e:
+                retry_count += 1
+                logger.warning(
+                    f"Funding watcher error for {symbol}: {e}",
+                    extra={"exchange": self.exchange_id, "symbol": symbol, "retry": retry_count},
+                )
+                await asyncio.sleep(5)  # Wait before retry
+
+    async def _watch_funding_rate_websocket(self, symbol: str) -> None:
+        """Watch funding rate via WebSocket (ccxt.pro)."""
+        while True:
+            try:
+                data = await self._exchange.watch_funding_rate(symbol)
+                self._update_funding_cache(symbol, data)
+                logger.debug(
+                    f"WS funding update: {symbol}",
+                    extra={"exchange": self.exchange_id, "symbol": symbol},
+                )
+            except Exception as e:
+                logger.debug(f"WebSocket funding error for {symbol}: {e}")
+                raise  # Re-raise to trigger fallback/retry
+
+    async def _watch_funding_rate_polling(self, symbol: str) -> None:
+        """Fast polling fallback every 5 seconds."""
+        while True:
+            try:
+                data = await self._exchange.fetch_funding_rate(symbol)
+                self._update_funding_cache(symbol, data)
+                await asyncio.sleep(5)  # Poll every 5 seconds instead of 30s scan
+            except Exception as e:
+                logger.debug(f"Funding poll error for {symbol}: {e}")
+                await asyncio.sleep(5)
+
+    def _update_funding_cache(self, symbol: str, data: dict) -> None:
+        """Update in-memory cache with latest funding rate."""
+        self._funding_rate_cache[symbol] = {
+            "rate": Decimal(str(data.get("fundingRate", 0))),
+            "timestamp": data.get("timestamp"),
+            "datetime": data.get("datetime"),
+            "next_timestamp": data.get("fundingTimestamp"),
+            "interval_hours": self._get_funding_interval(symbol, data),
+        }
+
+    def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get latest cached funding rate (low-latency, no network call)."""
+        return self._funding_rate_cache.get(symbol)
 
     async def disconnect(self) -> None:
         if self._exchange:
