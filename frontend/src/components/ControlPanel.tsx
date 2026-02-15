@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { sendBotCommand, updateConfig, emergencyStop } from '../services/api';
+import { useSettings } from '../context/SettingsContext';
 
 const ControlPanel: React.FC = () => {
+  const { t } = useSettings();
   const [maxConcurrent, setMaxConcurrent] = useState(3);
   const [strategy, setStrategy] = useState<'hold' | 'cherry_pick'>('hold');
   const [status, setStatus] = useState('');
@@ -9,9 +11,9 @@ const ControlPanel: React.FC = () => {
   const applyMaxConcurrent = async () => {
     try {
       await updateConfig('execution.concurrent_opportunities', maxConcurrent);
-      setStatus('Updated max concurrent trades');
+      setStatus(t.settingsUpdated);
     } catch (e) {
-      setStatus('Failed to update settings');
+      setStatus(t.settingsFailed);
     }
   };
 
@@ -20,53 +22,53 @@ const ControlPanel: React.FC = () => {
     setStrategy(next);
     try {
       await updateConfig('trading_params.strategy_mode', next);
-      setStatus(`Strategy set to ${next}`);
+      setStatus(t.strategySet);
     } catch (e) {
-      setStatus('Failed to update strategy');
+      setStatus(t.strategyFailed);
     }
   };
 
   const startBot = async () => {
     await sendBotCommand('start');
-    setStatus('Start command sent');
+    setStatus(t.startSent);
   };
 
   const stopBot = async () => {
     await sendBotCommand('stop');
-    setStatus('Stop command sent');
+    setStatus(t.stopSent);
   };
 
   const panicStop = async () => {
     await emergencyStop();
-    setStatus('Emergency stop sent');
+    setStatus(t.emergencySent);
   };
 
   return (
     <div className="panel panel-strong p-4">
-      <div className="panel-header text-xs mb-3">Control Panel</div>
+      <div className="panel-header text-xs mb-3">{t.controlPanel}</div>
 
       <div className="flex gap-2 mb-3">
         <button onClick={startBot} className="flex-1 px-3 py-2 bg-green-500/15 text-green-300 border border-green-500/30 rounded mono">
-          Start Bot
+          {t.startBot}
         </button>
         <button onClick={stopBot} className="flex-1 px-3 py-2 bg-red-500/15 text-red-300 border border-red-500/30 rounded mono">
-          Stop Bot
+          {t.stopBot}
         </button>
       </div>
 
       <button onClick={panicStop} className="w-full px-3 py-2 mb-3 bg-red-600/25 text-red-200 border border-red-500/40 rounded mono">
-        Emergency Stop
+        {t.emergencyStop}
       </button>
 
       <div className="border-t border-slate-800/60 pt-3 mt-3">
-        <div className="text-xs text-gray-400 mb-2 mono">Strategy Toggle</div>
+        <div className="text-xs text-gray-400 mb-2 mono">{t.strategyToggle}</div>
         <button onClick={toggleStrategy} className="w-full px-3 py-2 bg-cyan-500/10 text-cyan-200 border border-cyan-500/30 rounded mono">
-          Mode: {strategy.toUpperCase()}
+          {t.mode}: {strategy.toUpperCase()}
         </button>
       </div>
 
       <div className="border-t border-slate-800/60 pt-3 mt-3">
-        <div className="text-xs text-gray-400 mb-2 mono">Max Concurrent Trades</div>
+        <div className="text-xs text-gray-400 mb-2 mono">{t.maxConcurrentTrades}</div>
         <div className="flex gap-2">
           <input
             type="number"
@@ -77,7 +79,7 @@ const ControlPanel: React.FC = () => {
             className="flex-1 bg-slate-950 border border-cyan-500/30 rounded px-2 py-1 text-sm text-gray-200 mono"
           />
           <button onClick={applyMaxConcurrent} className="px-3 py-1 bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 rounded mono">
-            Apply
+            {t.apply}
           </button>
         </div>
       </div>

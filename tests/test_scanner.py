@@ -24,7 +24,7 @@ class TestScanAll:
     @pytest.mark.asyncio
     async def test_finds_opportunity_when_edge_exists(self, scanner, config, mock_exchange_mgr):
         """High funding diff → should produce an opportunity (cherry-pick mode)."""
-        config.trading_params.min_net_bps = Decimal("1.0")
+        config.trading_params.min_net_pct = Decimal("0.01")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")
         adapter_b = mock_exchange_mgr.get("exchange_b")
@@ -47,7 +47,7 @@ class TestScanAll:
 
         results = await scanner.scan_all()
         assert len(results) >= 1
-        assert results[0].net_edge_bps > 0
+        assert results[0].net_edge_pct > 0
 
     @pytest.mark.asyncio
     async def test_no_opportunity_when_rates_equal(self, scanner, mock_exchange_mgr):
@@ -93,7 +93,7 @@ class TestIntervalFromFunding:
     @pytest.mark.asyncio
     async def test_interval_hours_used_in_edge_calc(self, scanner, config, mock_exchange_mgr):
         """Different intervals should affect edge calculation."""
-        config.trading_params.min_net_bps = Decimal("0.1")
+        config.trading_params.min_net_pct = Decimal("0.001")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")
         adapter_b = mock_exchange_mgr.get("exchange_b")

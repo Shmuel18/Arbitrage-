@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
 import { BotStatus } from './types';
 import { connectWebSocket, disconnectWebSocket } from './services/websocket';
-import { getOpportunities, getBalances, getLogs, getSummary, getPositions, getPnL } from './services/api';
+import { getOpportunities, getBalances, getLogs, getSummary, getPositions, getPnL, getTrades } from './services/api';
 import './App.css';
 
 export interface FullData {
@@ -13,6 +13,7 @@ export interface FullData {
   pnl: { data_points: any[]; total_pnl: number } | null;
   logs: { timestamp: string; message: string; level: string }[];
   positions: any[];
+  trades: any[];
 }
 
 function App() {
@@ -24,11 +25,12 @@ function App() {
     pnl: null,
     logs: [],
     positions: [],
+    trades: [],
   });
 
   const fetchAll = useCallback(async () => {
     try {
-      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes] = await Promise.allSettled([
+      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, tradesRes] = await Promise.allSettled([
         fetch('http://localhost:8000/api/status').then(r => r.json()),
         getBalances(),
         getOpportunities(),
@@ -36,6 +38,7 @@ function App() {
         getSummary(),
         getPositions(),
         getPnL(24),
+        getTrades(10),
       ]);
       setData(prev => ({
         ...prev,
@@ -46,6 +49,7 @@ function App() {
         summary: summRes.status === 'fulfilled' ? summRes.value : prev.summary,
         positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
+        trades: tradesRes.status === 'fulfilled' ? (tradesRes.value.trades || []) : prev.trades,
       }));
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -64,6 +68,7 @@ function App() {
           pnl: d.pnl || prev.pnl,
           logs: d.logs || prev.logs,
           positions: d.positions || prev.positions,
+          trades: prev.trades,
         }));
       } else if (msg.type === 'status_update') {
         setData(prev => ({ ...prev, status: msg.data }));

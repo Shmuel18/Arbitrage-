@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -222,6 +223,9 @@ class ExecutionController:
             # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
             long_filled_qty = Decimal(str(long_fill.get("filled", 0) or order_qty))
             short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
+            entry_price_long = self._extract_avg_price(long_fill)
+            entry_price_short = self._extract_avg_price(short_fill)
+            entry_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
 
             trade = TradeRecord(
                 trade_id=trade_id,
@@ -231,9 +235,12 @@ class ExecutionController:
                 short_exchange=opp.short_exchange,
                 long_qty=long_filled_qty,
                 short_qty=short_filled_qty,
-                entry_edge_bps=opp.net_edge_bps,
+                entry_edge_pct=opp.net_edge_pct,
                 long_funding_rate=opp.long_funding_rate,
                 short_funding_rate=opp.short_funding_rate,
+                entry_price_long=entry_price_long,
+                entry_price_short=entry_price_short,
+                fees_paid_total=entry_fees,
                 opened_at=datetime.now(timezone.utc),
                 mode=opp.mode,
                 exit_before=opp.exit_before,
@@ -251,7 +258,7 @@ class ExecutionController:
                 f"Trade opened: {trade_id} {opp.symbol} "
                 f"L={opp.long_exchange}({long_filled_qty}) "
                 f"S={opp.short_exchange}({short_filled_qty}) "
-                f"edge={opp.net_edge_bps:.1f}bps{mode_str}",
+                f"edge={opp.net_edge_pct:.4f}%{mode_str}",
                 extra={
                     "trade_id": trade_id,
                     "symbol": opp.symbol,
@@ -378,12 +385,12 @@ class ExecutionController:
         if not long_spec or not short_spec:
             return
 
-        fees_bps = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net = edge_info["edge_bps"] - fees_bps
+        fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
+        net = edge_info["edge_pct"] - fees_pct
 
-        if net <= 0 or net < trade.entry_edge_bps * Decimal("0.1"):
+        if net <= 0 or net < trade.entry_edge_pct * Decimal("0.1"):
             logger.info(
-                f"Exit signal for {trade.trade_id}: net={net:.1f}bps — closing",
+                f"Exit signal for {trade.trade_id}: net={net:.4f}% — closing",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
             )
             await self._close_trade(trade)
@@ -396,7 +403,7 @@ class ExecutionController:
             if short_next:
                 trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
             logger.info(
-                f"Trade {trade.trade_id}: Holding — net={net:.1f}bps. "
+                f"Trade {trade.trade_id}: Holding — net={net:.4f}%. "
                 f"Next: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
                 f"{trade.short_exchange}={trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}"
             )
@@ -410,23 +417,57 @@ class ExecutionController:
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
 
-        long_ok = await self._close_leg(
+        long_fill = await self._close_leg(
             long_adapter, trade.long_exchange, trade.symbol,
             OrderSide.SELL, trade.long_qty, trade.trade_id,
         )
-        short_ok = await self._close_leg(
+        short_fill = await self._close_leg(
             short_adapter, trade.short_exchange, trade.symbol,
             OrderSide.BUY, trade.short_qty, trade.trade_id,
         )
 
-        if long_ok and short_ok:
+        if long_fill and short_fill:
             trade.state = TradeState.CLOSED
             trade.closed_at = datetime.now(timezone.utc)
+            trade.exit_price_long = self._extract_avg_price(long_fill)
+            trade.exit_price_short = self._extract_avg_price(short_fill)
+            close_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
+            total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
+            trade.fees_paid_total = total_fees
+            if trade.funding_paid_total is None and trade.funding_received_total is None:
+                paid, received = self._estimate_funding_totals(trade)
+                trade.funding_paid_total = paid
+                trade.funding_received_total = received
             await self._redis.delete_trade_state(trade.trade_id)
             del self._active_trades[trade.trade_id]
             logger.info(f"Trade closed: {trade.trade_id}", extra={
                 "trade_id": trade.trade_id, "action": "trade_closed",
             })
+
+            trade_data = {
+                "id": trade.trade_id,
+                "symbol": trade.symbol,
+                "long_exchange": trade.long_exchange,
+                "short_exchange": trade.short_exchange,
+                "long_qty": str(trade.long_qty),
+                "short_qty": str(trade.short_qty),
+                "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
+                "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
+                "exit_price_long": str(trade.exit_price_long) if trade.exit_price_long is not None else None,
+                "exit_price_short": str(trade.exit_price_short) if trade.exit_price_short is not None else None,
+                "fees_paid_total": str(trade.fees_paid_total) if trade.fees_paid_total is not None else None,
+                "funding_received_total": str(trade.funding_received_total) if trade.funding_received_total is not None else None,
+                "funding_paid_total": str(trade.funding_paid_total) if trade.funding_paid_total is not None else None,
+                "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
+                "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
+                "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+                "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+                "status": trade.state.value,
+            }
+            await self._redis.zadd(
+                "trinity:trades:history",
+                {json.dumps(trade_data): datetime.utcnow().timestamp()},
+            )
             
             # Log balances after trade closure (if enabled)
             if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:
@@ -444,7 +485,7 @@ class ExecutionController:
     async def _close_leg(
         self, adapter, exchange: str, symbol: str,
         side: OrderSide, qty: Decimal, trade_id: str,
-    ) -> bool:
+    ) -> Optional[dict]:
         """Close one leg with retry (3×). Always reduceOnly."""
         for attempt in range(3):
             try:
@@ -457,14 +498,72 @@ class ExecutionController:
                 )
                 result = await self._place_with_timeout(adapter, req)
                 if result:
-                    return True
+                    return result
             except Exception as e:
                 logger.warning(
                     f"Close attempt {attempt+1}/3 failed {exchange}/{symbol}: {e}",
                     extra={"trade_id": trade_id, "exchange": exchange},
                 )
                 await asyncio.sleep(1)
-        return False
+        return None
+
+    @staticmethod
+    def _extract_avg_price(order: dict) -> Optional[Decimal]:
+        for key in ("average", "avg_price", "price", "avgPrice"):
+            val = order.get(key)
+            if val is not None:
+                try:
+                    return Decimal(str(val))
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _extract_fee(order: dict) -> Decimal:
+        total = Decimal("0")
+        fee = order.get("fee")
+        if isinstance(fee, dict) and fee.get("cost") is not None:
+            try:
+                total += Decimal(str(fee.get("cost")))
+            except Exception:
+                pass
+        fees = order.get("fees")
+        if isinstance(fees, list):
+            for f in fees:
+                if isinstance(f, dict) and f.get("cost") is not None:
+                    try:
+                        total += Decimal(str(f.get("cost")))
+                    except Exception:
+                        continue
+        return total
+
+    @staticmethod
+    def _estimate_funding_totals(trade: TradeRecord) -> tuple[Decimal, Decimal]:
+        """Estimate funding paid/received from entry rates and notional.
+
+        Note: this is an estimate, not the actual exchange credit.
+        """
+        if not trade.entry_price_long or not trade.entry_price_short:
+            return Decimal("0"), Decimal("0")
+        long_rate = trade.long_funding_rate or Decimal("0")
+        short_rate = trade.short_funding_rate or Decimal("0")
+        notional_long = trade.entry_price_long * trade.long_qty
+        notional_short = trade.entry_price_short * trade.short_qty
+
+        paid = Decimal("0")
+        received = Decimal("0")
+
+        if long_rate >= 0:
+            paid += notional_long * long_rate
+        else:
+            received += notional_long * abs(long_rate)
+
+        if short_rate >= 0:
+            received += notional_short * short_rate
+        else:
+            paid += notional_short * abs(short_rate)
+
+        return paid, received
 
     # ── Close all (shutdown) ─────────────────────────────────────
 
@@ -524,9 +623,12 @@ class ExecutionController:
             "short_exchange": trade.short_exchange,
             "long_qty": str(trade.long_qty),
             "short_qty": str(trade.short_qty),
-            "entry_edge_bps": str(trade.entry_edge_bps),
+            "entry_edge_pct": str(trade.entry_edge_pct),
             "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
             "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
+            "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
+            "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
+            "fees_paid_total": str(trade.fees_paid_total) if trade.fees_paid_total is not None else None,
             "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
         })
 
@@ -546,9 +648,12 @@ class ExecutionController:
                 short_exchange=data["short_exchange"],
                 long_qty=Decimal(data["long_qty"]),
                 short_qty=Decimal(data["short_qty"]),
-                entry_edge_bps=Decimal(data.get("entry_edge_bps", "0")),
+                entry_edge_pct=Decimal(data.get("entry_edge_pct", data.get("entry_edge_bps", "0"))),
                 long_funding_rate=Decimal(data["long_funding_rate"]) if data.get("long_funding_rate") else None,
                 short_funding_rate=Decimal(data["short_funding_rate"]) if data.get("short_funding_rate") else None,
+                entry_price_long=Decimal(data["entry_price_long"]) if data.get("entry_price_long") else None,
+                entry_price_short=Decimal(data["entry_price_short"]) if data.get("entry_price_short") else None,
+                fees_paid_total=Decimal(data["fees_paid_total"]) if data.get("fees_paid_total") else None,
                 opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else None,
             )
             self._active_trades[trade_id] = trade

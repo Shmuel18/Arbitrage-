@@ -37,13 +37,13 @@ async def main() -> None:
                                 "paper": cfg.paper_trading,
                                 "dry_run": cfg.dry_run,
                                 "exchanges": cfg.enabled_exchanges,
-                                "symbols": len(cfg.watchlist)}})
+                                "symbols": "all"}})
 
     # Live-mode gate
     if not cfg.paper_trading and not cfg.dry_run:
         print("\n⚠️  LIVE TRADING MODE — real money at risk!")
         print(f"   Exchanges : {cfg.enabled_exchanges}")
-        print(f"   Max margin: {cfg.risk_limits.max_margin_usage}")
+        print(f"   Position size: {cfg.risk_limits.position_size_pct} (70% of min balance × leverage)")
         answer = input("   Type YES to continue: ")
         if answer.strip() != "YES":
             print("Aborted.")
@@ -78,9 +78,20 @@ async def main() -> None:
     logger.info(f"Verified {len(verified)} exchanges: {verified}",
                 extra={"action": "exchanges_verified", "data": {"exchanges": verified}})
 
-    # Warm up instrument specs
+    # Warm up instrument specs for ALL symbols available on 2+ exchanges
+    all_symbol_sets = [set(a._exchange.markets.keys()) for a in mgr.all().values()]
+    if len(all_symbol_sets) >= 2:
+        # Union of all symbols, then keep only those on at least 2 exchanges
+        all_symbols = set.union(*all_symbol_sets)
+        symbol_counts = {s: sum(1 for ss in all_symbol_sets if s in ss) for s in all_symbols}
+        common_symbols = sorted(s for s, c in symbol_counts.items() if c >= 2)
+    else:
+        common_symbols = sorted(all_symbol_sets[0]) if all_symbol_sets else []
+    logger.info(f"Found {len(common_symbols)} tradeable symbols (on 2+ exchanges) across {len(verified)} exchanges")
     for adapter in mgr.all().values():
-        await adapter.warm_up_symbols(cfg.watchlist)
+        # Only warm up symbols that exist on this specific exchange
+        adapter_symbols = [s for s in common_symbols if s in adapter._exchange.markets]
+        await adapter.warm_up_symbols(adapter_symbols)
 
     # ── Components ───────────────────────────────────────────────
     publisher = APIPublisher(redis)
@@ -155,7 +166,7 @@ async def main() -> None:
                         "short_exchange": trade.short_exchange,
                         "long_qty": str(trade.long_qty),
                         "short_qty": str(trade.short_qty),
-                        "entry_edge_bps": str(trade.entry_edge_bps),
+                        "entry_edge_pct": str(trade.entry_edge_pct),
                         "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
                         "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
                         "mode": trade.mode,

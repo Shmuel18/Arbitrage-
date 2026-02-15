@@ -1,4 +1,5 @@
 import React from 'react';
+import { useSettings } from '../context/SettingsContext';
 
 interface Opportunity {
   symbol: string;
@@ -6,8 +7,8 @@ interface Opportunity {
   short_exchange: string;
   long_rate: number;
   short_rate: number;
-  net_bps: number;
-  gross_bps: number;
+  net_pct: number;
+  gross_pct: number;
   price: number;
   mode: string;
 }
@@ -17,6 +18,7 @@ interface RightPanelProps {
 }
 
 const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
+  const { t } = useSettings();
   const opps = opportunities?.opportunities ?? [];
   const count = opportunities?.count ?? 0;
 
@@ -34,24 +36,24 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
   return (
     <div className="panel panel-strong p-4 h-full flex flex-col">
       <div className="panel-header text-xs mb-3 pb-2 border-b border-cyan-500/20">
-        Live Opportunities ({count})
+        {t.liveOpportunities} ({count})
       </div>
 
       <div className="flex-1 overflow-auto scrollbar-thin">
         {opps.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-500 text-sm font-mono">
-            Scanning for opportunities...
+            {t.scanning}
           </div>
         ) : (
           <table className="neon-table w-full text-xs mono">
             <thead className="sticky top-0 bg-slate-900/80">
               <tr className="border-b border-cyan-500/10">
-                <th className="text-left text-gray-500 py-1 px-1">PAIR</th>
-                <th className="text-left text-gray-500 py-1 px-1">LONG</th>
-                <th className="text-left text-gray-500 py-1 px-1">SHORT</th>
-                <th className="text-right text-gray-500 py-1 px-1">FUNDING L</th>
-                <th className="text-right text-gray-500 py-1 px-1">FUNDING S</th>
-                <th className="text-right text-gray-500 py-1 px-1">NET %</th>
+                <th className="text-left text-gray-500 py-1 px-1">{t.pair}</th>
+                <th className="text-left text-gray-500 py-1 px-1">{t.long}</th>
+                <th className="text-left text-gray-500 py-1 px-1">{t.short}</th>
+                <th className="text-right text-gray-500 py-1 px-1">{t.fundingL}</th>
+                <th className="text-right text-gray-500 py-1 px-1">{t.fundingS}</th>
+                <th className="text-right text-gray-500 py-1 px-1">{t.netPct}</th>
               </tr>
             </thead>
             <tbody>

@@ -11,7 +11,7 @@ def calculate_funding_edge(
     short_interval_hours: int = 8,
 ) -> Dict[str, Any]:
     """
-    Calculate the funding-rate edge in BPS (normalized to 8h).
+    Calculate the funding-rate edge in PERCENT (normalized to 8h).
 
     Funding mechanics:
       rate > 0 → shorts pay longs
@@ -20,18 +20,20 @@ def calculate_funding_edge(
     Per-payment PnL:
       Long side : −rate  (positive rate = we pay, negative = we receive)
       Short side: +rate  (positive rate = we receive, negative = we pay)
+
+    Returns edge as percentage (e.g. 0.5 = 0.5%). Matches exchange display.
     """
     norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
     norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
 
-    edge = (norm_short - norm_long) * Decimal("10000")
+    edge = (norm_short - norm_long) * Decimal("100")
     annual = edge * 3 * 365
 
     return {
-        "edge_bps": edge,
-        "annualized_bps": annual,
-        "long_rate_bps": norm_long * Decimal("10000"),
-        "short_rate_bps": norm_short * Decimal("10000"),
+        "edge_pct": edge,
+        "annualized_pct": annual,
+        "long_rate_pct": norm_long * Decimal("100"),
+        "short_rate_pct": norm_short * Decimal("100"),
     }
 
 
@@ -69,14 +71,14 @@ def calculate_cherry_pick_edge(
     income_rate_per_payment: Decimal,
     n_collections: int,
 ) -> Decimal:
-    """Total collectible edge in BPS from cherry-pick strategy."""
-    return abs(income_rate_per_payment) * n_collections * Decimal("10000")
+    """Total collectible edge in PERCENT from cherry-pick strategy."""
+    return abs(income_rate_per_payment) * n_collections * Decimal("100")
 
 
 def calculate_fees(
     long_taker_fee: Decimal,
     short_taker_fee: Decimal,
 ) -> Decimal:
-    """Total round-trip taker fees in BPS (open + close both legs)."""
-    return (long_taker_fee + short_taker_fee) * 2 * Decimal("10000")
+    """Total round-trip taker fees in PERCENT (open + close both legs)."""
+    return (long_taker_fee + short_taker_fee) * 2 * Decimal("100")
 

@@ -1,10 +1,12 @@
 import React from 'react';
+import { useSettings } from '../context/SettingsContext';
 
 interface ExchangeBalancesProps {
   balances: { balances: Record<string, number>; total: number } | null;
 }
 
 const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
+  const { t } = useSettings();
   const entries = balances?.balances ? Object.entries(balances.balances) : [];
   const total = balances?.total ?? 0;
   const formatCurrency = (value: number) =>
@@ -12,13 +14,13 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
 
   return (
     <div className="panel panel-strong p-4">
-      <div className="panel-header text-xs mb-3">Exchange Portfolio Value</div>
+      <div className="panel-header text-xs mb-3">{t.exchangePortfolio}</div>
       <div className="flex justify-between text-xs text-gray-400 mb-3 mono">
-        <span>Total</span>
+        <span>{t.total}</span>
         <span className="text-cyan-300 font-mono">{formatCurrency(total)}</span>
       </div>
       {entries.length === 0 ? (
-        <div className="text-gray-500 text-sm">No balances yet</div>
+        <div className="text-gray-500 text-sm">{t.noBalancesYet}</div>
       ) : (
         <div className="space-y-2 text-sm mono">
           {entries.map(([name, value]) => (

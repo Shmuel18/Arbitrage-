@@ -6,6 +6,7 @@ import PositionsTable from './PositionsTable';
 import ControlPanel from './ControlPanel';
 import AnalyticsPanel from './AnalyticsPanel';
 import ExchangeBalances from './ExchangeBalances';
+import RecentTradesPanel from './RecentTradesPanel';
 import RightPanel from './RightPanel';
 import SystemLogs from './SystemLogs';
 
@@ -40,7 +41,9 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
 
         <AnalyticsPanel pnl={data.pnl} />
 
-        <div className="border border-cyan-500/30 rounded-lg bg-slate-900/50 h-64 md:h-72">
+        <RecentTradesPanel trades={data.trades || []} />
+
+        <div className="border border-cyan-500/30 rounded-lg bg-slate-900/50 logs-wrapper h-64 md:h-72">
           <SystemLogs logs={data.logs} summary={data.summary} />
         </div>
       </div>

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useSettings } from '../context/SettingsContext';
 
 interface PnlPoint {
   pnl: number;
@@ -11,6 +12,7 @@ interface AnalyticsPanelProps {
 }
 
 const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl }) => {
+  const { t, theme } = useSettings();
   const points = pnl?.data_points ?? [];
   const total = pnl?.total_pnl ?? 0;
 
@@ -28,22 +30,24 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl }) => {
     ? values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(i)} ${scaleY(v)}`).join(' ')
     : '';
 
+  const strokeColor = theme === 'dark' ? 'rgb(34, 211, 238)' : 'rgb(2, 132, 199)';
+
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value);
 
   return (
     <div className="panel panel-strong p-4">
       <div className="flex justify-between items-center mb-2">
-        <div className="panel-header text-xs">PnL Chart (24h)</div>
+        <div className="panel-header text-xs">{t.pnlChart}</div>
         <div className={`text-sm mono ${total >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatCurrency(total)}</div>
       </div>
       <div className="bg-slate-950/70 rounded p-2">
         {values.length > 1 ? (
           <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`}>
-            <path d={path} fill="none" stroke="rgb(34, 211, 238)" strokeWidth="2" />
+            <path d={path} fill="none" stroke={strokeColor} strokeWidth="2" />
           </svg>
         ) : (
-          <div className="text-gray-500 text-xs">Waiting for PnL data...</div>
+          <div className="text-gray-500 text-xs">{t.waitingPnl}</div>
         )}
       </div>
     </div>

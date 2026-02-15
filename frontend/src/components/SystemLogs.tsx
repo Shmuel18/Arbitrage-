@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { useSettings } from '../context/SettingsContext';
 
 interface LogEntry {
   timestamp: string;
@@ -12,6 +13,7 @@ interface SystemLogsProps {
 }
 
 const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
+  const { t } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,13 +38,13 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
   return (
     <div className="flex flex-col h-full panel panel-strong">
       <div className="panel-header text-xs px-4 py-2 border-b border-cyan-500/30 flex justify-between">
-        <div>System Logs (Live)</div>
-        <div className="text-gray-500">Total Trades: {tradeCount} | Win Rate: {winRate}%</div>
+        <div>{t.systemLogs}</div>
+        <div className="text-gray-500">{t.totalTradesLabel}: {tradeCount} | {t.winRate}: {winRate}%</div>
       </div>
 
       <div ref={containerRef} className="flex-1 overflow-auto px-4 py-2 mono text-xs scrollbar-thin">
         {logs.length === 0 ? (
-          <div className="text-gray-600">Waiting for logs...</div>
+          <div className="text-gray-600">{t.waitingLogs}</div>
         ) : (
           logs.map((log, index) => (
             <div key={index} className="mb-1">

@@ -60,22 +60,22 @@ class Scanner:
             try:
                 opps = await self.scan_all()
                 
-                # Sort by net_edge_bps and display top 5 opportunities
+                # Sort by net_edge_pct and display top 5 opportunities
                 if opps:
-                    opps.sort(key=lambda o: o.net_edge_bps, reverse=True)
+                    opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
                     top_5 = opps[:5]
                     
                     logger.info("📊 TOP 5 OPPORTUNITIES", extra={"action": "top_opportunities"})
                     for idx, opp in enumerate(top_5, 1):
                         logger.info(
                             f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
-                            f"Edge: {opp.net_edge_bps:.2f} bps",
+                            f"Edge: {opp.net_edge_pct:.4f}%",
                             extra={
                                 "action": "opportunity",
                                 "data": {
                                     "rank": idx,
                                     "symbol": opp.symbol,
-                                    "edge_bps": opp.net_edge_bps,
+                                    "edge_pct": opp.net_edge_pct,
                                     "pair": f"{opp.long_exchange}_{opp.short_exchange}"
                                 }
                             }
@@ -88,8 +88,8 @@ class Scanner:
                                 "symbol": o.symbol,
                                 "long_exchange": o.long_exchange,
                                 "short_exchange": o.short_exchange,
-                                "net_bps": float(o.net_edge_bps),
-                                "gross_bps": float(o.gross_edge_bps),
+                                "net_pct": float(o.net_edge_pct),
+                                "gross_pct": float(o.gross_edge_pct),
                                 "long_rate": float(o.long_funding_rate),
                                 "short_rate": float(o.short_funding_rate),
                                 "price": float(o.reference_price),
@@ -100,7 +100,7 @@ class Scanner:
                         await self._publisher.publish_opportunities(opp_data)
                         await self._publisher.publish_log(
                             "INFO",
-                            f"Scan complete: {len(opps)} opportunities found. Best: {opps[0].symbol} {opps[0].net_edge_bps:.2f} bps"
+                            f"Scan complete: {len(opps)} opportunities found. Best: {opps[0].symbol} {opps[0].net_edge_pct:.4f}%"
                         )
                     
                     # Only execute the best opportunity
@@ -133,13 +133,15 @@ class Scanner:
         if len(exchange_ids) < 2:
             return []
 
-        # Get all common symbols across exchanges
+        # Get all symbols available on at least 2 exchanges (not just ALL)
         symbol_sets = [set(adapters[eid]._exchange.markets.keys()) for eid in exchange_ids]
-        common_symbols = set.intersection(*symbol_sets)
+        all_symbols = set.union(*symbol_sets)
+        symbol_counts = {s: sum(1 for ss in symbol_sets if s in ss) for s in all_symbols}
+        common_symbols = {s for s, c in symbol_counts.items() if c >= 2}
         
         # Parallelism for faster scanning
         parallelism = getattr(self._cfg.execution, 'scan_parallelism', 10)
-        logger.debug(f"Scanning {len(common_symbols)} common symbols across {len(exchange_ids)} exchanges (parallelism={parallelism})")
+        logger.debug(f"Scanning {len(common_symbols)} symbols (on 2+ exchanges) across {len(exchange_ids)} exchanges (parallelism={parallelism})")
 
         results: List[OpportunityCandidate] = []
         
@@ -166,9 +168,9 @@ class Scanner:
                 results.extend(symbol_results)
 
         if results:
-            results.sort(key=lambda o: o.net_edge_bps, reverse=True)
+            results.sort(key=lambda o: o.net_edge_pct, reverse=True)
             logger.debug(
-                f"Found {len(results)} opportunities, best={results[0].net_edge_bps:.1f} bps",
+                f"Found {len(results)} opportunities, best={results[0].net_edge_pct:.4f}%",
                 extra={"action": "scan_result", "data": {"count": len(results)}},
             )
         return results
@@ -181,9 +183,12 @@ class Scanner:
         if await self._redis.is_cooled_down(symbol):
             return []
 
-        # Fetch funding across all exchanges in parallel
+        # Fetch funding only from exchanges that have this symbol
         funding: Dict[str, dict] = {}
-        tasks = {eid: adapters[eid].get_funding_rate(symbol) for eid in exchange_ids}
+        eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid]._exchange.markets]
+        if len(eligible_eids) < 2:
+            return []
+        tasks = {eid: adapters[eid].get_funding_rate(symbol) for eid in eligible_eids}
         gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
 
         for eid, result in zip(tasks.keys(), gathered):
@@ -240,7 +245,7 @@ class Scanner:
                 long_interval, short_interval,
                 funding, adapters,
             )
-            if opp and (best is None or opp.net_edge_bps > best.net_edge_bps):
+            if opp and (best is None or opp.net_edge_pct > best.net_edge_pct):
                 best = opp
 
         return best
@@ -266,10 +271,10 @@ class Scanner:
         short_spec = await adapters[short_eid].get_instrument_spec(symbol)
         if not long_spec or not short_spec:
             return None
-        fees_bps = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
+        fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
         tp = self._cfg.trading_params
-        buffers_bps = tp.slippage_buffer_bps + tp.safety_buffer_bps + tp.basis_buffer_bps
-        total_cost_bps = fees_bps + buffers_bps
+        buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
+        total_cost_pct = fees_pct + buffers_pct
 
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
@@ -278,14 +283,14 @@ class Scanner:
                 long_interval_hours=long_interval,
                 short_interval_hours=short_interval,
             )
-            net_bps = edge_info["edge_bps"] - total_cost_bps
-            if net_bps < tp.min_net_bps:
+            net_pct = edge_info["edge_pct"] - total_cost_pct
+            if net_pct < tp.min_net_pct:
                 return None
 
             opp = await self._build_opportunity(
                 symbol, long_eid, short_eid,
                 long_rate, short_rate,
-                edge_info["edge_bps"], fees_bps, net_bps,
+                edge_info["edge_pct"], fees_pct, net_pct,
                 adapters, mode="hold",
             )
             return opp
@@ -298,13 +303,13 @@ class Scanner:
                 short_interval_hours=short_interval,
             )
 
-            if edge_info["edge_bps"] - total_cost_bps >= tp.min_net_bps:
+            if edge_info["edge_pct"] - total_cost_pct >= tp.min_net_pct:
                 # ── HOLD mode: net-positive classic arbitrage ───
-                net_bps = edge_info["edge_bps"] - total_cost_bps
+                net_pct = edge_info["edge_pct"] - total_cost_pct
                 opp = await self._build_opportunity(
                     symbol, long_eid, short_eid,
                     long_rate, short_rate,
-                    edge_info["edge_bps"], fees_bps, net_bps,
+                    edge_info["edge_pct"], fees_pct, net_pct,
                     adapters, mode="hold",
                 )
                 return opp
@@ -339,10 +344,10 @@ class Scanner:
                 return None
 
             # Edge = total income we'll collect (minus open/close fees)
-            gross_bps = calculate_cherry_pick_edge(income_pnl, n_collections)
-            net_bps = gross_bps - total_cost_bps
+            gross_pct = calculate_cherry_pick_edge(income_pnl, n_collections)
+            net_pct = gross_pct - total_cost_pct
 
-            if net_bps < tp.min_net_bps:
+            if net_pct < tp.min_net_pct:
                 return None
 
             # Exit 2 minutes before cost payment for safety
@@ -353,7 +358,7 @@ class Scanner:
             opp = await self._build_opportunity(
                 symbol, long_eid, short_eid,
                 long_rate, short_rate,
-                gross_bps, fees_bps, net_bps,
+                gross_pct, fees_pct, net_pct,
                 adapters, mode="cherry_pick",
                 exit_before=exit_before,
                 n_collections=n_collections,
@@ -365,7 +370,7 @@ class Scanner:
         symbol: str,
         long_eid: str, short_eid: str,
         long_rate: Decimal, short_rate: Decimal,
-        gross_bps: Decimal, fees_bps: Decimal, net_bps: Decimal,
+        gross_pct: Decimal, fees_pct: Decimal, net_pct: Decimal,
         adapters: Dict[str, "ExchangeAdapter"],
         mode: str = "hold",
         exit_before: Optional[datetime] = None,
@@ -397,9 +402,9 @@ class Scanner:
             short_exchange=short_eid,
             long_funding_rate=long_rate,
             short_funding_rate=short_rate,
-            gross_edge_bps=gross_bps,
-            fees_bps=fees_bps,
-            net_edge_bps=net_bps,
+            gross_edge_pct=gross_pct,
+            fees_pct=fees_pct,
+            net_edge_pct=net_pct,
             suggested_qty=quantity,
             reference_price=price,
             mode=mode,

@@ -5,16 +5,16 @@ system:
   version: "3.0.0"
 
 risk_limits:
-  max_margin_usage: 0.30
+  max_margin_usage: 0.70
   max_position_size_usd: 10000
   delta_threshold_pct: 5.0
   position_size_pct: 0.70
 
 trading_params:
-  min_net_bps: 0.5
-  slippage_buffer_bps: 1.5
-  safety_buffer_bps: 2.0
-  basis_buffer_bps: 1.0
+  min_net_pct: 0.5
+  slippage_buffer_pct: 0.015
+  safety_buffer_pct: 0.02
+  basis_buffer_pct: 0.01
   cooldown_after_orphan_hours: 2
   entry_offset_seconds: 900
   exit_offset_seconds: 900
@@ -37,7 +37,6 @@ exchanges:
   enabled:
     - binance
     - bybit
-    - gateio
     - okx
 
   binance:
@@ -70,38 +69,8 @@ exchanges:
     margin_mode: "isolated"
     position_mode: "oneway"
 
-  gateio:
-    name: "Gate.io Futures"
-    ccxt_id: "gateio"
-    default_type: "swap"
-    rate_limit_ms: 100
-    max_leverage: 25
-    leverage: 5
-    margin_mode: "isolated"
-    position_mode: "oneway"
-
 symbols:
-  watchlist:
-    - "BTC/USDT"
-    - "ETH/USDT"
-    - "SOL/USDT"
-    - "BNB/USDT"
-    - "XRP/USDT"
-    - "DOGE/USDT"
-    - "ADA/USDT"
-    - "AVAX/USDT"
-    - "LINK/USDT"
-    - "MATIC/USDT"
-    - "DOT/USDT"
-    - "UNI/USDT"
-    - "ATOM/USDT"
-    - "FIL/USDT"
-    - "ARB/USDT"
-    - "OP/USDT"
-    - "APT/USDT"
-    - "SUI/USDT"
-    - "NEAR/USDT"
-    - "PEPE/USDT"
+  scan_all: true
 
 logging:
   level: "INFO"

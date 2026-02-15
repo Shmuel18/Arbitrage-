@@ -37,7 +37,12 @@ class ExchangeAdapter:
             "apiKey": self._cfg.get("api_key"),
             "secret": self._cfg.get("api_secret"),
             "enableRateLimit": True,
-            "options": {"defaultType": self._cfg.get("default_type", "swap")},
+            "options": {
+                "defaultType": self._cfg.get("default_type", "swap"),
+                # Mitigate timestamp/recv_window errors on Bybit and others
+                "adjustForTimeDifference": True,
+                "recvWindow": 10000,
+            },
         }
         if pw := self._cfg.get("api_passphrase"):
             opts["password"] = pw
@@ -87,18 +92,26 @@ class ExchangeAdapter:
         if symbol in self._settings_applied:
             return
         ex = self._exchange
-        lev = self._cfg.get("leverage", 1)
+        lev_raw = self._cfg.get("leverage", 1) or 1
+        max_lev = int(self._cfg.get("max_leverage", 125) or 125)
+        lev = max(1, min(int(lev_raw), max_lev))
         margin = self._cfg.get("margin_mode", "cross")
         pos_mode = self._cfg.get("position_mode", "oneway")
 
         try:
             if hasattr(ex, "set_leverage"):
-                await ex.set_leverage(lev, symbol)
+                params = {"mgnMode": margin} if self.exchange_id == "okx" else {}
+                await ex.set_leverage(lev, symbol, params)
             if hasattr(ex, "set_margin_mode"):
-                await ex.set_margin_mode(margin, symbol)
+                params = {"lever": lev} if self.exchange_id == "okx" else {}
+                await ex.set_margin_mode(margin, symbol, params)
             if hasattr(ex, "set_position_mode"):
                 hedged = (pos_mode == "hedged")
                 await ex.set_position_mode(hedged, symbol)
+            logger.info(
+                f"Applied settings on {self.exchange_id} {symbol}: lev={lev} margin={margin} pos={pos_mode}",
+                extra={"exchange": self.exchange_id, "symbol": symbol, "action": "settings_applied"},
+            )
             self._settings_applied.add(symbol)
         except Exception as e:
             # Many exchanges reject duplicate calls — that's fine.

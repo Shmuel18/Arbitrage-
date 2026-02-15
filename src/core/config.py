@@ -19,17 +19,17 @@ from pydantic_settings import BaseSettings
 # ── Sub-configs ──────────────────────────────────────────────────
 
 class RiskLimits(BaseSettings):
-    max_margin_usage: Decimal = Decimal("0.30")
+    max_margin_usage: Decimal = Decimal("0.70")
     max_position_size_usd: Decimal = Decimal("10000")
     delta_threshold_pct: Decimal = Decimal("5.0")
     position_size_pct: Decimal = Decimal("0.70")
 
 
 class TradingParams(BaseSettings):
-    min_net_bps: Decimal = Decimal("5.0")
-    slippage_buffer_bps: Decimal = Decimal("2.0")
-    safety_buffer_bps: Decimal = Decimal("3.0")
-    basis_buffer_bps: Decimal = Decimal("1.0")
+    min_net_pct: Decimal = Decimal("0.5")
+    slippage_buffer_pct: Decimal = Decimal("0.015")
+    safety_buffer_pct: Decimal = Decimal("0.02")
+    basis_buffer_pct: Decimal = Decimal("0.01")
     cooldown_after_orphan_hours: int = 2
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
@@ -109,7 +109,7 @@ class Config(BaseSettings):
     enabled_exchanges: List[str] = Field(default_factory=lambda: ["binance", "bybit"])
     exchanges: Dict[str, ExchangeConfig] = Field(default_factory=dict)
 
-    watchlist: List[str] = Field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
+    watchlist: List[str] = Field(default_factory=list)
 
     paper_trading: bool = True
     dry_run: bool = True
@@ -138,7 +138,8 @@ class Config(BaseSettings):
             if "enabled" in merged["exchanges"]:
                 merged["enabled_exchanges"] = merged["exchanges"].pop("enabled")
         if "symbols" in merged:
-            merged["watchlist"] = merged["symbols"].get("watchlist", [])
+            wl = merged["symbols"].get("watchlist", [])
+            merged["watchlist"] = wl if isinstance(wl, list) else []
             del merged["symbols"]
 
         # Inject API credentials from env
@@ -214,7 +215,7 @@ class Config(BaseSettings):
         if not self.enabled_exchanges:
             raise ValueError("No exchanges with valid credentials!")
 
-        if self.risk_limits.max_margin_usage > Decimal("0.5"):
+        if self.risk_limits.max_margin_usage > Decimal("0.95"):
             raise ValueError(f"Margin usage too high: {self.risk_limits.max_margin_usage}")
 
 

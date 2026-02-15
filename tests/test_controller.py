@@ -44,8 +44,8 @@ class TestHandleOpportunity:
             symbol="ETH/USDT",
             long_exchange="exchange_a", short_exchange="exchange_b",
             long_funding_rate=Decimal("0.0001"), short_funding_rate=Decimal("0.0005"),
-            gross_edge_bps=Decimal("12"), fees_bps=Decimal("2"),
-            net_edge_bps=Decimal("7"), suggested_qty=Decimal("0.1"),
+            gross_edge_pct=Decimal("1.2"), fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"), suggested_qty=Decimal("0.1"),
             reference_price=Decimal("3000"),
         )
         await controller.handle_opportunity(opp2)
@@ -103,7 +103,7 @@ class TestRecovery:
                 "short_exchange": "exchange_b",
                 "long_qty": "0.01",
                 "short_qty": "0.01",
-                "entry_edge_bps": "10",
+                "entry_edge_pct": "1.0",
                 "opened_at": "2026-01-01T00:00:00",
             }
         }

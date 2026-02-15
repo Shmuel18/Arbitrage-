@@ -75,9 +75,9 @@ class OpportunityCandidate:
     short_exchange: str
     long_funding_rate: Decimal
     short_funding_rate: Decimal
-    gross_edge_bps: Decimal
-    fees_bps: Decimal
-    net_edge_bps: Decimal
+    gross_edge_pct: Decimal
+    fees_pct: Decimal
+    net_edge_pct: Decimal
     suggested_qty: Decimal
     reference_price: Decimal
     # Cherry-pick fields
@@ -97,9 +97,16 @@ class TradeRecord:
     short_exchange: str
     long_qty: Decimal
     short_qty: Decimal
-    entry_edge_bps: Decimal
+    entry_edge_pct: Decimal
     long_funding_rate: Optional[Decimal] = None
     short_funding_rate: Optional[Decimal] = None
+    entry_price_long: Optional[Decimal] = None
+    entry_price_short: Optional[Decimal] = None
+    exit_price_long: Optional[Decimal] = None
+    exit_price_short: Optional[Decimal] = None
+    fees_paid_total: Optional[Decimal] = None
+    funding_received_total: Optional[Decimal] = None
+    funding_paid_total: Optional[Decimal] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     mode: str = "hold"                     # "hold" or "cherry_pick"

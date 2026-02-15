@@ -61,7 +61,7 @@ class TestTradeRecord:
             state=TradeState.OPEN,
             long_exchange="a", short_exchange="b",
             long_qty=Decimal("0.01"), short_qty=Decimal("0.01"),
-            entry_edge_bps=Decimal("10"),
+            entry_edge_pct=Decimal("10"),
         )
         trade.state = TradeState.CLOSING
         assert trade.state == TradeState.CLOSING
