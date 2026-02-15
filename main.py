@@ -89,7 +89,15 @@ async def main() -> None:
         common_symbols = sorted(s for s, c in symbol_counts.items() if c >= 2)
     else:
         common_symbols = sorted(all_symbol_sets[0]) if all_symbol_sets else []
-    logger.info(f"Found {len(common_symbols)} tradeable symbols (on 2+ exchanges) across {len(verified)} exchanges")
+    logger.info(
+        f"Found {len(common_symbols)} tradeable symbols (on 2+ exchanges) across {len(verified)} exchanges",
+        extra={"action": "symbol_summary", "data": {"symbols": len(common_symbols)}},
+    )
+    market_counts = {eid: len(a._exchange.markets) for eid, a in mgr.all().items()}
+    logger.info(
+        f"Market counts by exchange: {market_counts}",
+        extra={"action": "market_counts", "data": market_counts},
+    )
     for adapter in mgr.all().values():
         # Only warm up symbols that exist on this specific exchange
         adapter_symbols = [s for s in common_symbols if s in adapter._exchange.markets]
@@ -98,7 +106,7 @@ async def main() -> None:
     # ── Components ───────────────────────────────────────────────
     publisher = APIPublisher(redis)
     guard = RiskGuard(cfg, mgr, redis)
-    controller = ExecutionController(cfg, mgr, redis, guard)
+    controller = ExecutionController(cfg, mgr, redis, guard, publisher=publisher)
     scanner = Scanner(cfg, mgr, redis, publisher=publisher)
 
     await controller.start()

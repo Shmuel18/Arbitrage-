@@ -32,6 +32,7 @@ logger = get_logger("scanner")
 
 _FUNDING_STALE_SEC = 3600
 _MIN_WINDOW_MINUTES = 30
+_TOP_OPPS_LOG_INTERVAL_SEC = 300
 
 
 class Scanner:
@@ -47,6 +48,7 @@ class Scanner:
         self._redis = redis
         self._running = False
         self._publisher = publisher
+        self._last_top_log_ts = 0.0
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -67,8 +69,10 @@ class Scanner:
             except Exception as e:
                 logger.warning(f"Failed to start watchers for {adapter.exchange_id}: {e}")
         
-        logger.info(f"Scanner started (interval: {scan_interval}s, WebSocket monitoring {len(all_symbols)} symbols)", 
-                   extra={"action": "scanner_start"})
+        logger.info(
+            f"Scanner started (interval: {scan_interval}s, WebSocket monitoring {len(all_symbols)} symbols)",
+            extra={"action": "scanner_start"},
+        )
 
         while self._running:
             try:
@@ -78,23 +82,38 @@ class Scanner:
                 if opps:
                     opps.sort(key=lambda o: o.funding_spread_pct, reverse=True)
                     top_5 = opps[:5]
-                    
-                    logger.info("📊 TOP 5 OPPORTUNITIES (by Funding Spread)", extra={"action": "top_opportunities"})
-                    for idx, opp in enumerate(top_5, 1):
+
+                    now_ts = time.time()
+                    if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
+                        self._last_top_log_ts = now_ts
                         logger.info(
-                            f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
-                            f"Spread: {opp.funding_spread_pct:.4f}% | Net: {opp.net_edge_pct:.4f}%",
-                            extra={
-                                "action": "opportunity",
-                                "data": {
-                                    "rank": idx,
-                                    "symbol": opp.symbol,
-                                    "funding_spread_pct": opp.funding_spread_pct,
-                                    "net_pct": opp.net_edge_pct,
-                                    "pair": f"{opp.long_exchange}_{opp.short_exchange}"
-                                }
-                            }
+                            "📊 TOP 5 OPPORTUNITIES (by Funding Spread)",
+                            extra={"action": "top_opportunities"},
                         )
+                        for idx, opp in enumerate(top_5, 1):
+                            immediate_spread = (
+                                (-opp.long_funding_rate) + opp.short_funding_rate
+                            ) * Decimal("100")
+                            logger.info(
+                                f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
+                                f"L={opp.long_funding_rate:.6f} S={opp.short_funding_rate:.6f} | "
+                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}%",
+                                extra={
+                                    "action": "opportunity",
+                                    "data": {
+                                        "rank": idx,
+                                        "symbol": opp.symbol,
+                                        "funding_spread_pct": opp.funding_spread_pct,
+                                        "net_pct": opp.net_edge_pct,
+                                        "pair": f"{opp.long_exchange}_{opp.short_exchange}",
+                                    },
+                                },
+                            )
+                        if self._publisher:
+                            await self._publisher.publish_log(
+                                "INFO",
+                                "Top 5 opportunities updated (5 min interval)",
+                            )
                     
                     # Publish opportunities to Redis for frontend
                     if self._publisher:
@@ -114,11 +133,11 @@ class Scanner:
                             for o in top_5
                         ]
                         await self._publisher.publish_opportunities(opp_data)
-                        await self._publisher.publish_log(
-                            "INFO",
-                            f"Scan complete: {len(opps)} opportunities found. "
-                            f"Best: {opps[0].symbol} spread={opps[0].funding_spread_pct:.4f}%"
-                        )
+                        if now_ts - self._last_top_log_ts < 1:
+                            await self._publisher.publish_log(
+                                "INFO",
+                                f"Top 5 updated: {opps[0].symbol} best spread={opps[0].funding_spread_pct:.4f}%"
+                            )
                     
                     # Try top opportunities — controller filters blacklisted/duplicate/capped
                     for opp in top_5:
@@ -126,7 +145,9 @@ class Scanner:
                 else:
                     if self._publisher:
                         await self._publisher.publish_opportunities([])
-                        await self._publisher.publish_log("INFO", "Scan complete: 0 opportunities found")
+                        if time.time() - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
+                            self._last_top_log_ts = time.time()
+                            await self._publisher.publish_log("INFO", "Top 5 updated: 0 opportunities found")
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -307,6 +328,7 @@ class Scanner:
             long_interval_hours=long_interval,
             short_interval_hours=short_interval,
         )
+        immediate_spread = spread_info["immediate_spread_pct"]
         funding_spread = spread_info["funding_spread_pct"]
         
         # Log funding rates for clarity
@@ -314,7 +336,7 @@ class Scanner:
             f"[{symbol}] Pair evaluation: "
             f"LONG({long_eid}, {long_interval}h)={long_rate:.6f} | "
             f"SHORT({short_eid}, {short_interval}h)={short_rate:.6f} | "
-            f"Spread={funding_spread:.4f}% (normalized to 8h)"
+            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h)"
         )
 
         # ── Per-payment analysis ─────────────────────────────────
@@ -332,6 +354,16 @@ class Scanner:
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
+        
+        # Debug: show NEV breakdown
+        logger.debug(
+            f"[{symbol}] NEV Calculation: "
+            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) - "
+            f"Fees={fees_pct:.4f}% (L:{long_spec.taker_fee*100:.4f}% + S:{short_spec.taker_fee*100:.4f}% × 2) - "
+            f"Slippage={tp.slippage_buffer_pct:.4f}% - "
+            f"Safety={tp.safety_buffer_pct:.4f}% - "
+            f"Basis={tp.basis_buffer_pct:.4f}%"
+        )
 
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
@@ -362,7 +394,8 @@ class Scanner:
             logger.info(
                 f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
                 f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
-                f"SPREAD={funding_spread:.4f}% | FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
+                f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
+                f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
             )
             return opp
 
@@ -382,7 +415,8 @@ class Scanner:
                 logger.info(
                     f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
                     f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
-                    f"SPREAD={funding_spread:.4f}% | FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
+                    f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
+                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
                 )
                 return opp
 

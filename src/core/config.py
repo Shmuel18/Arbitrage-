@@ -27,11 +27,11 @@ class RiskLimits(BaseSettings):
 
 class TradingParams(BaseSettings):
     min_funding_spread: Decimal = Decimal("0.5")
-    min_net_pct: Decimal = Decimal("0.01")
+    min_net_pct: Decimal = Decimal("0.5")  # ← Requires 0.5% net profit (not 0.01%) after all fees & slippage
     max_slippage_pct: Decimal = Decimal("0.10")
-    slippage_buffer_pct: Decimal = Decimal("0.015")
-    safety_buffer_pct: Decimal = Decimal("0.02")
-    basis_buffer_pct: Decimal = Decimal("0.01")
+    slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
+    safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
+    basis_buffer_pct: Decimal = Decimal("0.01")      # Basis risk penalty
     cooldown_after_orphan_hours: int = 2
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
@@ -179,6 +179,7 @@ class Config(BaseSettings):
             "okx":      ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE", "OKX_TESTNET"),
             "gateio":   ("GATEIO_API_KEY", "GATEIO_API_SECRET", None, "GATEIO_TESTNET"),
             "kucoin":   ("KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_PASSPHRASE", "KUCOIN_TESTNET"),
+            "kraken":   ("KRAKEN_API_KEY", "KRAKEN_API_SECRET", None, "KRAKEN_TESTNET"),
         }
         for eid, (key_env, secret_env, pass_env, test_env) in env_map.items():
             if eid not in exchanges:

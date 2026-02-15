@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from src.exchanges.adapter import ExchangeManager
     from src.storage.redis_client import RedisClient
     from src.risk.guard import RiskGuard
+    from src.api.publisher import APIPublisher
 
 logger = get_logger("execution")
 
@@ -49,11 +50,13 @@ class ExecutionController:
         exchange_mgr: "ExchangeManager",
         redis: "RedisClient",
         risk_guard: Optional["RiskGuard"] = None,
+        publisher: Optional["APIPublisher"] = None,
     ):
         self._cfg = config
         self._exchanges = exchange_mgr
         self._redis = redis
         self._risk_guard = risk_guard
+        self._publisher = publisher
         self._active_trades: Dict[str, TradeRecord] = {}
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
@@ -197,6 +200,36 @@ class ExecutionController:
             f"{int(min(s for s in [(long_next-now_ms)/1000 if long_next else 99999, (short_next-now_ms)/1000 if short_next else 99999] if s > 0))}s"
         )
 
+        # ── Basis Inversion Guard: check if we're buying dear and selling cheap ──
+        try:
+            long_ticker = await long_adapter.get_ticker(opp.symbol)
+            short_ticker = await short_adapter.get_ticker(opp.symbol)
+            long_ask = Decimal(str(long_ticker.get("ask", opp.reference_price)))
+            short_bid = Decimal(str(short_ticker.get("bid", opp.reference_price)))
+            
+            # Basis loss = (ask_long - bid_short) / bid_short * 100%
+            if short_bid > 0:
+                basis_loss_pct = (long_ask - short_bid) / short_bid * Decimal("100")
+            else:
+                basis_loss_pct = Decimal("0")
+            
+            # If basis loss >= net_edge, skip trade (basis inverted)
+            if basis_loss_pct >= opp.net_edge_pct:
+                logger.warning(
+                    f"🚫 [{opp.symbol}] BASIS INVERSION GUARD: "
+                    f"L_ask={long_ask} > S_bid={short_bid}, "
+                    f"basis_loss={basis_loss_pct:.4f}% ≥ net_edge={opp.net_edge_pct:.4f}% — REJECTED"
+                )
+                return
+            
+            logger.debug(
+                f"[{opp.symbol}] Basis check OK: L_ask={long_ask}, S_bid={short_bid}, "
+                f"basis_loss={basis_loss_pct:.4f}% < net_edge={opp.net_edge_pct:.4f}%"
+            )
+        except Exception as e:
+            logger.warning(f"Cannot fetch tickers for basis check {opp.symbol}: {e}")
+            # Don't reject — proceed with caution
+
         # Acquire lock
         lock_key = f"trade:{opp.symbol}"
         if not await self._redis.acquire_lock(lock_key):
@@ -273,13 +306,27 @@ class ExecutionController:
             if not long_fill:
                 return
 
+            # ── Sync-Fire: adjust short qty to match long's ACTUAL filled qty ──
+            long_actual_filled = Decimal(str(long_fill.get("filled", 0) or order_qty))
+            is_partial_fill = long_actual_filled < order_qty
+            
+            if is_partial_fill:
+                logger.warning(
+                    f"⚠️ [{opp.symbol}] PARTIAL FILL DETECTED: "
+                    f"Long filled {long_actual_filled} / {order_qty} — "
+                    f"Sync-Fire: adjusting short order to {long_actual_filled}"
+                )
+                short_order_qty = long_actual_filled
+            else:
+                short_order_qty = order_qty
+
             short_fill = await self._place_with_timeout(
                 short_adapter,
                 OrderRequest(
                     exchange=opp.short_exchange,
                     symbol=opp.symbol,
                     side=OrderSide.SELL,
-                    quantity=order_qty,
+                    quantity=short_order_qty,
                     reduce_only=False,
                 ),
             )
@@ -298,6 +345,23 @@ class ExecutionController:
             entry_price_long = self._extract_avg_price(long_fill)
             entry_price_short = self._extract_avg_price(short_fill)
             entry_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
+
+            # Log any partial fills and mismatches
+            short_partial = short_filled_qty < short_order_qty
+            qty_mismatch = long_filled_qty != short_filled_qty
+            
+            if is_partial_fill or short_partial or qty_mismatch:
+                logger.warning(
+                    f"📊 [{opp.symbol}] Fill Report: "
+                    f"Long={long_filled_qty}/{order_qty} "
+                    f"| Short={short_filled_qty}/{short_order_qty} "
+                    f"| Mismatch={qty_mismatch} | Fees=${float(entry_fees):.2f}"
+                )
+                if qty_mismatch:
+                    logger.warning(
+                        f"🔴 QUANTITY MISMATCH: L={long_filled_qty} != S={short_filled_qty} — "
+                        f"Unhedged exposure of {abs(long_filled_qty - short_filled_qty)}!"
+                    )
 
             trade = TradeRecord(
                 trade_id=trade_id,
@@ -337,6 +401,20 @@ class ExecutionController:
                     "action": "trade_opened",
                 },
             )
+
+            immediate_spread = (
+                (-opp.long_funding_rate) + opp.short_funding_rate
+            ) * Decimal("100")
+            entry_msg = (
+                f"ENTRY {trade_id} {opp.symbol} | "
+                f"BUY {opp.long_exchange} {long_filled_qty} @ {entry_price_long} | "
+                f"SELL {opp.short_exchange} {short_filled_qty} @ {entry_price_short} | "
+                f"Fees={entry_fees} | "
+                f"Spread={immediate_spread:.4f}% (immediate), Net={opp.net_edge_pct:.4f}%"
+            )
+            logger.info(entry_msg, extra={"trade_id": trade_id, "symbol": opp.symbol, "action": "trade_entry"})
+            if self._publisher:
+                await self._publisher.publish_log("INFO", entry_msg)
             
             # Log balances after trade opened (if enabled)
             if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:

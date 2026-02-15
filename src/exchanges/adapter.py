@@ -31,6 +31,8 @@ class ExchangeAdapter:
         self._settings_applied: set = set()
         self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
         self._ws_tasks: List = []  # Track running WebSocket tasks
+        self._ws_funding_supported = True
+        self._ws_funding_disabled_logged = False
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -84,11 +86,12 @@ class ExchangeAdapter:
 
     async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
         """Start WebSocket watchers for funding rates on specified symbols."""
+        eligible = [s for s in symbols if s in self._exchange.markets]
         logger.info(
-            f"Starting funding rate WebSocket watchers for {len(symbols)} symbols",
+            f"Starting funding rate WebSocket watchers for {len(eligible)} symbols",
             extra={"exchange": self.exchange_id, "action": "ws_start"},
         )
-        for symbol in symbols:
+        for symbol in eligible:
             # Start watcher as a background task
             task = asyncio.create_task(self._watch_funding_rate_loop(symbol))
             self._ws_tasks.append(task)
@@ -101,7 +104,7 @@ class ExchangeAdapter:
         while retry_count < max_retries:
             try:
                 # Try WebSocket if available (ccxt.pro)
-                if hasattr(self._exchange, 'watch_funding_rate'):
+                if self._ws_funding_supported and hasattr(self._exchange, 'watch_funding_rate'):
                     await self._watch_funding_rate_websocket(symbol)
                 else:
                     # Fallback: fast polling every 5 seconds
@@ -111,6 +114,18 @@ class ExchangeAdapter:
                 return
             except Exception as e:
                 retry_count += 1
+                msg = str(e).lower()
+                if "not supported" in msg or "does not support" in msg:
+                    self._ws_funding_supported = False
+                    if not self._ws_funding_disabled_logged:
+                        self._ws_funding_disabled_logged = True
+                        logger.warning(
+                            f"{self.exchange_id} watch_funding_rate() not supported — falling back to polling",
+                            extra={"exchange": self.exchange_id, "action": "ws_funding_disabled"},
+                        )
+                    # Switch to polling without per-symbol warnings
+                    await self._watch_funding_rate_polling(symbol)
+                    return
                 logger.warning(
                     f"Funding watcher error for {symbol}: {e}",
                     extra={"exchange": self.exchange_id, "symbol": symbol, "retry": retry_count},

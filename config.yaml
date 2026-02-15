@@ -41,6 +41,8 @@ exchanges:
     - bybit
     - okx
     - kucoin
+    - kraken
+    - gateio
 
   binance:
     name: "Binance Futures"
@@ -73,8 +75,28 @@ exchanges:
     position_mode: "oneway"
 
   kucoin:
-    name: "Kucoin Futures"
-    ccxt_id: "kucoin"
+    name: "KuCoin Futures"
+    ccxt_id: "kucoinfutures"
+    default_type: "swap"
+    rate_limit_ms: 100
+    max_leverage: 20
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
+
+  kraken:
+    name: "Kraken Futures"
+    ccxt_id: "krakenfutures"
+    default_type: "future"
+    rate_limit_ms: 100
+    max_leverage: 10
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
+
+  gateio:
+    name: "Gate.io Futures"
+    ccxt_id: "gateio"
     default_type: "swap"
     rate_limit_ms: 100
     max_leverage: 20
