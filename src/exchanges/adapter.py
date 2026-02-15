@@ -33,6 +33,7 @@ class ExchangeAdapter:
         self._ws_tasks: List = []  # Track running WebSocket tasks
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
+        self._batch_funding_supported = True  # set to False if fetchFundingRates fails
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -85,16 +86,31 @@ class ExchangeAdapter:
             return False
 
     async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
-        """Start WebSocket watchers for funding rates on specified symbols."""
+        """Start funding rate polling — batch if supported, per-symbol otherwise."""
         eligible = [s for s in symbols if s in self._exchange.markets]
-        logger.info(
-            f"Starting funding rate WebSocket watchers for {len(eligible)} symbols",
-            extra={"exchange": self.exchange_id, "action": "ws_start"},
-        )
-        for symbol in eligible:
-            # Start watcher as a background task
-            task = asyncio.create_task(self._watch_funding_rate_loop(symbol))
+        if not eligible:
+            logger.info(
+                f"Starting funding rate polling for 0 symbols",
+                extra={"exchange": self.exchange_id, "action": "ws_start"},
+            )
+            return
+
+        if self._batch_funding_supported:
+            logger.info(
+                f"Starting funding rate BATCH polling for {len(eligible)} symbols",
+                extra={"exchange": self.exchange_id, "action": "ws_start"},
+            )
+            task = asyncio.create_task(self._batch_funding_poll_loop(eligible))
             self._ws_tasks.append(task)
+        else:
+            # Batch not supported (e.g. KuCoin) — use per-symbol polling
+            logger.info(
+                f"Starting funding rate PER-SYMBOL polling for {len(eligible)} symbols",
+                extra={"exchange": self.exchange_id, "action": "ws_start"},
+            )
+            for symbol in eligible:
+                task = asyncio.create_task(self._watch_funding_rate_polling(symbol))
+                self._ws_tasks.append(task)
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket."""
@@ -170,6 +186,73 @@ class ExchangeAdapter:
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get latest cached funding rate (low-latency, no network call)."""
         return self._funding_rate_cache.get(symbol)
+
+    async def warm_up_funding_rates(self, symbols: List[str] = None) -> int:
+        """Batch-fetch ALL funding rates in one API call to pre-populate cache.
+        Falls back to per-symbol fetch if batch not supported (e.g. KuCoin)."""
+        # Try batch first
+        try:
+            all_rates = await self._exchange.fetch_funding_rates(symbols)
+            count = 0
+            for symbol, data in all_rates.items():
+                if symbol in self._exchange.markets:
+                    self._update_funding_cache(symbol, data)
+                    count += 1
+            logger.info(
+                f"Warmed up {count} funding rates on {self.exchange_id}",
+                extra={"exchange": self.exchange_id, "action": "funding_warm_up"},
+            )
+            return count
+        except Exception as e:
+            self._batch_funding_supported = False
+            logger.warning(
+                f"Batch fetch not supported on {self.exchange_id}, using per-symbol warmup",
+                extra={"exchange": self.exchange_id, "action": "funding_warm_up_fallback"},
+            )
+
+        # Fallback: per-symbol fetch with concurrency limit
+        if not symbols:
+            symbols = list(self._exchange.markets.keys())
+        sem = asyncio.Semaphore(20)
+        count = 0
+
+        async def _fetch_one(sym: str):
+            nonlocal count
+            async with sem:
+                try:
+                    data = await self._exchange.fetch_funding_rate(sym)
+                    self._update_funding_cache(sym, data)
+                    count += 1
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_fetch_one(s) for s in symbols], return_exceptions=True)
+        logger.info(
+            f"Warmed up {count}/{len(symbols)} funding rates on {self.exchange_id} (per-symbol)",
+            extra={"exchange": self.exchange_id, "action": "funding_warm_up"},
+        )
+        return count
+
+    async def _batch_funding_poll_loop(self, symbols: List[str]) -> None:
+        """Periodically fetch ALL funding rates in one batch API call."""
+        poll_interval = 30  # seconds between batch refreshes
+        while True:
+            try:
+                all_rates = await self._exchange.fetch_funding_rates(symbols)
+                count = 0
+                for symbol, data in all_rates.items():
+                    if symbol in self._exchange.markets:
+                        self._update_funding_cache(symbol, data)
+                        count += 1
+                logger.debug(
+                    f"Batch funding refresh: {count} rates on {self.exchange_id}",
+                    extra={"exchange": self.exchange_id},
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.debug(f"Batch funding poll error on {self.exchange_id}: {e}")
+            await asyncio.sleep(poll_interval)
 
     async def disconnect(self) -> None:
         if self._exchange:

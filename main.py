@@ -103,6 +103,13 @@ async def main() -> None:
         adapter_symbols = [s for s in common_symbols if s in adapter._exchange.markets]
         await adapter.warm_up_symbols(adapter_symbols)
 
+    # Batch-fetch ALL funding rates (one API call per exchange → instant cache)
+    logger.info("Fetching funding rates (batch)...", extra={"action": "funding_batch_start"})
+    for adapter in mgr.all().values():
+        adapter_symbols = [s for s in common_symbols if s in adapter._exchange.markets]
+        await adapter.warm_up_funding_rates(adapter_symbols)
+    logger.info("Funding rate cache ready", extra={"action": "funding_batch_done"})
+
     # ── Components ───────────────────────────────────────────────
     publisher = APIPublisher(redis)
     guard = RiskGuard(cfg, mgr, redis)

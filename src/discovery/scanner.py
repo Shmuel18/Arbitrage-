@@ -170,6 +170,7 @@ class Scanner:
 
     async def scan_all(self) -> List[OpportunityCandidate]:
         """Scan every (symbol × exchange-pair) for funding edge."""
+        t0 = time.monotonic()
         adapters = self._exchanges.all()
         exchange_ids = list(adapters.keys())
         if len(exchange_ids) < 2:
@@ -209,11 +210,17 @@ class Scanner:
             if symbol_results:
                 results.extend(symbol_results)
 
+        elapsed = time.monotonic() - t0
         if results:
             results.sort(key=lambda o: o.funding_spread_pct, reverse=True)
-            logger.debug(
-                f"Found {len(results)} opportunities, best spread={results[0].funding_spread_pct:.4f}%",
-                extra={"action": "scan_result", "data": {"count": len(results)}},
+            logger.info(
+                f"✅ Scan completed: {len(results)} opportunities from {len(common_symbols)} symbols in {elapsed:.1f}s",
+                extra={"action": "scan_complete", "data": {"count": len(results), "elapsed": round(elapsed, 1)}},
+            )
+        else:
+            logger.info(
+                f"✅ Scan completed: 0 opportunities from {len(common_symbols)} symbols in {elapsed:.1f}s",
+                extra={"action": "scan_complete", "data": {"count": 0, "elapsed": round(elapsed, 1)}},
             )
         return results
 
@@ -235,15 +242,7 @@ class Scanner:
             cached = adapters[eid].get_funding_rate_cached(symbol)
             if cached:
                 funding[eid] = cached
-            else:
-                # Fallback: fetch from REST if cache empty (e.g., on first run)
-                try:
-                    data = await adapters[eid].get_funding_rate(symbol)
-                    if not self._is_stale(data):
-                        funding[eid] = data
-                except Exception as e:
-                    logger.debug(f"Funding fetch failed {eid}/{symbol}: {e}")
-                    continue
+            # No REST fallback — cache is populated by warm_up + background polling
 
         if len(funding) < 2:
             return []

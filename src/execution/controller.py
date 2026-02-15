@@ -122,6 +122,12 @@ class ExecutionController:
 
     async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
         """Validate and execute a new funding-arb trade."""
+        logger.info(
+            f"🔍 [{opp.symbol}] Evaluating opportunity: mode={opp.mode} "
+            f"spread={opp.funding_spread_pct:.4f}% net={opp.net_edge_pct:.4f}% "
+            f"L={opp.long_exchange} S={opp.short_exchange}"
+        )
+
         # Blacklist guard — skip symbols/exchanges flagged as delisting etc.
         if self._is_blacklisted(opp.symbol, opp.long_exchange, opp.short_exchange):
             return
@@ -129,11 +135,15 @@ class ExecutionController:
         # Duplicate guard
         for t in self._active_trades.values():
             if t.symbol == opp.symbol:
-                logger.debug(f"Already have active trade for {opp.symbol}")
+                logger.info(f"🔁 Skipping {opp.symbol}: already have active trade")
                 return
 
         # Concurrency cap
         if len(self._active_trades) >= self._cfg.execution.concurrent_opportunities:
+            logger.info(
+                f"🚫 Skipping {opp.symbol}: concurrency cap reached "
+                f"({len(self._active_trades)}/{self._cfg.execution.concurrent_opportunities})"
+            )
             return
 
         # ── Funding spread gate (safety check) ──
@@ -142,63 +152,67 @@ class ExecutionController:
         tp = self._cfg.trading_params
         if opp.mode == "cherry_pick":
             if opp.gross_edge_pct < tp.min_funding_spread:
-                logger.debug(
-                    f"Skipping {opp.symbol}: cherry-pick gross {opp.gross_edge_pct:.4f}% "
+                logger.info(
+                    f"📉 Skipping {opp.symbol}: cherry-pick gross {opp.gross_edge_pct:.4f}% "
                     f"< min_funding_spread {tp.min_funding_spread}%"
                 )
                 return
         else:
             if opp.funding_spread_pct < tp.min_funding_spread:
-                logger.debug(
-                    f"Skipping {opp.symbol}: spread {opp.funding_spread_pct:.4f}% "
+                logger.info(
+                    f"📉 Skipping {opp.symbol}: spread {opp.funding_spread_pct:.4f}% "
                     f"< min_funding_spread {tp.min_funding_spread}%"
                 )
                 return
 
-        # ── Entry timing gate: only enter within entry_offset before funding ──
-        entry_offset = self._cfg.trading_params.entry_offset_seconds  # 900 = 15 min
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
-        
-        try:
-            long_funding = await long_adapter.get_funding_rate(opp.symbol)
-            short_funding = await short_adapter.get_funding_rate(opp.symbol)
-        except Exception as e:
-            logger.debug(f"Cannot fetch funding time for {opp.symbol}: {e}")
-            return
-        
-        now_ms = _time.time() * 1000
-        
-        # Check if we're within entry_offset seconds before ANY funding payment
-        long_next = long_funding.get("next_timestamp")
-        short_next = short_funding.get("next_timestamp")
-        
-        in_entry_window = False
-        if long_next:
-            seconds_until_long = (long_next - now_ms) / 1000
-            if 0 < seconds_until_long <= entry_offset:
-                in_entry_window = True
-        if short_next:
-            seconds_until_short = (short_next - now_ms) / 1000
-            if 0 < seconds_until_short <= entry_offset:
-                in_entry_window = True
-        
-        if not in_entry_window:
-            next_str = ""
-            if long_next:
-                next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
-            if short_next:
-                next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
-            logger.debug(
-                f"Skipping {opp.symbol}: not in entry window (next funding: {next_str}). "
-                f"Entry allowed {entry_offset}s before payment."
-            )
-            return
-        
-        logger.info(
-            f"Entry window OPEN for {opp.symbol} — funding in "
-            f"{int(min(s for s in [(long_next-now_ms)/1000 if long_next else 99999, (short_next-now_ms)/1000 if short_next else 99999] if s > 0))}s"
-        )
+
+        # ── Entry timing gate: ONLY for CHERRY_PICK mode ──
+        # HOLD mode: enter immediately — you hold and collect funding every cycle
+        # CHERRY_PICK mode: must enter close to funding to collect & exit in time
+        if opp.mode == "cherry_pick":
+            entry_offset = self._cfg.trading_params.entry_offset_seconds
+            try:
+                long_funding = await long_adapter.get_funding_rate(opp.symbol)
+                short_funding = await short_adapter.get_funding_rate(opp.symbol)
+            except Exception as e:
+                logger.info(f"Cannot fetch funding time for {opp.symbol}: {e} — allowing entry")
+                long_funding = {}
+                short_funding = {}
+
+            now_ms = _time.time() * 1000
+            long_next = long_funding.get("next_timestamp")
+            short_next = short_funding.get("next_timestamp")
+
+            if long_next is None and short_next is None:
+                logger.info(
+                    f"⏰ [{opp.symbol}] No funding timestamp — allowing cherry-pick entry"
+                )
+            else:
+                in_entry_window = False
+                if long_next:
+                    seconds_until_long = (long_next - now_ms) / 1000
+                    if 0 < seconds_until_long <= entry_offset:
+                        in_entry_window = True
+                if short_next:
+                    seconds_until_short = (short_next - now_ms) / 1000
+                    if 0 < seconds_until_short <= entry_offset:
+                        in_entry_window = True
+
+                if not in_entry_window:
+                    next_str = ""
+                    if long_next:
+                        next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
+                    if short_next:
+                        next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: cherry-pick not in entry window "
+                        f"(next funding: {next_str}). Entry allowed {entry_offset}s before payment."
+                    )
+                    return
+
+        logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
 
         # ── Basis Inversion Guard: check if we're buying dear and selling cheap ──
         try:
