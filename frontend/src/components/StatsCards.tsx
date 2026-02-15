@@ -20,7 +20,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({ totalBalance, dailyPnl, activeT
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <div className="stat-card stat-card--blue">
         <div className="stat-card-label">{t.totalBalance}</div>
         <div className="stat-card-value">{formatCurrency(totalBalance)}</div>

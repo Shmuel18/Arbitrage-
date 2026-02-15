@@ -9,6 +9,7 @@ interface Opportunity {
   short_rate: number;
   net_pct: number;
   gross_pct: number;
+  funding_spread_pct?: number;
   price: number;
   mode: string;
 }
@@ -53,7 +54,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                 <th>{t.short}</th>
                 <th className="text-end">{t.fundingL}</th>
                 <th className="text-end">{t.fundingS}</th>
-                <th className="text-end">{t.netPct}</th>
+                <th className="text-end">{t.fundingSpread}</th>
               </tr>
             </thead>
             <tbody>
@@ -68,8 +69,8 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                   <td className="text-end mono" style={getRateStyle(opp.short_rate)}>
                     {formatFunding(opp.short_rate)}
                   </td>
-                  <td className="text-end mono font-semibold" style={getRateStyle(opp.short_rate - opp.long_rate)}>
-                    {formatFunding(opp.short_rate - opp.long_rate)}
+                  <td className="text-end mono font-semibold" style={getRateStyle(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}>
+                    {formatFunding(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}
                   </td>
                 </tr>
               ))}

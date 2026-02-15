@@ -20,7 +20,7 @@ from src.discovery.calculator import (
     analyze_per_payment_pnl,
     calculate_cherry_pick_edge,
     calculate_fees,
-    calculate_funding_edge,
+    calculate_funding_spread,
 )
 
 if TYPE_CHECKING:
@@ -60,22 +60,23 @@ class Scanner:
             try:
                 opps = await self.scan_all()
                 
-                # Sort by net_edge_pct and display top 5 opportunities
+                # Sort by funding_spread_pct and display top 5 opportunities
                 if opps:
-                    opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
+                    opps.sort(key=lambda o: o.funding_spread_pct, reverse=True)
                     top_5 = opps[:5]
                     
-                    logger.info("📊 TOP 5 OPPORTUNITIES", extra={"action": "top_opportunities"})
+                    logger.info("📊 TOP 5 OPPORTUNITIES (by Funding Spread)", extra={"action": "top_opportunities"})
                     for idx, opp in enumerate(top_5, 1):
                         logger.info(
                             f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
-                            f"Edge: {opp.net_edge_pct:.4f}%",
+                            f"Spread: {opp.funding_spread_pct:.4f}% | Net: {opp.net_edge_pct:.4f}%",
                             extra={
                                 "action": "opportunity",
                                 "data": {
                                     "rank": idx,
                                     "symbol": opp.symbol,
-                                    "edge_pct": opp.net_edge_pct,
+                                    "funding_spread_pct": opp.funding_spread_pct,
+                                    "net_pct": opp.net_edge_pct,
                                     "pair": f"{opp.long_exchange}_{opp.short_exchange}"
                                 }
                             }
@@ -90,6 +91,7 @@ class Scanner:
                                 "short_exchange": o.short_exchange,
                                 "net_pct": float(o.net_edge_pct),
                                 "gross_pct": float(o.gross_edge_pct),
+                                "funding_spread_pct": float(o.funding_spread_pct),
                                 "long_rate": float(o.long_funding_rate),
                                 "short_rate": float(o.short_funding_rate),
                                 "price": float(o.reference_price),
@@ -100,7 +102,8 @@ class Scanner:
                         await self._publisher.publish_opportunities(opp_data)
                         await self._publisher.publish_log(
                             "INFO",
-                            f"Scan complete: {len(opps)} opportunities found. Best: {opps[0].symbol} {opps[0].net_edge_pct:.4f}%"
+                            f"Scan complete: {len(opps)} opportunities found. "
+                            f"Best: {opps[0].symbol} spread={opps[0].funding_spread_pct:.4f}%"
                         )
                     
                     # Try top opportunities — controller filters blacklisted/duplicate/capped
@@ -168,9 +171,9 @@ class Scanner:
                 results.extend(symbol_results)
 
         if results:
-            results.sort(key=lambda o: o.net_edge_pct, reverse=True)
+            results.sort(key=lambda o: o.funding_spread_pct, reverse=True)
             logger.debug(
-                f"Found {len(results)} opportunities, best={results[0].net_edge_pct:.4f}%",
+                f"Found {len(results)} opportunities, best spread={results[0].funding_spread_pct:.4f}%",
                 extra={"action": "scan_result", "data": {"count": len(results)}},
             )
         return results
@@ -231,7 +234,7 @@ class Scanner:
         interval_a = funding[eid_a].get("interval_hours", 8)
         interval_b = funding[eid_b].get("interval_hours", 8)
 
-        # Try both directions, pick the better one
+        # Try both directions, pick the one with the higher funding spread
         best = None
         for long_eid, short_eid in [(eid_a, eid_b), (eid_b, eid_a)]:
             long_rate = funding[long_eid]["rate"]
@@ -245,7 +248,7 @@ class Scanner:
                 long_interval, short_interval,
                 funding, adapters,
             )
-            if opp and (best is None or opp.net_edge_pct > best.net_edge_pct):
+            if opp and (best is None or opp.funding_spread_pct > best.funding_spread_pct):
                 best = opp
 
         return best
@@ -259,63 +262,75 @@ class Scanner:
         funding: Dict[str, dict],
         adapters: Dict[str, "ExchangeAdapter"],
     ) -> Optional[OpportunityCandidate]:
-        """Evaluate one direction (long on A, short on B)."""
+        """Evaluate one direction (long on A, short on B).
+
+        Entry logic — PURE FUNDING ARBITRAGE:
+          1. Compute funding spread: (-long_rate) + short_rate   (normalized to 8h)
+          2. Per-payment analysis → HOLD or CHERRY_PICK
+          3. HOLD:        spread ≥ min_funding_spread AND net > min_net_pct
+          4. CHERRY_PICK: total income from N collections > min_funding_spread
+             (e.g. income every 1h, cost every 8h → collect 7× before paying once)
+        """
+        tp = self._cfg.trading_params
+
+        # ── Compute funding spread (normalized to 8h) ────────────
+        spread_info = calculate_funding_spread(
+            long_rate, short_rate,
+            long_interval_hours=long_interval,
+            short_interval_hours=short_interval,
+        )
+        funding_spread = spread_info["funding_spread_pct"]
+
+        # ── Per-payment analysis ─────────────────────────────────
         pnl = analyze_per_payment_pnl(long_rate, short_rate)
 
         # Both sides cost us → skip
         if pnl["both_cost"]:
             return None
 
-        # Fees
+        # ── Fees & buffers ───────────────────────────────────────
         long_spec = await adapters[long_eid].get_instrument_spec(symbol)
         short_spec = await adapters[short_eid].get_instrument_spec(symbol)
         if not long_spec or not short_spec:
             return None
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        tp = self._cfg.trading_params
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
 
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
-            edge_info = calculate_funding_edge(
-                long_rate, short_rate,
-                long_interval_hours=long_interval,
-                short_interval_hours=short_interval,
-            )
-            net_pct = edge_info["edge_pct"] - total_cost_pct
+            # Gate: funding spread must pass threshold
+            if funding_spread < tp.min_funding_spread:
+                return None
+
+            net_pct = funding_spread - total_cost_pct
             if net_pct < tp.min_net_pct:
                 return None
 
             opp = await self._build_opportunity(
                 symbol, long_eid, short_eid,
                 long_rate, short_rate,
-                edge_info["edge_pct"], fees_pct, net_pct,
+                funding_spread, fees_pct, net_pct,
                 adapters, mode="hold",
             )
             return opp
 
         else:
-            # One side income, one side cost — check net first
-            edge_info = calculate_funding_edge(
-                long_rate, short_rate,
-                long_interval_hours=long_interval,
-                short_interval_hours=short_interval,
-            )
-
-            if edge_info["edge_pct"] - total_cost_pct >= tp.min_net_pct:
-                # ── HOLD mode: net-positive classic arbitrage ───
-                net_pct = edge_info["edge_pct"] - total_cost_pct
+            # ── One side income, one side cost ───────────────────
+            # First check: is a plain HOLD still net-positive?
+            if funding_spread >= tp.min_funding_spread and funding_spread - total_cost_pct >= tp.min_net_pct:
+                net_pct = funding_spread - total_cost_pct
                 opp = await self._build_opportunity(
                     symbol, long_eid, short_eid,
                     long_rate, short_rate,
-                    edge_info["edge_pct"], fees_pct, net_pct,
+                    funding_spread, fees_pct, net_pct,
                     adapters, mode="hold",
                 )
                 return opp
 
-            # ── CHERRY_PICK mode: net-negative, but we can dodge cost ─
-            # Identify income vs cost sides
+            # ── CHERRY_PICK: income arrives faster than cost ─────
+            # Example: short on Bybit (1h) receives, long on Binance (8h) pays
+            #   → collect 7 income payments before the 1 cost payment
             if pnl["long_is_income"]:
                 income_pnl = pnl["long_pnl_per_payment"]
                 income_interval = long_interval
@@ -337,22 +352,33 @@ class Scanner:
             if minutes_until_cost < _MIN_WINDOW_MINUTES:
                 return None  # Too close to cost payment
 
-            # How many income payments can we collect?
+            # How many income payments can we collect before cost?
             hours_until_cost = ms_until_cost / 3_600_000
             n_collections = int(hours_until_cost / income_interval)
             if n_collections < 1:
                 return None
 
-            # Edge = total income we'll collect (minus open/close fees)
+            # Total cherry-pick edge = sum of all income collections
             gross_pct = calculate_cherry_pick_edge(income_pnl, n_collections)
-            net_pct = gross_pct - total_cost_pct
 
+            # Gate: cherry-pick total must beat min_funding_spread
+            if gross_pct < tp.min_funding_spread:
+                return None
+
+            net_pct = gross_pct - total_cost_pct
             if net_pct < tp.min_net_pct:
                 return None
 
             # Exit 2 minutes before cost payment for safety
             exit_before = datetime.fromtimestamp(
                 (cost_next_ts - 120_000) / 1000, tz=timezone.utc
+            )
+
+            logger.info(
+                f"🍒 Cherry-pick {symbol}: collect {n_collections}× every {income_interval}h "
+                f"(gross={gross_pct:.4f}%, net={net_pct:.4f}%) — "
+                f"exit before {exit_before.strftime('%H:%M UTC')}",
+                extra={"action": "cherry_pick_found", "symbol": symbol},
             )
 
             opp = await self._build_opportunity(
@@ -396,12 +422,20 @@ class Scanner:
             return None
         quantity = notional / price
 
+        # Compute the pure funding spread for this pair (always, regardless of mode)
+        spread_info = calculate_funding_spread(
+            long_rate, short_rate,
+            long_interval_hours=8,  # already normalized in _evaluate_direction
+            short_interval_hours=8,
+        )
+
         return OpportunityCandidate(
             symbol=symbol,
             long_exchange=long_eid,
             short_exchange=short_eid,
             long_funding_rate=long_rate,
             short_funding_rate=short_rate,
+            funding_spread_pct=spread_info["funding_spread_pct"],
             gross_edge_pct=gross_pct,
             fees_pct=fees_pct,
             net_edge_pct=net_pct,

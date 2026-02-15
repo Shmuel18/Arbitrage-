@@ -22,8 +22,9 @@ def _future_ms(hours: float) -> float:
 
 class TestScanAll:
     @pytest.mark.asyncio
-    async def test_finds_opportunity_when_edge_exists(self, scanner, config, mock_exchange_mgr):
-        """High funding diff → should produce an opportunity (cherry-pick mode)."""
+    async def test_finds_opportunity_when_funding_spread_exists(self, scanner, config, mock_exchange_mgr):
+        """High funding spread → should produce an opportunity."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
         config.trading_params.min_net_pct = Decimal("0.01")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")
@@ -31,7 +32,7 @@ class TestScanAll:
 
         # rate_a=0.0001, rate_b=0.0050 → both positive
         # Best direction: long A, short B (short_pnl=+0.005 income, long_pnl=-0.0001 cost)
-        # Cherry-pick: need next_timestamp on cost side (A) to know when it charges us
+        # Funding spread = (-0.0001) + 0.005 = 0.0049 → 0.49% (huge)
         adapter_a.get_funding_rate.return_value = {
             "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
             "next_timestamp": _future_ms(8), "interval_hours": 8,
@@ -47,7 +48,31 @@ class TestScanAll:
 
         results = await scanner.scan_all()
         assert len(results) >= 1
+        assert results[0].funding_spread_pct > 0
         assert results[0].net_edge_pct > 0
+
+    @pytest.mark.asyncio
+    async def test_skips_when_funding_spread_below_threshold(self, scanner, config, mock_exchange_mgr):
+        """Spread below min_funding_spread → no opportunity, regardless of other factors."""
+        config.trading_params.min_funding_spread = Decimal("1.0")  # Very high threshold
+        config.trading_params.min_net_pct = Decimal("0.01")
+
+        adapter_a = mock_exchange_mgr.get("exchange_a")
+        adapter_b = mock_exchange_mgr.get("exchange_b")
+
+        # rate_a=0.0001, rate_b=0.0003 → spread = (-0.0001 + 0.0003) * 100 = 0.02%
+        # This is below min_funding_spread of 1.0 → SKIP
+        adapter_a.get_funding_rate.return_value = {
+            "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
+            "next_timestamp": _future_ms(8), "interval_hours": 8,
+        }
+        adapter_b.get_funding_rate.return_value = {
+            "rate": Decimal("0.0003"), "timestamp": None, "datetime": None,
+            "next_timestamp": _future_ms(8), "interval_hours": 8,
+        }
+
+        results = await scanner.scan_all()
+        assert len(results) == 0
 
     @pytest.mark.asyncio
     async def test_no_opportunity_when_rates_equal(self, scanner, mock_exchange_mgr):
@@ -91,8 +116,9 @@ class TestIntervalFromFunding:
     """Interval is now detected in adapter.get_funding_rate, not scanner."""
 
     @pytest.mark.asyncio
-    async def test_interval_hours_used_in_edge_calc(self, scanner, config, mock_exchange_mgr):
-        """Different intervals should affect edge calculation."""
+    async def test_interval_hours_used_in_spread_calc(self, scanner, config, mock_exchange_mgr):
+        """Different intervals should affect funding spread calculation."""
+        config.trading_params.min_funding_spread = Decimal("0.001")
         config.trading_params.min_net_pct = Decimal("0.001")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")

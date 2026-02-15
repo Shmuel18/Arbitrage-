@@ -2,10 +2,103 @@
 
 from decimal import Decimal
 
-from src.discovery.calculator import calculate_fees, calculate_funding_edge
+from src.discovery.calculator import (
+    calculate_fees,
+    calculate_funding_edge,
+    calculate_funding_spread,
+)
 
 
-class TestCalculateFundingEdge:
+class TestCalculateFundingSpread:
+    """Tests for the PRIMARY funding-spread function."""
+
+    def test_positive_spread_short_receives_long_pays(self):
+        """Positive spread when short_rate > long_rate (we receive on short, pay on long)."""
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.0001"),
+            short_rate=Decimal("0.0005"),
+        )
+        assert result["funding_spread_pct"] > 0
+
+    def test_formula_matches_user_spec(self):
+        """Verify: spread = (-long_rate) + short_rate, in percent."""
+        long_rate = Decimal("0.0003")
+        short_rate = Decimal("0.0007")
+        result = calculate_funding_spread(long_rate, short_rate)
+        expected = (-long_rate + short_rate) * Decimal("100")
+        assert result["funding_spread_pct"] == expected
+
+    def test_negative_spread_when_long_rate_higher(self):
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.0005"),
+            short_rate=Decimal("0.0001"),
+        )
+        assert result["funding_spread_pct"] < 0
+
+    def test_zero_spread_when_rates_equal(self):
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.0003"),
+            short_rate=Decimal("0.0003"),
+        )
+        assert result["funding_spread_pct"] == 0
+
+    def test_negative_long_rate_increases_spread(self):
+        """When long_rate is negative, longs receive → more profit for us."""
+        result = calculate_funding_spread(
+            long_rate=Decimal("-0.0002"),
+            short_rate=Decimal("0.0003"),
+        )
+        # -(-0.0002) + 0.0003 = 0.0005 → 0.05%
+        assert result["funding_spread_pct"] == Decimal("0.05")
+
+    def test_different_intervals_normalized(self):
+        """Bybit 1h vs Binance 8h: same rate should produce zero spread."""
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.004"),
+            short_rate=Decimal("0.0005"),
+            long_interval_hours=8,
+            short_interval_hours=1,
+        )
+        assert result["funding_spread_pct"] == 0
+
+    def test_1h_short_makes_spread_bigger(self):
+        """Short on 1h exchange: normalized rate is 8x, so we receive more."""
+        result_8h = calculate_funding_spread(
+            long_rate=Decimal("0.0001"),
+            short_rate=Decimal("0.0005"),
+            long_interval_hours=8,
+            short_interval_hours=8,
+        )
+        result_1h = calculate_funding_spread(
+            long_rate=Decimal("0.0001"),
+            short_rate=Decimal("0.0005"),
+            long_interval_hours=8,
+            short_interval_hours=1,
+        )
+        assert result_1h["funding_spread_pct"] > result_8h["funding_spread_pct"]
+
+    def test_annualized_is_1095x(self):
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.0001"),
+            short_rate=Decimal("0.0005"),
+        )
+        assert result["annualized_pct"] == result["funding_spread_pct"] * 1095
+
+    def test_pnl_breakdown(self):
+        """Verify long_pnl_pct and short_pnl_pct are correct."""
+        result = calculate_funding_spread(
+            long_rate=Decimal("0.0002"),
+            short_rate=Decimal("0.0005"),
+        )
+        # long_pnl = -0.0002 → -0.02%
+        assert result["long_pnl_pct"] == Decimal("-0.02")
+        # short_pnl = +0.0005 → +0.05%
+        assert result["short_pnl_pct"] == Decimal("0.05")
+
+
+class TestCalculateFundingEdgeBackwardCompat:
+    """Backward compatibility: calculate_funding_edge delegates to calculate_funding_spread."""
+
     def test_positive_edge_when_short_rate_higher(self):
         result = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
@@ -27,10 +120,14 @@ class TestCalculateFundingEdge:
         )
         assert result["edge_pct"] == 0
 
+    def test_edge_matches_spread(self):
+        """edge_pct from old function == funding_spread_pct from new function."""
+        args = (Decimal("0.0001"), Decimal("0.0005"))
+        edge = calculate_funding_edge(*args)
+        spread = calculate_funding_spread(*args)
+        assert edge["edge_pct"] == spread["funding_spread_pct"]
+
     def test_different_intervals_normalized(self):
-        """Bybit 1h vs Binance 8h: same rate should produce zero edge."""
-        # Rate 0.0005 per 1h = 0.004 per 8h
-        # Rate 0.004 per 8h = 0.004 per 8h
         result = calculate_funding_edge(
             long_rate=Decimal("0.004"),
             short_rate=Decimal("0.0005"),
@@ -39,31 +136,11 @@ class TestCalculateFundingEdge:
         )
         assert result["edge_pct"] == 0
 
-    def test_1h_short_makes_edge_smaller(self):
-        """Short on 1h exchange: the cost is 8x per 8h, reducing edge."""
-        # Same rate on both, but short pays every 1h
-        result_same = calculate_funding_edge(
-            long_rate=Decimal("0.0001"),
-            short_rate=Decimal("0.0005"),
-            long_interval_hours=8,
-            short_interval_hours=8,
-        )
-        result_diff = calculate_funding_edge(
-            long_rate=Decimal("0.0001"),
-            short_rate=Decimal("0.0005"),
-            long_interval_hours=8,
-            short_interval_hours=1,
-        )
-        # With 1h short interval, the short rate (positive) is multiplied by 8
-        # so we receive 8x more from the short side → edge is much bigger
-        assert result_diff["edge_pct"] > result_same["edge_pct"]
-
     def test_annualized_is_1095x_daily(self):
         result = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
         )
-        # 3 settlements/day × 365 = 1095
         assert result["annualized_pct"] == result["edge_pct"] * 1095
 
     def test_negative_rates(self):
@@ -71,7 +148,6 @@ class TestCalculateFundingEdge:
             long_rate=Decimal("-0.0002"),
             short_rate=Decimal("0.0003"),
         )
-        # short pays us 0.0003, long negative means longs get paid → we receive both
         assert result["edge_pct"] > 0
 
 
@@ -81,7 +157,6 @@ class TestCalculateFees:
             long_taker_fee=Decimal("0.0005"),
             short_taker_fee=Decimal("0.0005"),
         )
-        # (0.0005 + 0.0005) * 2 * 100 = 0.2%
         assert fees == Decimal("0.20")
 
     def test_asymmetric_fees(self):
@@ -89,7 +164,6 @@ class TestCalculateFees:
             long_taker_fee=Decimal("0.0004"),
             short_taker_fee=Decimal("0.0006"),
         )
-        # (0.0004 + 0.0006) * 2 * 100 = 0.2%
         assert fees == Decimal("0.20")
 
     def test_zero_fees(self):

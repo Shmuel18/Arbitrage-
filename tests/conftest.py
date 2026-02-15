@@ -49,7 +49,9 @@ def config():
             delta_threshold_pct=Decimal("5.0"),
         ),
         trading_params=TradingParams(
-            min_net_pct=Decimal("0.5"),
+            min_funding_spread=Decimal("0.05"),
+            min_net_pct=Decimal("0.01"),
+            max_slippage_pct=Decimal("0.10"),
             slippage_buffer_pct=Decimal("0.015"),
             safety_buffer_pct=Decimal("0.02"),
             basis_buffer_pct=Decimal("0.01"),
@@ -150,6 +152,7 @@ def sample_opportunity():
         short_exchange="exchange_b",
         long_funding_rate=Decimal("0.0001"),
         short_funding_rate=Decimal("0.0005"),
+        funding_spread_pct=Decimal("0.06"),
         gross_edge_pct=Decimal("1.2"),
         fees_pct=Decimal("0.2"),
         net_edge_pct=Decimal("0.7"),

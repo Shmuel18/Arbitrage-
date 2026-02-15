@@ -29,7 +29,7 @@ from src.core.contracts import (
     TradeState,
 )
 from src.core.logging import get_logger
-from src.discovery.calculator import calculate_fees, calculate_funding_edge
+from src.discovery.calculator import calculate_fees, calculate_funding_spread
 
 if TYPE_CHECKING:
     from src.core.config import Config
@@ -297,7 +297,7 @@ class ExecutionController:
                 f"Trade opened: {trade_id} {opp.symbol} "
                 f"L={opp.long_exchange}({long_filled_qty}) "
                 f"S={opp.short_exchange}({short_filled_qty}) "
-                f"edge={opp.net_edge_pct:.4f}%{mode_str}",
+                f"spread={opp.funding_spread_pct:.4f}% net={opp.net_edge_pct:.4f}%{mode_str}",
                 extra={
                     "trade_id": trade_id,
                     "symbol": opp.symbol,
@@ -419,11 +419,11 @@ class ExecutionController:
             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
         )
 
-        # Check if still profitable to hold
+        # Check if still profitable to hold (funding spread)
         long_interval = long_funding.get("interval_hours", 8)
         short_interval = short_funding.get("interval_hours", 8)
 
-        edge_info = calculate_funding_edge(
+        spread_info = calculate_funding_spread(
             long_funding["rate"], short_funding["rate"],
             long_interval_hours=long_interval,
             short_interval_hours=short_interval,
@@ -435,7 +435,7 @@ class ExecutionController:
             return
 
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net = edge_info["edge_pct"] - fees_pct
+        net = spread_info["funding_spread_pct"] - fees_pct
 
         if net <= 0 or net < trade.entry_edge_pct * Decimal("0.1"):
             logger.info(

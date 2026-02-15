@@ -75,6 +75,7 @@ class OpportunityCandidate:
     short_exchange: str
     long_funding_rate: Decimal
     short_funding_rate: Decimal
+    funding_spread_pct: Decimal            # PRIMARY signal: (-long_rate + short_rate) in %
     gross_edge_pct: Decimal
     fees_pct: Decimal
     net_edge_pct: Decimal

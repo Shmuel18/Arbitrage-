@@ -11,7 +11,9 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_net_pct: 0.5
+  min_funding_spread: 0.5 # minimum gross funding-rate spread per 8h settlement (%)
+  min_net_pct: 0.01 # minimum net spread after fees (%) — safety floor
+  max_slippage_pct: 0.10 # max price slippage to allow entry (%)
   slippage_buffer_pct: 0.015
   safety_buffer_pct: 0.02
   basis_buffer_pct: 0.01

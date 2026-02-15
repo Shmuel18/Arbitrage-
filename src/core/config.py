@@ -26,7 +26,9 @@ class RiskLimits(BaseSettings):
 
 
 class TradingParams(BaseSettings):
-    min_net_pct: Decimal = Decimal("0.5")
+    min_funding_spread: Decimal = Decimal("0.5")
+    min_net_pct: Decimal = Decimal("0.01")
+    max_slippage_pct: Decimal = Decimal("0.10")
     slippage_buffer_pct: Decimal = Decimal("0.015")
     safety_buffer_pct: Decimal = Decimal("0.02")
     basis_buffer_pct: Decimal = Decimal("0.01")

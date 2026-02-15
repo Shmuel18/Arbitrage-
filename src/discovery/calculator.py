@@ -1,8 +1,61 @@
-"""Funding-rate arithmetic — calculate edges and fees."""
+"""Funding-rate arithmetic — pure funding-spread calculations and fees.
+
+Entry logic is driven ENTIRELY by the funding-rate spread, never by price edge.
+Price differences are only used as a slippage filter.
+"""
 
 from decimal import Decimal
 from typing import Dict, Any
 
+
+# ── Primary entry signal ─────────────────────────────────────────
+
+def calculate_funding_spread(
+    long_rate: Decimal,
+    short_rate: Decimal,
+    long_interval_hours: int = 8,
+    short_interval_hours: int = 8,
+) -> Dict[str, Any]:
+    """
+    Pure funding-rate spread — the PRIMARY entry signal.
+
+    Formula (per the funding-arb strategy):
+        spread = (Long_Funding × −1) + (Short_Funding × +1)
+
+    Mechanics:
+      • Long side PnL  = −funding_rate  (positive rate → we pay, negative → we receive)
+      • Short side PnL  = +funding_rate  (positive rate → we receive, negative → we pay)
+
+    The spread is normalized to an 8-hour settlement period and returned in
+    PERCENT (e.g. 0.05 means 0.05 %).
+
+    You profit when the spread > 0, i.e.:
+      • Long funding is negative  (you receive as long holder), AND/OR
+      • Short funding is positive (you receive as short holder).
+    """
+    # Normalise to 8 h
+    norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
+    norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
+
+    # Per-payment PnL (as raw rate, not percent)
+    long_pnl = -norm_long   # negative rate → income
+    short_pnl = norm_short  # positive rate → income
+
+    # Spread in percent
+    spread_pct = (long_pnl + short_pnl) * Decimal("100")
+    annual_pct = spread_pct * 3 * 365   # 3 settlements/day × 365
+
+    return {
+        "funding_spread_pct": spread_pct,
+        "annualized_pct": annual_pct,
+        "long_pnl_pct": long_pnl * Decimal("100"),
+        "short_pnl_pct": short_pnl * Decimal("100"),
+        "long_rate_norm": norm_long,
+        "short_rate_norm": norm_short,
+    }
+
+
+# ── Backward-compatible alias ────────────────────────────────────
 
 def calculate_funding_edge(
     long_rate: Decimal,
@@ -10,32 +63,20 @@ def calculate_funding_edge(
     long_interval_hours: int = 8,
     short_interval_hours: int = 8,
 ) -> Dict[str, Any]:
-    """
-    Calculate the funding-rate edge in PERCENT (normalized to 8h).
-
-    Funding mechanics:
-      rate > 0 → shorts pay longs
-      rate < 0 → longs pay shorts
-
-    Per-payment PnL:
-      Long side : −rate  (positive rate = we pay, negative = we receive)
-      Short side: +rate  (positive rate = we receive, negative = we pay)
-
-    Returns edge as percentage (e.g. 0.5 = 0.5%). Matches exchange display.
-    """
-    norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
-    norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
-
-    edge = (norm_short - norm_long) * Decimal("100")
-    annual = edge * 3 * 365
-
+    """Alias kept for backward compatibility — delegates to calculate_funding_spread."""
+    result = calculate_funding_spread(
+        long_rate, short_rate, long_interval_hours, short_interval_hours,
+    )
+    # Map new keys → old keys expected by callers
     return {
-        "edge_pct": edge,
-        "annualized_pct": annual,
-        "long_rate_pct": norm_long * Decimal("100"),
-        "short_rate_pct": norm_short * Decimal("100"),
+        "edge_pct": result["funding_spread_pct"],
+        "annualized_pct": result["annualized_pct"],
+        "long_rate_pct": result["long_pnl_pct"] * Decimal("-1"),  # restore original sign
+        "short_rate_pct": result["short_pnl_pct"],
     }
 
+
+# ── Per-payment analysis ─────────────────────────────────────────
 
 def analyze_per_payment_pnl(
     long_rate: Decimal,
@@ -67,6 +108,8 @@ def analyze_per_payment_pnl(
     }
 
 
+# ── Cherry-pick edge ─────────────────────────────────────────────
+
 def calculate_cherry_pick_edge(
     income_rate_per_payment: Decimal,
     n_collections: int,
@@ -74,6 +117,8 @@ def calculate_cherry_pick_edge(
     """Total collectible edge in PERCENT from cherry-pick strategy."""
     return abs(income_rate_per_payment) * n_collections * Decimal("100")
 
+
+# ── Fee calculation ──────────────────────────────────────────────
 
 def calculate_fees(
     long_taker_fee: Decimal,

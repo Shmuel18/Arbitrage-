@@ -63,6 +63,7 @@ export interface Translations {
   fundingL: string;
   fundingS: string;
   netPct: string;
+  fundingSpread: string;
 
   // Analytics
   pnlChart: string;
@@ -143,6 +144,7 @@ const en: Translations = {
   fundingL: 'FUND. L',
   fundingS: 'FUND. S',
   netPct: 'NET %',
+  fundingSpread: 'SPREAD %',
 
   pnlChart: 'PnL Chart (24h)',
   waitingPnl: 'Waiting for PnL data...',
@@ -220,6 +222,7 @@ const he: Translations = {
   fundingL: 'מימון ל׳',
   fundingS: 'מימון ש׳',
   netPct: '% נטו',
+  fundingSpread: '% ספרד',
 
   pnlChart: 'גרף רווח והפסד (24 שעות)',
   waitingPnl: 'ממתין לנתוני רווח והפסד...',
