@@ -427,6 +427,32 @@ class ExecutionController:
                 logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
                             f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
 
+        # ── Display current spread & time until next payment ──────
+        long_interval = long_funding.get("interval_hours", 8)
+        short_interval = short_funding.get("interval_hours", 8)
+        spread_info = calculate_funding_spread(
+            long_funding["rate"], short_funding["rate"],
+            long_interval_hours=long_interval,
+            short_interval_hours=short_interval,
+        )
+        current_spread = spread_info["funding_spread_pct"]
+        
+        long_until = None
+        short_until = None
+        if trade.next_funding_long:
+            long_until = int((trade.next_funding_long - now).total_seconds() / 60)
+        if trade.next_funding_short:
+            short_until = int((trade.next_funding_short - now).total_seconds() / 60)
+        
+        long_str = f"{long_until}min" if long_until is not None else "?"
+        short_str = f"{short_until}min" if short_until is not None else "?"
+        
+        logger.info(
+            f"🔔 {trade.symbol}: Current Spread = {float(current_spread):.4f}% | "
+            f"{trade.long_exchange} in {long_str} | {trade.short_exchange} in {short_str}",
+            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "spread_update"},
+        )
+
         # Wait until BOTH have paid, then wait exit_offset (15 min) after payment
         exit_offset = self._cfg.trading_params.exit_offset_seconds  # 900 = 15 min
         
@@ -453,15 +479,6 @@ class ExecutionController:
         )
 
         # Check if still profitable to hold (funding spread)
-        long_interval = long_funding.get("interval_hours", 8)
-        short_interval = short_funding.get("interval_hours", 8)
-
-        spread_info = calculate_funding_spread(
-            long_funding["rate"], short_funding["rate"],
-            long_interval_hours=long_interval,
-            short_interval_hours=short_interval,
-        )
-
         long_spec = await long_adapter.get_instrument_spec(trade.symbol)
         short_spec = await short_adapter.get_instrument_spec(trade.symbol)
         if not long_spec or not short_spec:
@@ -611,6 +628,11 @@ class ExecutionController:
                 "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
                 "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
                 "status": trade.state.value,
+                "total_pnl": float(total_pnl),
+                "price_pnl": float(price_pnl),
+                "funding_net": float(funding_net),
+                "invested": float(invested),
+                "hold_minutes": float(hold_minutes),
             }
             await self._redis.zadd(
                 "trinity:trades:history",

@@ -29,6 +29,8 @@ export interface Translations {
   longShort: string;
   qtyLS: string;
   entryFunding: string;
+  immediateSpread: string;
+  normalizedSpread: string;
   currentSpread: string;
   fundingLS: string;
   state: string;
@@ -115,6 +117,8 @@ const en: Translations = {
   longShort: 'Long / Short',
   qtyLS: 'Qty (L/S)',
   entryFunding: 'Entry Edge %',
+  immediateSpread: 'Spread (Immed)',
+  normalizedSpread: 'Spread (8h)',
   currentSpread: 'Live Spread %',
   fundingLS: 'Funding L/S',
   state: 'State',
@@ -195,6 +199,8 @@ const he: Translations = {
   longShort: 'לונג / שורט',
   qtyLS: 'כמות (ל/ש)',
   entryFunding: '% תשואה בכניסה',
+  immediateSpread: 'ספרד (מיידי)',
+  normalizedSpread: 'ספרד (8 שעות)',
   currentSpread: '% ספרד נוכחי',
   fundingLS: 'מימון ל/ש',
   state: 'סטטוס',

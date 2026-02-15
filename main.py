@@ -10,8 +10,10 @@ Safety features:
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from src.core.config import init_config
@@ -173,6 +175,7 @@ async def main() -> None:
                         "mode": trade.mode,
                         "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
                         "state": trade.state.value,
+                        "immediate_spread_pct": None,
                         "current_spread_pct": None,
                         "current_long_rate": None,
                         "current_short_rate": None,
@@ -188,6 +191,7 @@ async def main() -> None:
                             long_interval_hours=live_long.get("interval_hours", 8),
                             short_interval_hours=live_short.get("interval_hours", 8),
                         )
+                        pos_entry["immediate_spread_pct"] = str(spread_info["immediate_spread_pct"])
                         pos_entry["current_spread_pct"] = str(spread_info["funding_spread_pct"])
                         pos_entry["current_long_rate"] = str(live_long["rate"])
                         pos_entry["current_short_rate"] = str(live_short["rate"])
@@ -195,6 +199,84 @@ async def main() -> None:
                         logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
                     positions_data.append(pos_entry)
                 await publisher.publish_positions(positions_data)
+
+                # ── Compute & publish running PnL (unrealized + realized) ──
+                unrealized_pnl = 0.0
+                for tid, trade in controller._active_trades.items():
+                    try:
+                        la = mgr.get(trade.long_exchange)
+                        sa = mgr.get(trade.short_exchange)
+                        long_positions = await la.get_positions(trade.symbol)
+                        short_positions = await sa.get_positions(trade.symbol)
+                        for pos in long_positions:
+                            unrealized_pnl += float(pos.unrealized_pnl)
+                        for pos in short_positions:
+                            unrealized_pnl += float(pos.unrealized_pnl)
+                    except Exception:
+                        pass
+
+                # Read realized PnL from closed trades
+                realized_pnl = 0.0
+                try:
+                    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
+                    closed_pnl = await redis._client.zrangebyscore(
+                        "trinity:pnl:timeseries", cutoff, float('inf'), withscores=True
+                    )
+                    if closed_pnl:
+                        for i in range(0, len(closed_pnl), 2):
+                            if i + 1 < len(closed_pnl):
+                                realized_pnl += float(closed_pnl[i])
+                except Exception:
+                    pass
+
+                running_pnl = realized_pnl + unrealized_pnl
+                ts_now = datetime.now(timezone.utc).timestamp()
+
+                # Write running PnL snapshot for chart (every cycle = ~5s)
+                try:
+                    pnl_snapshot = json.dumps({"running": running_pnl, "unrealized": unrealized_pnl, "realized": realized_pnl})
+                    await redis._client.zadd(
+                        "trinity:pnl:running",
+                        {pnl_snapshot: ts_now},
+                    )
+                    # Trim old entries (keep last 24h)
+                    cutoff_trim = ts_now - 86400
+                    await redis._client.zremrangebyscore("trinity:pnl:running", 0, cutoff_trim)
+                except Exception:
+                    pass
+
+                # Publish PnL data for frontend (via Redis key for WebSocket + HTTP)
+                try:
+                    # Build data points from running PnL snapshots
+                    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
+                    running_data = await redis._client.zrangebyscore(
+                        "trinity:pnl:running", cutoff_24h, float('inf'), withscores=True
+                    )
+                    data_points = []
+                    if running_data:
+                        for i in range(0, len(running_data), 2):
+                            if i + 1 < len(running_data):
+                                try:
+                                    point = json.loads(running_data[i])
+                                    data_points.append({
+                                        "pnl": point.get("running", 0),
+                                        "cumulative_pnl": point.get("running", 0),
+                                        "unrealized": point.get("unrealized", 0),
+                                        "realized": point.get("realized", 0),
+                                        "timestamp": float(running_data[i + 1]),
+                                    })
+                                except Exception:
+                                    pass
+                    pnl_payload = {
+                        "data_points": data_points,
+                        "total_pnl": running_pnl,
+                        "unrealized_pnl": unrealized_pnl,
+                        "realized_pnl": realized_pnl,
+                        "count": len(data_points),
+                    }
+                    await redis.set("trinity:pnl:latest", json.dumps(pnl_payload))
+                except Exception as pnl_err:
+                    logger.debug(f"PnL publish error: {pnl_err}")
                 
                 await asyncio.sleep(5)
             except Exception as e:

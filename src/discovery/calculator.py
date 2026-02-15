@@ -33,6 +33,11 @@ def calculate_funding_spread(
       • Long funding is negative  (you receive as long holder), AND/OR
       • Short funding is positive (you receive as short holder).
     """
+    # Immediate spread (no normalization) — the ACTUAL rate difference right now
+    immediate_long_pnl = -long_rate    # negative rate → income
+    immediate_short_pnl = short_rate   # positive rate → income
+    immediate_spread_pct = (immediate_long_pnl + immediate_short_pnl) * Decimal("100")
+
     # Normalise to 8 h
     norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
     norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
@@ -46,6 +51,7 @@ def calculate_funding_spread(
     annual_pct = spread_pct * 3 * 365   # 3 settlements/day × 365
 
     return {
+        "immediate_spread_pct": immediate_spread_pct,
         "funding_spread_pct": spread_pct,
         "annualized_pct": annual_pct,
         "long_pnl_pct": long_pnl * Decimal("100"),

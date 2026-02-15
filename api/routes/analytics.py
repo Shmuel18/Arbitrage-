@@ -59,7 +59,7 @@ async def get_performance(hours: int = Query(24, ge=1, le=168)):
 
 @router.get("/pnl")
 async def get_pnl(hours: int = Query(24, ge=1, le=168)):
-    """Get P&L over time"""
+    """Get P&L over time - reads from closed trades history (persistent across bot restarts)"""
     try:
         if not redis_client:
             return {
@@ -68,41 +68,65 @@ async def get_pnl(hours: int = Query(24, ge=1, le=168)):
                 "count": 0
             }
         
-        pnl_key = "trinity:pnl:timeseries"
         cutoff_time = (datetime.utcnow() - timedelta(hours=hours)).timestamp()
         
-        pnl_data = await redis_client._client.zrangebyscore(
-            pnl_key,
+        # ── Read closed trades from history ──────────────────────────
+        trades_key = "trinity:trades:history"
+        trades_data = await redis_client._client.zrangebyscore(
+            trades_key,
             cutoff_time,
             float('inf'),
             withscores=True
         )
         
-        if not pnl_data:
-            return {
-                "data_points": [],
-                "total_pnl": 0,
-                "count": 0
-            }
-        
-        # Parse and calculate
         data_points = []
-        total_pnl = 0
+        total_pnl = 0.0
+        cumulative = 0.0
         
-        for i in range(0, len(pnl_data), 2):
-            if i + 1 < len(pnl_data):
-                pnl = float(pnl_data[i])
-                timestamp = pnl_data[i + 1]
-                total_pnl += pnl
-                data_points.append({
-                    "pnl": pnl,
-                    "cumulative_pnl": total_pnl,
-                    "timestamp": timestamp
-                })
+        if trades_data:
+            # trades_data = [trade_json, timestamp, trade_json, timestamp, ...]
+            for i in range(0, len(trades_data), 2):
+                if i + 1 < len(trades_data):
+                    try:
+                        trade_json = trades_data[i]
+                        timestamp = float(trades_data[i + 1])
+                        trade = json.loads(trade_json)
+                        
+                        # Extract PnL from trade record
+                        trade_pnl = 0.0
+                        if 'total_pnl' in trade:
+                            trade_pnl = float(trade.get('total_pnl', 0))
+                        elif 'net_profit' in trade:
+                            trade_pnl = float(trade.get('net_profit', 0))
+                        
+                        cumulative += trade_pnl
+                        total_pnl += trade_pnl
+                        
+                        data_points.append({
+                            "pnl": trade_pnl,
+                            "cumulative_pnl": cumulative,
+                            "timestamp": timestamp,
+                            "symbol": trade.get('symbol', '?'),
+                        })
+                    except Exception as parse_err:
+                        pass
+        
+        # ── Add unrealized PnL from running snapshots (if bot is active) ──
+        latest = await redis_client._client.get("trinity:pnl:latest")
+        unrealized_pnl = 0.0
+        if latest:
+            try:
+                pnl_payload = json.loads(latest)
+                unrealized_pnl = float(pnl_payload.get('unrealized_pnl', 0))
+                total_pnl += unrealized_pnl
+            except Exception:
+                pass
         
         return {
             "data_points": data_points,
             "total_pnl": total_pnl,
+            "realized_pnl": total_pnl - unrealized_pnl,
+            "unrealized_pnl": unrealized_pnl,
             "count": len(data_points),
             "period_hours": hours
         }

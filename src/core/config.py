@@ -178,6 +178,7 @@ class Config(BaseSettings):
             "bybit":    ("BYBIT_API_KEY", "BYBIT_API_SECRET", None, "BYBIT_TESTNET"),
             "okx":      ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE", "OKX_TESTNET"),
             "gateio":   ("GATEIO_API_KEY", "GATEIO_API_SECRET", None, "GATEIO_TESTNET"),
+            "kucoin":   ("KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_PASSPHRASE", "KUCOIN_TESTNET"),
         }
         for eid, (key_env, secret_env, pass_env, test_env) in env_map.items():
             if eid not in exchanges:

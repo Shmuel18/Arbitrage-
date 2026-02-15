@@ -40,6 +40,7 @@ exchanges:
     - binance
     - bybit
     - okx
+    - kucoin
 
   binance:
     name: "Binance Futures"
@@ -64,6 +65,16 @@ exchanges:
   okx:
     name: "OKX Futures"
     ccxt_id: "okx"
+    default_type: "swap"
+    rate_limit_ms: 100
+    max_leverage: 20
+    leverage: 5
+    margin_mode: "isolated"
+    position_mode: "oneway"
+
+  kucoin:
+    name: "Kucoin Futures"
+    ccxt_id: "kucoin"
     default_type: "swap"
     rate_limit_ms: 100
     max_leverage: 20

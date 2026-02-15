@@ -179,6 +179,7 @@ async def broadcast_updates():
                 opportunities_data = await redis_client._client.get("trinity:opportunities")
                 summary_data = await redis_client._client.get("trinity:summary")
                 logs_data = await redis_client._client.lrange("trinity:logs", 0, 19)
+                pnl_data = await redis_client._client.get("trinity:pnl:latest")
                 
                 update = {
                     "type": "full_update",
@@ -188,6 +189,7 @@ async def broadcast_updates():
                         "balances": json.loads(balances_data) if balances_data else None,
                         "opportunities": json.loads(opportunities_data) if opportunities_data else None,
                         "summary": json.loads(summary_data) if summary_data else None,
+                        "pnl": json.loads(pnl_data) if pnl_data else None,
                         "logs": [json.loads(l) for l in logs_data] if logs_data else [],
                     },
                     "timestamp": datetime.utcnow().isoformat()
