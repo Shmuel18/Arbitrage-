@@ -24,7 +24,13 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
   const count = opportunities?.count ?? 0;
 
   const formatFunding = (rate: number) => {
+    // Raw rates are decimals (e.g. 0.003 = 0.3%), multiply by 100
     const pct = Math.abs(rate) <= 1 ? rate * 100 : rate;
+    return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
+  };
+
+  const formatSpread = (pct: number) => {
+    // funding_spread_pct is already in % (e.g. 0.46 = 0.46%)
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
@@ -70,7 +76,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                     {formatFunding(opp.short_rate)}
                   </td>
                   <td className="text-end mono font-semibold" style={getRateStyle(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}>
-                    {formatFunding(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}
+                    {formatSpread(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}
                   </td>
                 </tr>
               ))}
