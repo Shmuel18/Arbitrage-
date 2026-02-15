@@ -34,10 +34,40 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
+  const MIN_SPREAD_THRESHOLD = 0.5; // must match backend min_funding_spread
+
   const getRateStyle = (rate: number): React.CSSProperties => {
     if (rate > 0) return { color: 'var(--green)' };
     if (rate < 0) return { color: 'var(--red)' };
     return { color: 'var(--text-muted)' };
+  };
+
+  const aboveThreshold = opps.filter(o => (o.funding_spread_pct ?? 0) >= MIN_SPREAD_THRESHOLD);
+  const belowThreshold = opps.filter(o => (o.funding_spread_pct ?? 0) < MIN_SPREAD_THRESHOLD);
+
+  const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
+    const spread = opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate);
+    const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
+    return (
+      <tr key={i} style={rowStyle}>
+        <td>
+          {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
+          {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
+          <span className="font-semibold text-accent">{opp.symbol}</span>
+        </td>
+        <td>{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
+        <td>{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
+        <td className="text-end mono" style={getRateStyle(opp.long_rate)}>
+          {formatFunding(opp.long_rate)}
+        </td>
+        <td className="text-end mono" style={getRateStyle(opp.short_rate)}>
+          {formatFunding(opp.short_rate)}
+        </td>
+        <td className="text-end mono font-semibold" style={getRateStyle(spread)}>
+          {formatSpread(spread)}
+        </td>
+      </tr>
+    );
   };
 
   return (
@@ -64,22 +94,15 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
               </tr>
             </thead>
             <tbody>
-              {opps.map((opp, i) => (
-                <tr key={i}>
-                  <td className="font-semibold text-accent">{opp.symbol}</td>
-                  <td>{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
-                  <td>{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
-                  <td className="text-end mono" style={getRateStyle(opp.long_rate)}>
-                    {formatFunding(opp.long_rate)}
-                  </td>
-                  <td className="text-end mono" style={getRateStyle(opp.short_rate)}>
-                    {formatFunding(opp.short_rate)}
-                  </td>
-                  <td className="text-end mono font-semibold" style={getRateStyle(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}>
-                    {formatSpread(opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate))}
+              {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
+              {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
+                <tr>
+                  <td colSpan={6} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                    ── {t.belowThreshold} ──
                   </td>
                 </tr>
-              ))}
+              )}
+              {belowThreshold.map((opp, i) => renderRow(opp, i + aboveThreshold.length, true))}
             </tbody>
           </table>
         )}
