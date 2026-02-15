@@ -41,6 +41,11 @@ export const emergencyStop = async () => {
   return response.data;
 };
 
+export const updateConfig = async (key: string, value: any) => {
+  const response = await api.post('/controls/config', { key, value });
+  return response.data;
+};
+
 export const getExchanges = async () => {
   const response = await api.get('/controls/exchanges');
   return response.data;

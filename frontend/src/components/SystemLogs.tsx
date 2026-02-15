@@ -34,13 +34,13 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
   const winRate = summary?.win_rate ? (summary.win_rate * 100).toFixed(1) : '0.0';
 
   return (
-    <div className="flex flex-col h-full bg-slate-950/80">
-      <div className="text-cyan-400 text-xs font-mono uppercase px-4 py-2 border-b border-cyan-500/30 flex justify-between">
-        <div>System Logs Output</div>
+    <div className="flex flex-col h-full panel panel-strong">
+      <div className="panel-header text-xs px-4 py-2 border-b border-cyan-500/30 flex justify-between">
+        <div>System Logs (Live)</div>
         <div className="text-gray-500">Total Trades: {tradeCount} | Win Rate: {winRate}%</div>
       </div>
 
-      <div ref={containerRef} className="flex-1 overflow-auto px-4 py-2 font-mono text-xs">
+      <div ref={containerRef} className="flex-1 overflow-auto px-4 py-2 mono text-xs scrollbar-thin">
         {logs.length === 0 ? (
           <div className="text-gray-600">Waiting for logs...</div>
         ) : (

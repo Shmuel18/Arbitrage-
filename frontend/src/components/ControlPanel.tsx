@@ -1,69 +1,88 @@
 import React, { useState } from 'react';
-import { sendBotCommand } from '../services/api';
+import { sendBotCommand, updateConfig, emergencyStop } from '../services/api';
 
 const ControlPanel: React.FC = () => {
-  const [loading, setLoading] = useState(false);
+  const [maxConcurrent, setMaxConcurrent] = useState(3);
+  const [strategy, setStrategy] = useState<'hold' | 'cherry_pick'>('hold');
+  const [status, setStatus] = useState('');
 
-  const handleCommand = async (action: string) => {
+  const applyMaxConcurrent = async () => {
     try {
-      setLoading(true);
-      await sendBotCommand(action);
-      alert(`Command '${action}' sent successfully!`);
-    } catch (error) {
-      console.error('Error sending command:', error);
-      alert(`Failed to send command '${action}'`);
-    } finally {
-      setLoading(false);
+      await updateConfig('execution.concurrent_opportunities', maxConcurrent);
+      setStatus('Updated max concurrent trades');
+    } catch (e) {
+      setStatus('Failed to update settings');
     }
   };
 
+  const toggleStrategy = async () => {
+    const next = strategy === 'hold' ? 'cherry_pick' : 'hold';
+    setStrategy(next);
+    try {
+      await updateConfig('trading_params.strategy_mode', next);
+      setStatus(`Strategy set to ${next}`);
+    } catch (e) {
+      setStatus('Failed to update strategy');
+    }
+  };
+
+  const startBot = async () => {
+    await sendBotCommand('start');
+    setStatus('Start command sent');
+  };
+
+  const stopBot = async () => {
+    await sendBotCommand('stop');
+    setStatus('Stop command sent');
+  };
+
+  const panicStop = async () => {
+    await emergencyStop();
+    setStatus('Emergency stop sent');
+  };
+
   return (
-    <div className="card">
-      <h3 className="text-xl font-bold mb-4">Bot Controls</h3>
-      
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <button
-          onClick={() => handleCommand('start')}
-          disabled={loading}
-          className="px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors"
-        >
-          ▶️ Start
+    <div className="panel panel-strong p-4">
+      <div className="panel-header text-xs mb-3">Control Panel</div>
+
+      <div className="flex gap-2 mb-3">
+        <button onClick={startBot} className="flex-1 px-3 py-2 bg-green-500/15 text-green-300 border border-green-500/30 rounded mono">
+          Start Bot
         </button>
-        
-        <button
-          onClick={() => handleCommand('pause')}
-          disabled={loading}
-          className="px-4 py-3 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors"
-        >
-          ⏸️ Pause
-        </button>
-        
-        <button
-          onClick={() => handleCommand('resume')}
-          disabled={loading}
-          className="px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors"
-        >
-          ⏯️ Resume
-        </button>
-        
-        <button
-          onClick={() => handleCommand('stop')}
-          disabled={loading}
-          className="px-4 py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 text-white font-semibold rounded-lg transition-colors"
-        >
-          ⏹️ Stop
+        <button onClick={stopBot} className="flex-1 px-3 py-2 bg-red-500/15 text-red-300 border border-red-500/30 rounded mono">
+          Stop Bot
         </button>
       </div>
 
-      <div className="mt-6 p-4 bg-slate-700/50 rounded-lg">
-        <h4 className="font-semibold mb-2">⚠️ Important Notes:</h4>
-        <ul className="text-sm text-slate-300 space-y-1">
-          <li>• <strong>Start:</strong> Begin trading operations</li>
-          <li>• <strong>Pause:</strong> Temporarily halt new positions (keep existing ones)</li>
-          <li>• <strong>Resume:</strong> Continue trading after pause</li>
-          <li>• <strong>Stop:</strong> Stop bot and close all positions</li>
-        </ul>
+      <button onClick={panicStop} className="w-full px-3 py-2 mb-3 bg-red-600/25 text-red-200 border border-red-500/40 rounded mono">
+        Emergency Stop
+      </button>
+
+      <div className="border-t border-slate-800/60 pt-3 mt-3">
+        <div className="text-xs text-gray-400 mb-2 mono">Strategy Toggle</div>
+        <button onClick={toggleStrategy} className="w-full px-3 py-2 bg-cyan-500/10 text-cyan-200 border border-cyan-500/30 rounded mono">
+          Mode: {strategy.toUpperCase()}
+        </button>
       </div>
+
+      <div className="border-t border-slate-800/60 pt-3 mt-3">
+        <div className="text-xs text-gray-400 mb-2 mono">Max Concurrent Trades</div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min={1}
+            max={10}
+            value={maxConcurrent}
+            onChange={(e) => setMaxConcurrent(Number(e.target.value))}
+            className="flex-1 bg-slate-950 border border-cyan-500/30 rounded px-2 py-1 text-sm text-gray-200 mono"
+          />
+          <button onClick={applyMaxConcurrent} className="px-3 py-1 bg-cyan-500/20 text-cyan-200 border border-cyan-500/30 rounded mono">
+            Apply
+          </button>
+        </div>
+      </div>
+
+      {status && <div className="text-xs text-gray-400 mt-3">{status}</div>}
     </div>
   );
 };

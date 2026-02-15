@@ -133,7 +133,12 @@ async def main() -> None:
                     if adapter:
                         try:
                             bal = await adapter.get_balance()
-                            balances[eid] = float(bal.get("free", 0))
+                            total_val = bal.get("total")
+                            if isinstance(total_val, dict):
+                                total_val = total_val.get("USDT")
+                            if total_val is None:
+                                total_val = bal.get("free", 0)
+                            balances[eid] = float(total_val or 0)
                         except Exception:
                             balances[eid] = 0.0
                 
@@ -151,6 +156,8 @@ async def main() -> None:
                         "long_qty": str(trade.long_qty),
                         "short_qty": str(trade.short_qty),
                         "entry_edge_bps": str(trade.entry_edge_bps),
+                        "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
+                        "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
                         "mode": trade.mode,
                         "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
                         "state": trade.state.value,

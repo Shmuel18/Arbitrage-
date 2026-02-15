@@ -1,6 +1,6 @@
 import React from 'react';
 import { BotStatus } from '../types';
-import { sendBotCommand, emergencyStop } from '../services/api';
+import { emergencyStop } from '../services/api';
 
 interface HeaderProps {
   botStatus: BotStatus;
@@ -20,44 +20,42 @@ const Header: React.FC<HeaderProps> = ({ botStatus }) => {
   };
 
   return (
-    <header className="bg-slate-800 border-b border-slate-700 shadow-lg">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4">
-            <h1 className="text-3xl font-bold gradient-bg bg-clip-text text-transparent">
-              Trinity Bot
-            </h1>
-            <div className={`px-3 py-1 rounded-full text-sm font-semibold ${
-              botStatus.bot_running 
-                ? 'bg-green-500/20 text-green-400 border border-green-500/50' 
-                : 'bg-red-500/20 text-red-400 border border-red-500/50'
+    <header className="panel panel-strong border-b border-cyan-500/20">
+      <div className="px-4 md:px-6 py-4 relative z-10">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-4">
+            <div className="text-3xl font-bold text-cyan-300 tracking-wide">
+              TRINITY
+              <span className="text-sm text-cyan-500 ml-2 mono">ARBITRAGE ENGINE</span>
+            </div>
+            <div className={`px-3 py-1 rounded-full text-xs mono border ${
+              botStatus.bot_running
+                ? 'bg-green-500/10 text-green-300 border-green-500/40'
+                : 'bg-red-500/10 text-red-300 border-red-500/40'
             }`}>
-              {botStatus.bot_running ? '🟢 Running' : '🔴 Stopped'}
+              {botStatus.bot_running ? 'RUNNING' : 'STOPPED'}
+              <span className="status-dot" />
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
-            <div className="text-sm">
-              <span className="text-slate-400">Exchanges:</span>
-              <span className="ml-2 font-semibold text-white">
-                {botStatus.connected_exchanges.length > 0 
-                  ? botStatus.connected_exchanges.join(', ') 
-                  : 'None'}
+          <div className="flex flex-wrap items-center gap-3 text-xs mono">
+            <div className="text-gray-400">
+              EXCHANGES:
+              <span className="text-cyan-200 ml-2">
+                {botStatus.connected_exchanges.length > 0
+                  ? botStatus.connected_exchanges.join(', ')
+                  : 'NONE'}
               </span>
             </div>
-
-            <div className="text-sm">
-              <span className="text-slate-400">Positions:</span>
-              <span className="ml-2 font-semibold text-white">
-                {botStatus.active_positions}
-              </span>
+            <div className="text-gray-400">
+              POSITIONS:
+              <span className="text-cyan-200 ml-2">{botStatus.active_positions}</span>
             </div>
-
             <button
               onClick={handleEmergencyStop}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-colors"
+              className="px-3 py-2 bg-red-600/30 text-red-200 border border-red-500/40 rounded mono"
             >
-              🚨 EMERGENCY STOP
+              EMERGENCY STOP
             </button>
           </div>
         </div>

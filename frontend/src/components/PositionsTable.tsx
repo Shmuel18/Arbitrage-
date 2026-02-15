@@ -1,128 +1,76 @@
-import React, { useState, useEffect } from 'react';
-import { getPositions, closePosition } from '../services/api';
-import { Position } from '../types';
+import React from 'react';
 
-const PositionsTable: React.FC = () => {
-  const [positions, setPositions] = useState<Position[]>([]);
-  const [loading, setLoading] = useState(true);
+interface PositionRow {
+  id: string;
+  symbol: string;
+  long_exchange: string;
+  short_exchange: string;
+  long_qty: string;
+  short_qty: string;
+  entry_edge_bps: string;
+  long_funding_rate?: string | null;
+  short_funding_rate?: string | null;
+  state: string;
+}
 
-  useEffect(() => {
-    fetchPositions();
-    const interval = setInterval(fetchPositions, 3000);
-    return () => clearInterval(interval);
-  }, []);
+interface PositionsTableProps {
+  positions: PositionRow[];
+}
 
-  const fetchPositions = async () => {
-    try {
-      const data = await getPositions();
-      setPositions(data.positions || []);
-      setLoading(false);
-    } catch (error) {
-      console.error('Error fetching positions:', error);
-      setLoading(false);
-    }
+const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
+  const formatFunding = (rate?: string | null) => {
+    if (!rate) return '--';
+    const n = Number(rate);
+    if (Number.isNaN(n)) return '--';
+    const pct = Math.abs(n) <= 1 ? n * 100 : n;
+    return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
-
-  const handleClosePosition = async (positionId: string) => {
-    if (window.confirm('Are you sure you want to close this position?')) {
-      try {
-        await closePosition(positionId);
-        alert('Close command sent!');
-        fetchPositions();
-      } catch (error) {
-        console.error('Error closing position:', error);
-        alert('Failed to close position');
-      }
-    }
-  };
-
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-    }).format(value);
-  };
-
-  const formatPercentage = (value: number) => {
-    return `${(value * 100).toFixed(2)}%`;
-  };
-
-  if (loading) {
-    return (
-      <div className="card text-center py-8">
-        <div className="text-slate-400">Loading positions...</div>
-      </div>
-    );
-  }
-
-  if (positions.length === 0) {
-    return (
-      <div className="card text-center py-8">
-        <div className="text-slate-400">No active positions</div>
-      </div>
-    );
-  }
 
   return (
-    <div className="card overflow-x-auto">
-      <table className="w-full">
-        <thead>
-          <tr className="border-b border-slate-700">
-            <th className="text-left py-3 px-4 text-slate-400 font-semibold">Symbol</th>
-            <th className="text-left py-3 px-4 text-slate-400 font-semibold">Exchanges</th>
-            <th className="text-right py-3 px-4 text-slate-400 font-semibold">Size</th>
-            <th className="text-right py-3 px-4 text-slate-400 font-semibold">Entry Price</th>
-            <th className="text-right py-3 px-4 text-slate-400 font-semibold">Current Price</th>
-            <th className="text-right py-3 px-4 text-slate-400 font-semibold">P&L</th>
-            <th className="text-right py-3 px-4 text-slate-400 font-semibold">Funding</th>
-            <th className="text-center py-3 px-4 text-slate-400 font-semibold">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {positions.map((position) => (
-            <tr key={position.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-              <td className="py-3 px-4 font-semibold">{position.symbol}</td>
-              <td className="py-3 px-4">
-                <div className="text-sm">
-                  <div className="text-green-400">↗ {position.exchanges.long}</div>
-                  <div className="text-red-400">↘ {position.exchanges.short}</div>
-                </div>
-              </td>
-              <td className="py-3 px-4 text-right">{position.size}</td>
-              <td className="py-3 px-4 text-right">
-                <div className="text-sm">
-                  <div>{formatCurrency(position.entry_price.long)}</div>
-                  <div>{formatCurrency(position.entry_price.short)}</div>
-                </div>
-              </td>
-              <td className="py-3 px-4 text-right">
-                <div className="text-sm">
-                  <div>{formatCurrency(position.current_price.long)}</div>
-                  <div>{formatCurrency(position.current_price.short)}</div>
-                </div>
-              </td>
-              <td className={`py-3 px-4 text-right font-bold ${
-                position.pnl >= 0 ? 'success-text' : 'danger-text'
-              }`}>
-                <div>{formatCurrency(position.pnl)}</div>
-                <div className="text-sm">{formatPercentage(position.pnl_percentage)}</div>
-              </td>
-              <td className="py-3 px-4 text-right text-sm">
-                {formatPercentage(position.funding_rate)}
-              </td>
-              <td className="py-3 px-4 text-center">
-                <button
-                  onClick={() => handleClosePosition(position.id)}
-                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
-                >
-                  Close
-                </button>
-              </td>
+    <div className="panel panel-strong">
+      <div className="panel-header text-xs px-4 py-3 border-b border-cyan-500/20">
+        Active Positions
+      </div>
+      <div className="overflow-auto scrollbar-thin">
+        <table className="neon-table w-full text-xs mono">
+          <thead className="sticky top-0 bg-slate-900/80">
+            <tr className="border-b border-cyan-500/10 text-gray-500">
+              <th className="text-left py-2 px-3">Symbol</th>
+              <th className="text-left py-2 px-3">Long / Short</th>
+              <th className="text-right py-2 px-3">Qty (L/S)</th>
+              <th className="text-right py-2 px-3">Entry Edge</th>
+              <th className="text-right py-2 px-3">Funding L/S</th>
+              <th className="text-right py-2 px-3">State</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {positions.length === 0 ? (
+              <tr>
+                <td colSpan={6} className="text-center text-gray-500 py-6">No open positions</td>
+              </tr>
+            ) : (
+              positions.map((p) => (
+                <tr key={p.id} className="border-b border-slate-800/40 hover:bg-slate-800/30">
+                  <td className="py-2 px-3 text-cyan-300">{p.symbol}</td>
+                  <td className="py-2 px-3 text-gray-300">
+                    {p.long_exchange?.toUpperCase()} / {p.short_exchange?.toUpperCase()}
+                  </td>
+                  <td className="py-2 px-3 text-right text-gray-300">
+                    {p.long_qty} / {p.short_qty}
+                  </td>
+                  <td className="py-2 px-3 text-right text-gray-300">
+                    {Number(p.entry_edge_bps || 0).toFixed(2)} bps
+                  </td>
+                  <td className="py-2 px-3 text-right text-gray-300">
+                    {formatFunding(p.long_funding_rate)} / {formatFunding(p.short_funding_rate)}
+                  </td>
+                  <td className="py-2 px-3 text-right text-gray-400">{p.state}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };

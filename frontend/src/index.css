@@ -2,20 +2,136 @@
 @tailwind components;
 @tailwind utilities;
 
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+
+:root {
+  --bg-0: #06090f;
+  --bg-1: #0a111c;
+  --bg-2: #0b1522;
+  --cyan: #3ce6ff;
+  --cyan-dim: rgba(60, 230, 255, 0.25);
+  --green: #22f6a5;
+  --purple: #a855f7;
+  --line: rgba(84, 233, 255, 0.18);
+  --panel: rgba(10, 16, 26, 0.72);
+  --panel-strong: rgba(8, 14, 24, 0.9);
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Rajdhani', system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background: var(--bg-0);
+  color: #d6e6ff;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+  font-family: 'Share Tech Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.neon-bg {
+  background:
+    radial-gradient(800px 400px at 15% -10%, rgba(60, 230, 255, 0.12), transparent 60%),
+    radial-gradient(800px 400px at 80% 0%, rgba(168, 85, 247, 0.15), transparent 60%),
+    linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  position: relative;
+}
+
+.neon-bg::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(transparent 31px, rgba(60, 230, 255, 0.05) 32px),
+    linear-gradient(90deg, transparent 31px, rgba(60, 230, 255, 0.05) 32px);
+  background-size: 32px 32px;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 0 22px rgba(0, 180, 255, 0.08), inset 0 0 12px rgba(15, 28, 46, 0.8);
+  backdrop-filter: blur(14px);
+}
+
+.panel-strong {
+  background: var(--panel-strong);
+}
+
+.panel-header {
+  font-family: 'Share Tech Mono', ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--cyan);
+}
+
+.neon-card {
+  background: linear-gradient(135deg, rgba(7, 12, 20, 0.9), rgba(10, 18, 30, 0.8));
+  border: 1px solid var(--cyan-dim);
+  border-radius: 12px;
+  box-shadow: inset 0 0 18px rgba(20, 35, 55, 0.8), 0 0 18px rgba(60, 230, 255, 0.1);
+}
+
+.neon-card--green {
+  border-color: rgba(34, 246, 165, 0.4);
+  box-shadow: inset 0 0 16px rgba(20, 40, 35, 0.8), 0 0 18px rgba(34, 246, 165, 0.12);
+}
+
+.neon-card--purple {
+  border-color: rgba(168, 85, 247, 0.35);
+  box-shadow: inset 0 0 16px rgba(30, 20, 40, 0.8), 0 0 18px rgba(168, 85, 247, 0.15);
+}
+
+.mono {
+  font-family: 'Share Tech Mono', ui-monospace, monospace;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-left: 8px;
+  box-shadow: 0 0 12px currentColor;
+}
+
+.neon-table thead th {
+  color: #8fb1d4;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.neon-table tbody tr {
+  transition: background 0.2s ease;
+}
+
+.neon-table tbody tr:hover {
+  background: rgba(30, 50, 72, 0.35);
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(60, 230, 255, 0.25);
+  border-radius: 10px;
+}
+
+@media (max-width: 768px) {
+  .panel {
+    border-radius: 12px;
+  }
+  .neon-table th,
+  .neon-table td {
+    padding: 6px 8px;
+  }
 }
 
 .gradient-bg {

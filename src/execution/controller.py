@@ -232,6 +232,8 @@ class ExecutionController:
                 long_qty=long_filled_qty,
                 short_qty=short_filled_qty,
                 entry_edge_bps=opp.net_edge_bps,
+                long_funding_rate=opp.long_funding_rate,
+                short_funding_rate=opp.short_funding_rate,
                 opened_at=datetime.now(timezone.utc),
                 mode=opp.mode,
                 exit_before=opp.exit_before,
@@ -523,6 +525,8 @@ class ExecutionController:
             "long_qty": str(trade.long_qty),
             "short_qty": str(trade.short_qty),
             "entry_edge_bps": str(trade.entry_edge_bps),
+            "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
+            "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
             "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
         })
 
@@ -543,6 +547,8 @@ class ExecutionController:
                 long_qty=Decimal(data["long_qty"]),
                 short_qty=Decimal(data["short_qty"]),
                 entry_edge_bps=Decimal(data.get("entry_edge_bps", "0")),
+                long_funding_rate=Decimal(data["long_funding_rate"]) if data.get("long_funding_rate") else None,
+                short_funding_rate=Decimal(data["short_funding_rate"]) if data.get("short_funding_rate") else None,
                 opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else None,
             )
             self._active_trades[trade_id] = trade

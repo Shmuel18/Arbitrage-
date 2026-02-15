@@ -98,6 +98,8 @@ class TradeRecord:
     long_qty: Decimal
     short_qty: Decimal
     entry_edge_bps: Decimal
+    long_funding_rate: Optional[Decimal] = None
+    short_funding_rate: Optional[Decimal] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     mode: str = "hold"                     # "hold" or "cherry_pick"

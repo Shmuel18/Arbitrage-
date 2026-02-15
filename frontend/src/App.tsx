@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import Dashboard from './components/Dashboard';
 import { BotStatus } from './types';
 import { connectWebSocket, disconnectWebSocket } from './services/websocket';
-import { getOpportunities, getBalances, getLogs, getSummary } from './services/api';
+import { getOpportunities, getBalances, getLogs, getSummary, getPositions, getPnL } from './services/api';
 import './App.css';
 
 export interface FullData {
@@ -10,6 +10,7 @@ export interface FullData {
   balances: { balances: Record<string, number>; total: number } | null;
   opportunities: { opportunities: any[]; count: number } | null;
   summary: { total_pnl: number; total_trades: number; win_rate: number; active_positions: number; uptime_hours: number } | null;
+  pnl: { data_points: any[]; total_pnl: number } | null;
   logs: { timestamp: string; message: string; level: string }[];
   positions: any[];
 }
@@ -20,18 +21,21 @@ function App() {
     balances: null,
     opportunities: null,
     summary: null,
+    pnl: null,
     logs: [],
     positions: [],
   });
 
   const fetchAll = useCallback(async () => {
     try {
-      const [statusRes, balRes, oppRes, logsRes, summRes] = await Promise.allSettled([
+      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes] = await Promise.allSettled([
         fetch('http://localhost:8000/api/status').then(r => r.json()),
         getBalances(),
         getOpportunities(),
         getLogs(50),
         getSummary(),
+        getPositions(),
+        getPnL(24),
       ]);
       setData(prev => ({
         ...prev,
@@ -40,6 +44,8 @@ function App() {
         opportunities: oppRes.status === 'fulfilled' ? oppRes.value : prev.opportunities,
         logs: logsRes.status === 'fulfilled' ? (logsRes.value.logs || []) : prev.logs,
         summary: summRes.status === 'fulfilled' ? summRes.value : prev.summary,
+        positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
+        pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
       }));
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -55,6 +61,7 @@ function App() {
           balances: d.balances || prev.balances,
           opportunities: d.opportunities || prev.opportunities,
           summary: d.summary || prev.summary,
+          pnl: d.pnl || prev.pnl,
           logs: d.logs || prev.logs,
           positions: d.positions || prev.positions,
         }));
