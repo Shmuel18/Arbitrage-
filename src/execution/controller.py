@@ -209,16 +209,24 @@ class ExecutionController:
             short_bal = await short_adapter.get_balance()
             
             position_pct = float(self._cfg.risk_limits.position_size_pct)  # 0.70
-            leverage = self._cfg.exchanges.get(opp.long_exchange)
-            lev = leverage.leverage if leverage and leverage.leverage else 5
+            # Use the SAME leverage for all exchanges (from config)
+            long_exc_cfg = self._cfg.exchanges.get(opp.long_exchange)
+            short_exc_cfg = self._cfg.exchanges.get(opp.short_exchange)
+            lev = int(long_exc_cfg.leverage if long_exc_cfg and long_exc_cfg.leverage else 5)
+            lev_short = int(short_exc_cfg.leverage if short_exc_cfg and short_exc_cfg.leverage else 5)
+            if lev != lev_short:
+                logger.warning(f"Leverage mismatch: {opp.long_exchange}={lev}x vs {opp.short_exchange}={lev_short}x — using min")
+                lev = min(lev, lev_short)
             
             # Use 70% of the SMALLEST balance with leverage
-            min_balance = min(float(long_bal["free"]), float(short_bal["free"]))
+            long_free = float(long_bal["free"])
+            short_free = float(short_bal["free"])
+            min_balance = min(long_free, short_free)
             notional = Decimal(str(min_balance * position_pct * lev))
             
             logger.info(
-                f"{opp.symbol}: Sizing — min_bal=${min_balance:.2f}, "
-                f"{int(position_pct*100)}% × {lev}x = ${float(notional):.2f} notional"
+                f"{opp.symbol}: Sizing — L={opp.long_exchange}=${long_free:.2f} S={opp.short_exchange}=${short_free:.2f} "
+                f"min_bal=${min_balance:.2f} × {int(position_pct*100)}% × {lev}x = ${float(notional):.2f} notional"
             )
             
             if notional <= 0:
@@ -226,19 +234,25 @@ class ExecutionController:
                 return
 
             # Harmonise quantity to the coarser lot step so both legs match
+            # lot_size is in NATIVE exchange units (contracts) — convert to BASE currency (tokens)
             long_spec = await long_adapter.get_instrument_spec(opp.symbol)
             short_spec = await short_adapter.get_instrument_spec(opp.symbol)
-            lot = max(
-                float(long_spec.lot_size) if long_spec else 0.001,
-                float(short_spec.lot_size) if short_spec else 0.001,
-            )
+            long_cs = float(long_spec.contract_size) if long_spec and long_spec.contract_size else 1.0
+            short_cs = float(short_spec.contract_size) if short_spec and short_spec.contract_size else 1.0
+            long_lot_base = (float(long_spec.lot_size) * long_cs) if long_spec else 0.001
+            short_lot_base = (float(short_spec.lot_size) * short_cs) if short_spec else 0.001
+            lot = max(long_lot_base, short_lot_base)    # coarsest step in base currency
             qty_float = float(notional / opp.reference_price)
             steps = int(qty_float / lot)               # floor to whole lot steps
             qty_rounded = round(steps * lot, 8)         # kill float noise
             qty_rounded = max(qty_rounded, lot)
-            order_qty = Decimal(str(qty_rounded))
+            order_qty = Decimal(str(qty_rounded))       # always in base currency (tokens)
             
-            logger.debug(f"{opp.symbol}: raw_qty={opp.suggested_qty}, lot={lot}, order_qty={order_qty}")
+            logger.info(
+                f"{opp.symbol}: Qty — notional=${float(notional):.2f} / ${float(opp.reference_price):.4f} = {qty_float:.4f} tokens, "
+                f"lot_base={lot} (L:{long_lot_base}/S:{short_lot_base}), "
+                f"L_cs={long_cs} S_cs={short_cs}, order_qty={order_qty}"
+            )
 
             # Open both legs
             
@@ -470,9 +484,15 @@ class ExecutionController:
                 trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
             if short_next:
                 trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
+            # How long have we been holding?
+            hold_min = 0
+            if trade.opened_at:
+                hold_min = int((now - trade.opened_at).total_seconds() / 60)
             logger.info(
-                f"Trade {trade.trade_id}: Holding — net={net:.4f}%. "
-                f"Next: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
+                f"Trade {trade.trade_id}: ✅ HOLDING — still profitable! "
+                f"net={net:.4f}% (entry was {trade.entry_edge_pct:.4f}%) | "
+                f"holding for {hold_min}min | "
+                f"Next payment: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
                 f"{trade.short_exchange}={trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}"
             )
 
@@ -508,9 +528,69 @@ class ExecutionController:
                 trade.funding_received_total = received
             await self._redis.delete_trade_state(trade.trade_id)
             del self._active_trades[trade.trade_id]
-            logger.info(f"Trade closed: {trade.trade_id}", extra={
-                "trade_id": trade.trade_id, "action": "trade_closed",
-            })
+
+            # ── Detailed trade summary ────────────────────────
+            entry_notional_long = (trade.entry_price_long or Decimal("0")) * trade.long_qty
+            entry_notional_short = (trade.entry_price_short or Decimal("0")) * trade.short_qty
+            exit_notional_long = (trade.exit_price_long or Decimal("0")) * trade.long_qty
+            exit_notional_short = (trade.exit_price_short or Decimal("0")) * trade.short_qty
+            # Long PnL: exit - entry (bought low, sold high)
+            long_pnl = exit_notional_long - entry_notional_long
+            # Short PnL: entry - exit (sold high, bought low)
+            short_pnl = entry_notional_short - exit_notional_short
+            price_pnl = long_pnl + short_pnl
+            funding_income = trade.funding_received_total or Decimal("0")
+            funding_cost = trade.funding_paid_total or Decimal("0")
+            funding_net = funding_income - funding_cost
+            total_pnl = price_pnl + funding_net - total_fees
+            invested = max(entry_notional_long, entry_notional_short)
+            hold_minutes = Decimal("0")
+            if trade.opened_at and trade.closed_at:
+                hold_minutes = Decimal(str((trade.closed_at - trade.opened_at).total_seconds() / 60))
+
+            logger.info(
+                f"\n{'='*60}\n"
+                f"  📊 TRADE SUMMARY — {trade.trade_id}\n"
+                f"  Symbol:     {trade.symbol}\n"
+                f"  Mode:       {trade.mode}\n"
+                f"  Duration:   {float(hold_minutes):.0f} min\n"
+                f"  Long:       {trade.long_exchange} qty={trade.long_qty} "
+                f"entry=${float(trade.entry_price_long or 0):.4f} exit=${float(trade.exit_price_long or 0):.4f}\n"
+                f"  Short:      {trade.short_exchange} qty={trade.short_qty} "
+                f"entry=${float(trade.entry_price_short or 0):.4f} exit=${float(trade.exit_price_short or 0):.4f}\n"
+                f"  Invested:   ${float(invested):.2f} (notional per leg)\n"
+                f"  Price PnL:  ${float(price_pnl):.4f}\n"
+                f"  Funding:    +${float(funding_income):.4f} -${float(funding_cost):.4f} = ${float(funding_net):.4f}\n"
+                f"  Fees:       ${float(total_fees):.4f}\n"
+                f"  ────────────────────────────────\n"
+                f"  NET PROFIT: ${float(total_pnl):.4f}\n"
+                f"{'='*60}",
+                extra={
+                    "trade_id": trade.trade_id,
+                    "action": "trade_closed",
+                    "data": {
+                        "symbol": trade.symbol,
+                        "invested": float(invested),
+                        "price_pnl": float(price_pnl),
+                        "funding_net": float(funding_net),
+                        "fees": float(total_fees),
+                        "net_profit": float(total_pnl),
+                        "hold_minutes": float(hold_minutes),
+                    }
+                },
+            )
+
+            # ── Publish PnL data point to Redis for frontend chart ──
+            try:
+                import json as _json
+                pnl_value = float(total_pnl)
+                ts = datetime.utcnow().timestamp()
+                await self._redis._client.zadd(
+                    "trinity:pnl:timeseries",
+                    {str(pnl_value): ts},
+                )
+            except Exception as pnl_err:
+                logger.debug(f"Failed to publish PnL data: {pnl_err}")
 
             trade_data = {
                 "id": trade.trade_id,

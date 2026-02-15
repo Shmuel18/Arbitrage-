@@ -11,6 +11,9 @@ interface PositionRow {
   entry_edge_pct: string;
   long_funding_rate?: string | null;
   short_funding_rate?: string | null;
+  current_spread_pct?: string | null;
+  current_long_rate?: string | null;
+  current_short_rate?: string | null;
   state: string;
 }
 
@@ -48,6 +51,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
               <th>{t.longShort}</th>
               <th className="text-end">{t.qtyLS}</th>
               <th className="text-end">{t.entryFunding}</th>
+              <th className="text-end">{t.currentSpread}</th>
               <th className="text-end">{t.fundingLS}</th>
               <th className="text-end">{t.state}</th>
             </tr>
@@ -55,19 +59,33 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           <tbody>
             {positions.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center text-secondary py-8">{t.noOpenPositions}</td>
+                <td colSpan={7} className="text-center text-secondary py-8">{t.noOpenPositions}</td>
               </tr>
             ) : (
-              positions.map((p) => (
-                <tr key={p.id}>
-                  <td className="font-semibold text-accent">{p.symbol}</td>
-                  <td>{p.long_exchange?.toUpperCase()} / {p.short_exchange?.toUpperCase()}</td>
-                  <td className="text-end mono">{p.long_qty} / {p.short_qty}</td>
-                  <td className="text-end mono">{formatEdgePct(p.entry_edge_pct)}</td>
-                  <td className="text-end mono">{formatFunding(p.long_funding_rate)} / {formatFunding(p.short_funding_rate)}</td>
-                  <td className="text-end text-secondary">{p.state}</td>
-                </tr>
-              ))
+              positions.map((p) => {
+                const entryVal = Number(p.entry_edge_pct || 0);
+                const currentVal = Number(p.current_spread_pct || 0);
+                const spreadDiff = currentVal - entryVal;
+                const spreadColor = !p.current_spread_pct ? 'text-secondary'
+                  : spreadDiff > 0 ? 'text-green-400'
+                  : spreadDiff < -0.1 ? 'text-red-400'
+                  : 'text-yellow-400';
+                const arrow = !p.current_spread_pct ? ''
+                  : spreadDiff > 0 ? ' ▲' : spreadDiff < 0 ? ' ▼' : ' =';
+                return (
+                  <tr key={p.id}>
+                    <td className="font-semibold text-accent">{p.symbol}</td>
+                    <td>{p.long_exchange?.toUpperCase()} / {p.short_exchange?.toUpperCase()}</td>
+                    <td className="text-end mono">{p.long_qty} / {p.short_qty}</td>
+                    <td className="text-end mono">{formatEdgePct(p.entry_edge_pct)}</td>
+                    <td className={`text-end mono font-semibold ${spreadColor}`}>
+                      {p.current_spread_pct ? `${formatEdgePct(p.current_spread_pct)}${arrow}` : '--'}
+                    </td>
+                    <td className="text-end mono">{formatFunding(p.current_long_rate || p.long_funding_rate)} / {formatFunding(p.current_short_rate || p.short_funding_rate)}</td>
+                    <td className="text-end text-secondary">{p.state}</td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

@@ -29,6 +29,7 @@ export interface Translations {
   longShort: string;
   qtyLS: string;
   entryFunding: string;
+  currentSpread: string;
   fundingLS: string;
   state: string;
   noOpenPositions: string;
@@ -114,6 +115,7 @@ const en: Translations = {
   longShort: 'Long / Short',
   qtyLS: 'Qty (L/S)',
   entryFunding: 'Entry Edge %',
+  currentSpread: 'Live Spread %',
   fundingLS: 'Funding L/S',
   state: 'State',
   noOpenPositions: 'No open positions',
@@ -193,6 +195,7 @@ const he: Translations = {
   longShort: 'לונג / שורט',
   qtyLS: 'כמות (ל/ש)',
   entryFunding: '% תשואה בכניסה',
+  currentSpread: '% ספרד נוכחי',
   fundingLS: 'מימון ל/ש',
   state: 'סטטוס',
   noOpenPositions: 'אין פוזיציות פתוחות כרגע',

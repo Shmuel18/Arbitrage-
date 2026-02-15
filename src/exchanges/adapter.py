@@ -98,27 +98,50 @@ class ExchangeAdapter:
         margin = self._cfg.get("margin_mode", "cross")
         pos_mode = self._cfg.get("position_mode", "oneway")
 
+        ok_keywords = ("No need to change", "leverage not modified", "already",
+                       "not modified", "no changes", "same")
+        # 1) Set margin mode FIRST — OKX requires this before leverage
+        try:
+            if hasattr(ex, "set_margin_mode"):
+                mode_params = {"lever": str(lev)} if self.exchange_id == "okx" else {}
+                await ex.set_margin_mode(margin, symbol, mode_params)
+                logger.info(f"{self.exchange_id} {symbol}: margin mode → {margin}",
+                            extra={"exchange": self.exchange_id, "symbol": symbol})
+        except Exception as e:
+            msg = str(e).lower()
+            if not any(kw.lower() in msg for kw in ok_keywords):
+                logger.warning(f"Margin mode issue on {self.exchange_id} {symbol}: {e}",
+                               extra={"exchange": self.exchange_id, "symbol": symbol})
+
+        # 2) Set leverage — include mgnMode param for OKX
         try:
             if hasattr(ex, "set_leverage"):
-                params = {"mgnMode": margin} if self.exchange_id == "okx" else {}
-                await ex.set_leverage(lev, symbol, params)
-            if hasattr(ex, "set_margin_mode"):
-                params = {"lever": lev} if self.exchange_id == "okx" else {}
-                await ex.set_margin_mode(margin, symbol, params)
+                lev_params = {"mgnMode": margin} if self.exchange_id == "okx" else {}
+                await ex.set_leverage(lev, symbol, lev_params)
+                logger.info(f"{self.exchange_id} {symbol}: leverage → {lev}x",
+                            extra={"exchange": self.exchange_id, "symbol": symbol})
+        except Exception as e:
+            msg = str(e).lower()
+            if not any(kw.lower() in msg for kw in ok_keywords):
+                logger.warning(f"Leverage issue on {self.exchange_id} {symbol}: {e}",
+                               extra={"exchange": self.exchange_id, "symbol": symbol})
+
+        # 3) Position mode
+        try:
             if hasattr(ex, "set_position_mode"):
                 hedged = (pos_mode == "hedged")
                 await ex.set_position_mode(hedged, symbol)
-            logger.info(
-                f"Applied settings on {self.exchange_id} {symbol}: lev={lev} margin={margin} pos={pos_mode}",
-                extra={"exchange": self.exchange_id, "symbol": symbol, "action": "settings_applied"},
-            )
-            self._settings_applied.add(symbol)
         except Exception as e:
-            # Many exchanges reject duplicate calls — that's fine.
-            msg = str(e)
-            if "No need to change" not in msg and "leverage not modified" not in msg:
-                logger.warning(f"Trading settings issue on {self.exchange_id}: {e}",
+            msg = str(e).lower()
+            if not any(kw.lower() in msg for kw in ok_keywords):
+                logger.warning(f"Position mode issue on {self.exchange_id} {symbol}: {e}",
                                extra={"exchange": self.exchange_id, "symbol": symbol})
+
+        logger.info(
+            f"Applied settings on {self.exchange_id} {symbol}: lev={lev} margin={margin} pos={pos_mode}",
+            extra={"exchange": self.exchange_id, "symbol": symbol, "action": "settings_applied"},
+        )
+        self._settings_applied.add(symbol)
 
     # ── Market data ──────────────────────────────────────────────
 
@@ -203,19 +226,25 @@ class ExchangeAdapter:
             if abs(amt) < 1e-12:
                 continue
 
+            # Convert from contracts to base currency (tokens)
+            sym = p["symbol"]
+            mkt = self._exchange.market(sym) if sym in self._exchange.markets else None
+            contract_sz = float(mkt.get("contractSize", 1) or 1) if mkt else 1.0
+            amt_base = amt * contract_sz
+
             side_raw = (p.get("side") or "").lower()
             if side_raw in ("long", "buy"):
                 side = OrderSide.BUY
             elif side_raw in ("short", "sell"):
                 side = OrderSide.SELL
             else:
-                side = OrderSide.BUY if amt > 0 else OrderSide.SELL
+                side = OrderSide.BUY if amt_base > 0 else OrderSide.SELL
 
             positions.append(Position(
                 exchange=self.exchange_id,
-                symbol=p["symbol"],
+                symbol=sym,
                 side=side,
-                quantity=Decimal(str(abs(amt))),
+                quantity=Decimal(str(abs(amt_base))),
                 entry_price=Decimal(str(p.get("entryPrice", 0) or 0)),
                 unrealized_pnl=Decimal(str(p.get("unrealizedPnl", 0) or 0)),
                 leverage=int(p.get("leverage", 1) or 1),
@@ -246,24 +275,40 @@ class ExchangeAdapter:
                 else:
                     params["posSide"] = "long" if req.side == OrderSide.BUY else "short"
 
-        # Normalize quantity
+        # Normalize quantity — req.quantity is always in BASE CURRENCY (tokens)
         spec = await self.get_instrument_spec(req.symbol)
-        quantity = float(req.quantity)
+        base_qty = float(req.quantity)
+        contract_size = float(spec.contract_size) if spec and spec.contract_size else 1.0
+
+        # Convert from base currency (tokens) to exchange-native units (contracts)
+        # For Bybit/Binance contractSize=1 → no change. For OKX it can be != 1.
+        native_qty = base_qty / contract_size if contract_size > 0 else base_qty
+
+        # Round to exchange's native lot step (precision.amount — in contracts)
         if spec and float(spec.lot_size) > 0:
             lot = float(spec.lot_size)
-            quantity = round(quantity / lot) * lot
-            quantity = max(quantity, lot)
+            native_qty = round(native_qty / lot) * lot
+            native_qty = max(native_qty, lot)
 
         order = await self._exchange.create_order(
             symbol=req.symbol,
             type="market",
             side=req.side.value,
-            amount=quantity,
+            amount=native_qty,
             params=params,
         )
 
+        # Convert filled amount BACK to base currency (tokens) for the caller
+        filled_native = float(order.get("filled", 0) or 0)
+        filled_base = filled_native * contract_size
+        order["filled"] = filled_base
+        # Also store the base-currency qty we requested (for logging)
+        order["_base_qty_requested"] = base_qty
+        order["_contract_size"] = contract_size
+
         logger.info(
-            f"Order placed on {self.exchange_id}: {req.side.value} {quantity} {req.symbol}",
+            f"Order placed on {self.exchange_id}: {req.side.value} "
+            f"{native_qty} contracts (={filled_base:.6f} base) {req.symbol}",
             extra={
                 "exchange": self.exchange_id,
                 "symbol": req.symbol,
@@ -271,9 +316,11 @@ class ExchangeAdapter:
                 "data": {
                     "order_id": order.get("id"),
                     "side": req.side.value,
-                    "qty": quantity,
+                    "native_qty": native_qty,
+                    "base_qty": filled_base,
+                    "contract_size": contract_size,
                     "reduce_only": req.reduce_only,
-                    "filled": order.get("filled"),
+                    "filled_native": filled_native,
                     "avg_price": order.get("average"),
                 },
             },

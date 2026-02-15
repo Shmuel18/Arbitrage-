@@ -156,10 +156,11 @@ async def main() -> None:
                 await publisher.publish_balances(balances)
                 await publisher.publish_summary(balances, active_count)
                 
-                # Publish active positions details
+                # Publish active positions details (with live spread)
+                from src.discovery.calculator import calculate_funding_spread
                 positions_data = []
                 for tid, trade in controller._active_trades.items():
-                    positions_data.append({
+                    pos_entry = {
                         "id": trade.trade_id,
                         "symbol": trade.symbol,
                         "long_exchange": trade.long_exchange,
@@ -172,7 +173,27 @@ async def main() -> None:
                         "mode": trade.mode,
                         "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
                         "state": trade.state.value,
-                    })
+                        "current_spread_pct": None,
+                        "current_long_rate": None,
+                        "current_short_rate": None,
+                    }
+                    # Fetch live funding rates to compute current spread
+                    try:
+                        long_ad = mgr.get(trade.long_exchange)
+                        short_ad = mgr.get(trade.short_exchange)
+                        live_long = await long_ad.get_funding_rate(trade.symbol)
+                        live_short = await short_ad.get_funding_rate(trade.symbol)
+                        spread_info = calculate_funding_spread(
+                            live_long["rate"], live_short["rate"],
+                            long_interval_hours=live_long.get("interval_hours", 8),
+                            short_interval_hours=live_short.get("interval_hours", 8),
+                        )
+                        pos_entry["current_spread_pct"] = str(spread_info["funding_spread_pct"])
+                        pos_entry["current_long_rate"] = str(live_long["rate"])
+                        pos_entry["current_short_rate"] = str(live_short["rate"])
+                    except Exception as fr_err:
+                        logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
+                    positions_data.append(pos_entry)
                 await publisher.publish_positions(positions_data)
                 
                 await asyncio.sleep(5)
