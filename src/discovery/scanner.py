@@ -441,11 +441,10 @@ class Scanner:
         
         closest_ms = None
         if primary_next and primary_next > now_ms:
+            closest_ms = primary_next  # always store for display
             minutes_until = (primary_next - now_ms) / 60_000
             if minutes_until > max_window:
                 qualified = False
-            else:
-                closest_ms = primary_next
         elif primary_next and primary_next <= now_ms:
             # Timestamp is in the past (stale data) — disqualify
             qualified = False
