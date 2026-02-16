@@ -21,6 +21,8 @@ trading_params:
   cooldown_after_orphan_hours: 2
   entry_offset_seconds: 900
   exit_offset_seconds: 900
+  max_entry_window_minutes: 60 # Only scan opportunities with funding < 60 min away
+  quick_cycle: true # Exit after first funding payment (zero dead time)
   top_opportunities_display: 5
   execute_only_best_opportunity: true
 

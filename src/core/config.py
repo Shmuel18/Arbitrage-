@@ -36,6 +36,8 @@ class TradingParams(BaseSettings):
     cooldown_after_orphan_hours: int = 2
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
+    max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes
+    quick_cycle: bool = True             # Exit after first funding payment (zero dead time)
     top_opportunities_display: int = 5
     execute_only_best_opportunity: bool = True
 

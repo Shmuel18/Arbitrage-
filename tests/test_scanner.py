@@ -86,7 +86,11 @@ class TestScanAll:
         adapter_b.get_funding_rate.return_value = funding_data_b
 
         results = await scanner.scan_all()
-        assert len(results) == 0
+        # Below threshold: returned as display-only (qualified=False)
+        qualified = [r for r in results if r.qualified]
+        assert len(qualified) == 0
+        for r in results:
+            assert r.qualified is False
 
     @pytest.mark.asyncio
     async def test_no_opportunity_when_rates_equal(self, scanner, mock_exchange_mgr):

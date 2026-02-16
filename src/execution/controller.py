@@ -570,6 +570,22 @@ class ExecutionController:
         )
 
         # Check if still profitable to hold (funding spread)
+        quick_cycle = getattr(self._cfg.trading_params, 'quick_cycle', False)
+        
+        if quick_cycle:
+            # Zero-Dead-Time: always exit after first funding payment
+            # This frees capital for the next best opportunity
+            hold_min = 0
+            if trade.opened_at:
+                hold_min = int((now - trade.opened_at).total_seconds() / 60)
+            logger.info(
+                f"🔄 Trade {trade.trade_id}: QUICK CYCLE — exiting after funding payment "
+                f"(held {hold_min}min, spread was {float(current_spread):.4f}%) — freeing capital for re-scan",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "quick_cycle_exit"},
+            )
+            await self._close_trade(trade)
+            return
+
         long_spec = await long_adapter.get_instrument_spec(trade.symbol)
         short_spec = await short_adapter.get_instrument_spec(trade.symbol)
         if not long_spec or not short_spec:

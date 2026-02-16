@@ -69,7 +69,7 @@ export interface Translations {
   fundingSpread: string;
   immediateSpreadOpp: string;
   hourlyRate: string;
-  interval: string;
+  countdown: string;
   belowThreshold: string;
 
   // Analytics
@@ -157,7 +157,7 @@ const en: Translations = {
   fundingSpread: 'SPREAD %',
   immediateSpreadOpp: 'IMMED %',
   hourlyRate: '/HOUR %',
-  interval: 'INT',
+  countdown: 'PAYOUT',
   belowThreshold: 'Below threshold (0.5%)',
 
   pnlChart: 'PnL Chart (24h)',
@@ -242,7 +242,7 @@ const he: Translations = {
   fundingSpread: '% ספרד',
   immediateSpreadOpp: '% מיידי',
   hourlyRate: '% לשעה',
-  interval: 'אינט',
+  countdown: 'פעימה',
   belowThreshold: 'מתחת לסף (0.5%)',
 
   pnlChart: 'גרף רווח והפסד (24 שעות)',

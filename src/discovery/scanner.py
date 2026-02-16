@@ -78,11 +78,21 @@ class Scanner:
             try:
                 opps = await self.scan_all()
                 
-                # Sort by funding_spread_pct and display top 5 opportunities
-                if opps:
-                    opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
-                    top_5 = opps[:5]
+                # Split qualified (tradeable) and display-only
+                qualified_opps = [o for o in opps if o.qualified]
+                all_opps = list(opps)  # includes both qualified and display-only
 
+                # Sort all by hourly return for display
+                all_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
+                qualified_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
+
+                # Display top 5: qualified first, then fill with display-only
+                display_qualified = [o for o in all_opps if o.qualified][:5]
+                remaining_slots = 5 - len(display_qualified)
+                display_unqualified = [o for o in all_opps if not o.qualified][:remaining_slots] if remaining_slots > 0 else []
+                display_top = display_qualified + display_unqualified
+
+                if display_top:
                     now_ts = time.time()
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
@@ -90,12 +100,13 @@ class Scanner:
                             "📊 TOP 5 OPPORTUNITIES (by Hourly Return)",
                             extra={"action": "top_opportunities"},
                         )
-                        for idx, opp in enumerate(top_5, 1):
+                        for idx, opp in enumerate(display_top, 1):
                             immediate_spread = (
                                 (-opp.long_funding_rate) + opp.short_funding_rate
                             ) * Decimal("100")
+                            q_mark = "✅" if opp.qualified else "○ "
                             logger.info(
-                                f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
+                                f"  {idx}. {q_mark} {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
                                 f"L={opp.long_funding_rate:.6f} S={opp.short_funding_rate:.6f} | "
                                 f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}% | "
                                 f"/h: {opp.hourly_rate_pct:.4f}% ({opp.min_interval_hours}h)",
@@ -116,7 +127,7 @@ class Scanner:
                                 "Top 5 opportunities updated (5 min interval)",
                             )
                     
-                    # Publish opportunities to Redis for frontend
+                    # Publish ALL display opportunities to Redis for frontend
                     if self._publisher:
                         opp_data = [
                             {
@@ -129,22 +140,24 @@ class Scanner:
                                 "immediate_spread_pct": float(o.immediate_spread_pct),
                                 "hourly_rate_pct": float(o.hourly_rate_pct),
                                 "min_interval_hours": o.min_interval_hours,
+                                "next_funding_ms": o.next_funding_ms,
                                 "long_rate": float(o.long_funding_rate),
                                 "short_rate": float(o.short_funding_rate),
                                 "price": float(o.reference_price),
                                 "mode": o.mode,
+                                "qualified": o.qualified,
                             }
-                            for o in top_5
+                            for o in display_top
                         ]
                         await self._publisher.publish_opportunities(opp_data)
                         if now_ts - self._last_top_log_ts < 1:
                             await self._publisher.publish_log(
                                 "INFO",
-                                f"Top 5 updated: {opps[0].symbol} best spread={opps[0].funding_spread_pct:.4f}%"
+                                f"Top 5 updated: {len(qualified_opps)} qualified, {len(all_opps) - len(qualified_opps)} display-only"
                             )
                     
-                    # Try top opportunities — controller filters blacklisted/duplicate/capped
-                    for opp in top_5:
+                    # Try ONLY qualified opportunities — controller handles further filtering
+                    for opp in qualified_opps[:5]:
                         await callback(opp)
                 else:
                     if self._publisher:
@@ -287,6 +300,7 @@ class Scanner:
         interval_b = funding[eid_b].get("interval_hours", 8)
 
         # Try both directions, pick the one with the higher funding spread
+        # Prefer qualified over unqualified
         best = None
         for long_eid, short_eid in [(eid_a, eid_b), (eid_b, eid_a)]:
             long_rate = funding[long_eid]["rate"]
@@ -300,8 +314,14 @@ class Scanner:
                 long_interval, short_interval,
                 funding, adapters,
             )
-            if opp and (best is None or opp.funding_spread_pct > best.funding_spread_pct):
+            if opp is None:
+                continue
+            if best is None:
                 best = opp
+            elif opp.qualified and not best.qualified:
+                best = opp  # prefer qualified
+            elif opp.qualified == best.qualified and opp.funding_spread_pct > best.funding_spread_pct:
+                best = opp  # same qualification level, pick better spread
 
         return best
 
@@ -368,134 +388,151 @@ class Scanner:
             f"Basis={tp.basis_buffer_pct:.4f}%"
         )
 
-        # ── Immediate spread gate: reject if next payment spread < threshold ──
+        # ── Qualification tracking (soft gates for display) ──────
+        qualified = True
+
+        # ── Immediate spread gate ────────────────────────────────
         min_imm = getattr(tp, 'min_immediate_spread', tp.min_funding_spread)
         if immediate_spread < min_imm:
-            logger.debug(
-                f"[{symbol}] Rejected: immediate_spread={immediate_spread:.4f}% < "
-                f"min_immediate={min_imm:.4f}%"
-            )
-            return None
+            qualified = False
+
+        # ── 60-minute entry window ───────────────────────────────
+        max_window = getattr(tp, 'max_entry_window_minutes', 60)
+        now_ms = time.time() * 1000
+        long_next = funding[long_eid].get("next_timestamp")
+        short_next = funding[short_eid].get("next_timestamp")
+        closest_ms = None
+        if long_next and long_next > now_ms:
+            closest_ms = long_next
+        if short_next and short_next > now_ms:
+            if closest_ms is None or short_next < closest_ms:
+                closest_ms = short_next
+        if closest_ms is not None:
+            minutes_until = (closest_ms - now_ms) / 60_000
+            if minutes_until > max_window:
+                qualified = False
+        else:
+            closest_ms = None  # no timestamp available — allow
+
+        # ── Determine mode & net ─────────────────────────────────
+        mode = "hold"
+        net_pct = funding_spread - total_cost_pct
+        gross_pct = funding_spread
+        exit_before = None
+        n_collections = 0
 
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
-            # Gate: funding spread must pass threshold
             if funding_spread < tp.min_funding_spread:
-                logger.debug(
-                    f"[{symbol}] Rejected (HOLD): spread={funding_spread:.4f}% < "
-                    f"min_threshold={tp.min_funding_spread:.4f}%"
-                )
-                return None
-
-            net_pct = funding_spread - total_cost_pct
+                qualified = False
             if net_pct < tp.min_net_pct:
-                logger.debug(
-                    f"[{symbol}] Rejected (HOLD): net={net_pct:.4f}% < "
-                    f"min_net={tp.min_net_pct:.4f}% (spread={funding_spread:.4f}%, fees={total_cost_pct:.4f}%)"
-                )
-                return None
-
-            opp = await self._build_opportunity(
-                symbol, long_eid, short_eid,
-                long_rate, short_rate,
-                funding_spread, fees_pct, net_pct,
-                adapters, mode="hold",
-                long_interval_hours=long_interval,
-                short_interval_hours=short_interval,
-            )
-            logger.info(
-                f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
-                f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
-                f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
-                f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
-            )
-            return opp
-
-        else:
-            # ── One side income, one side cost ───────────────────
-            # First check: is a plain HOLD still net-positive?
-            if funding_spread >= tp.min_funding_spread and funding_spread - total_cost_pct >= tp.min_net_pct:
-                net_pct = funding_spread - total_cost_pct
-                opp = await self._build_opportunity(
-                    symbol, long_eid, short_eid,
-                    long_rate, short_rate,
-                    funding_spread, fees_pct, net_pct,
-                    adapters, mode="hold",
-                    long_interval_hours=long_interval,
-                    short_interval_hours=short_interval,
-                )
+                qualified = False
+            if qualified:
                 logger.info(
-                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
+                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
                     f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
                     f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
                     f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
                 )
-                return opp
+        else:
+            # ── One side income, one side cost ───────────────────
+            if funding_spread >= tp.min_funding_spread and net_pct >= tp.min_net_pct:
+                # Plain HOLD is net-positive
+                if qualified:
+                    logger.info(
+                        f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
+                        f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
+                        f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
+                        f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
+                    )
+            elif qualified:
+                # Try CHERRY_PICK only if still potentially qualified
+                cherry_ok = False
+                if pnl["long_is_income"]:
+                    income_pnl = pnl["long_pnl_per_payment"]
+                    income_interval = long_interval
+                    cost_eid = short_eid
+                else:
+                    income_pnl = pnl["short_pnl_per_payment"]
+                    income_interval = short_interval
+                    cost_eid = long_eid
 
-            # ── CHERRY_PICK: income arrives faster than cost ─────
-            # Example: short on Bybit (1h) receives, long on Binance (8h) pays
-            #   → collect 7 income payments before the 1 cost payment
-            if pnl["long_is_income"]:
-                income_pnl = pnl["long_pnl_per_payment"]
-                income_interval = long_interval
-                cost_eid = short_eid
+                cost_next_ts = funding[cost_eid].get("next_timestamp")
+                if cost_next_ts:
+                    cp_now_ms = time.time() * 1000
+                    ms_until_cost = cost_next_ts - cp_now_ms
+                    minutes_until_cost = ms_until_cost / 60_000
+
+                    if minutes_until_cost >= _MIN_WINDOW_MINUTES:
+                        hours_until_cost = ms_until_cost / 3_600_000
+                        cp_n = int(hours_until_cost / income_interval)
+                        if cp_n >= 1:
+                            cp_gross = calculate_cherry_pick_edge(income_pnl, cp_n)
+                            cp_net = cp_gross - total_cost_pct
+                            if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
+                                cherry_ok = True
+                                mode = "cherry_pick"
+                                gross_pct = cp_gross
+                                net_pct = cp_net
+                                n_collections = cp_n
+                                exit_before = datetime.fromtimestamp(
+                                    (cost_next_ts - 120_000) / 1000, tz=timezone.utc
+                                )
+                                logger.info(
+                                    f"🍒 Cherry-pick {symbol}: collect {cp_n}× every {income_interval}h "
+                                    f"(gross={cp_gross:.4f}%, net={cp_net:.4f}%) — "
+                                    f"exit before {exit_before.strftime('%H:%M UTC')}",
+                                    extra={"action": "cherry_pick_found", "symbol": symbol},
+                                )
+                if not cherry_ok:
+                    qualified = False
             else:
-                income_pnl = pnl["short_pnl_per_payment"]
-                income_interval = short_interval
-                cost_eid = long_eid
+                # Already unqualified from earlier gates, keep HOLD estimate
+                qualified = False
 
-            # How long until the COST side charges us?
-            cost_next_ts = funding[cost_eid].get("next_timestamp")
-            if not cost_next_ts:
-                return None
+        # ── Skip truly uninteresting candidates (no positive spread) ──
+        if not qualified and immediate_spread <= Decimal("0"):
+            return None
 
-            now_ms = time.time() * 1000
-            ms_until_cost = cost_next_ts - now_ms
-            minutes_until_cost = ms_until_cost / 60_000
-
-            if minutes_until_cost < _MIN_WINDOW_MINUTES:
-                return None  # Too close to cost payment
-
-            # How many income payments can we collect before cost?
-            hours_until_cost = ms_until_cost / 3_600_000
-            n_collections = int(hours_until_cost / income_interval)
-            if n_collections < 1:
-                return None
-
-            # Total cherry-pick edge = sum of all income collections
-            gross_pct = calculate_cherry_pick_edge(income_pnl, n_collections)
-
-            # Gate: cherry-pick total must beat min_funding_spread
-            if gross_pct < tp.min_funding_spread:
-                return None
-
-            net_pct = gross_pct - total_cost_pct
-            if net_pct < tp.min_net_pct:
-                return None
-
-            # Exit 2 minutes before cost payment for safety
-            exit_before = datetime.fromtimestamp(
-                (cost_next_ts - 120_000) / 1000, tz=timezone.utc
-            )
-
-            logger.info(
-                f"🍒 Cherry-pick {symbol}: collect {n_collections}× every {income_interval}h "
-                f"(gross={gross_pct:.4f}%, net={net_pct:.4f}%) — "
-                f"exit before {exit_before.strftime('%H:%M UTC')}",
-                extra={"action": "cherry_pick_found", "symbol": symbol},
-            )
-
+        # ── Build opportunity ────────────────────────────────────
+        if qualified:
             opp = await self._build_opportunity(
                 symbol, long_eid, short_eid,
                 long_rate, short_rate,
                 gross_pct, fees_pct, net_pct,
-                adapters, mode="cherry_pick",
-                exit_before=exit_before,
-                n_collections=n_collections,
+                adapters, mode=mode,
                 long_interval_hours=long_interval,
                 short_interval_hours=short_interval,
+                next_funding_ms=closest_ms,
+                exit_before=exit_before,
+                n_collections=n_collections,
             )
             return opp
+        else:
+            # Lightweight display-only candidate (no API calls for balance/ticker)
+            min_interval = min(long_interval, short_interval)
+            hourly_rate = net_pct / Decimal(str(min_interval)) if min_interval > 0 else net_pct
+            return OpportunityCandidate(
+                symbol=symbol,
+                long_exchange=long_eid,
+                short_exchange=short_eid,
+                long_funding_rate=long_rate,
+                short_funding_rate=short_rate,
+                funding_spread_pct=funding_spread,
+                immediate_spread_pct=immediate_spread,
+                gross_edge_pct=gross_pct,
+                fees_pct=fees_pct,
+                net_edge_pct=net_pct,
+                suggested_qty=Decimal("0"),
+                reference_price=Decimal("0"),
+                min_interval_hours=min_interval,
+                hourly_rate_pct=hourly_rate,
+                next_funding_ms=closest_ms,
+                qualified=False,
+                mode=mode,
+                exit_before=exit_before,
+                n_collections=n_collections,
+            )
 
     async def _build_opportunity(
         self,
@@ -509,6 +546,7 @@ class Scanner:
         n_collections: int = 0,
         long_interval_hours: int = 8,
         short_interval_hours: int = 8,
+        next_funding_ms: Optional[float] = None,
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
         long_bal = await adapters[long_eid].get_balance()
@@ -555,6 +593,7 @@ class Scanner:
             reference_price=price,
             min_interval_hours=min_interval,
             hourly_rate_pct=hourly_rate,
+            next_funding_ms=next_funding_ms,
             mode=mode,
             exit_before=exit_before,
             n_collections=n_collections,

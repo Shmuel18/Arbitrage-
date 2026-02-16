@@ -86,6 +86,10 @@ class OpportunityCandidate:
     # Ranking: return per hour (net_edge / min_interval)
     min_interval_hours: int = 8            # fastest funding interval in this pair
     hourly_rate_pct: Decimal = Decimal("0") # net_edge_pct / min_interval_hours
+    # Closest funding payout timestamp (ms since epoch)
+    next_funding_ms: Optional[float] = None
+    # Qualification flag (False = display-only, doesn't pass all trading gates)
+    qualified: bool = True
     # Cherry-pick fields
     mode: str = "hold"                    # "hold" or "cherry_pick"
     exit_before: Optional[datetime] = None # when to exit (before costly payment)
