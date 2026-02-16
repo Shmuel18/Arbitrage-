@@ -1,11 +1,14 @@
 """Tests for execution controller — the critical safety path."""
 
+import json
+import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.contracts import OrderSide, TradeState
+from src.core.contracts import OrderSide, TradeRecord, TradeState
 from src.execution.controller import ExecutionController
 
 
@@ -114,3 +117,285 @@ class TestRecovery:
 
         assert "abc123" in ctrl._active_trades
         assert ctrl._active_trades["abc123"].state == TradeState.OPEN
+
+
+# ── Helper: build a TradeRecord already in the controller ────────
+
+def _make_trade(controller, symbol="BTC/USDT", spread_pct="1.0",
+                long_ex="exchange_a", short_ex="exchange_b",
+                funding_paid=True, opened_minutes_ago=30):
+    """Insert a trade directly into the controller and return it."""
+    now = datetime.now(timezone.utc)
+    trade = TradeRecord(
+        trade_id="test-trade-1",
+        symbol=symbol,
+        state=TradeState.OPEN,
+        long_exchange=long_ex,
+        short_exchange=short_ex,
+        long_qty=Decimal("0.01"),
+        short_qty=Decimal("0.01"),
+        entry_edge_pct=Decimal(spread_pct),
+        opened_at=now - timedelta(minutes=opened_minutes_ago),
+        mode="hold",
+    )
+    if funding_paid:
+        # Set next_funding to the past so funding is considered paid
+        trade.next_funding_long = now - timedelta(minutes=20)
+        trade.next_funding_short = now - timedelta(minutes=20)
+    else:
+        trade.next_funding_long = now + timedelta(minutes=30)
+        trade.next_funding_short = now + timedelta(minutes=30)
+    controller._active_trades[trade.trade_id] = trade
+    return trade
+
+
+class TestHoldOrExit:
+    """Tests for the Hold-or-Exit feature after funding collection."""
+
+    @pytest.mark.asyncio
+    async def test_holds_when_spread_above_threshold(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """If spread >= hold_min_spread after payment, should HOLD."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.exit_offset_seconds = 0  # instant for testing
+
+        # Set exchange funding rates to produce a high spread (0.6%)
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            past_ms = (time.time() - 1200) * 1000  # 20 min ago
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0030"),  # negative = we receive
+                    "next_timestamp": past_ms,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0030"),  # positive = we receive on short
+                    "next_timestamp": past_ms,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="1.0")
+
+        await controller._check_exit(trade)
+
+        # Trade should still be open (held)
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+
+    @pytest.mark.asyncio
+    async def test_exits_when_spread_below_threshold(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """If spread < hold_min_spread after payment, should EXIT."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.exit_offset_seconds = 0
+
+        # Set exchange funding rates to produce a LOW spread (< 0.5%)
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            past_ms = (time.time() - 1200) * 1000
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0001"),  # tiny
+                    "next_timestamp": past_ms,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0001"),  # tiny
+                    "next_timestamp": past_ms,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="1.0")
+
+        await controller._check_exit(trade)
+
+        # Trade should have been closed
+        assert trade.trade_id not in controller._active_trades
+
+
+class TestUpgrade:
+    """Tests for the Upgrade feature — switch to a better opportunity."""
+
+    @pytest.mark.asyncio
+    async def test_upgrades_when_better_opp_found(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Close trade when a much better qualified opp is available."""
+        config.trading_params.upgrade_spread_delta = Decimal("0.5")
+        config.trading_params.entry_offset_seconds = 900
+
+        # Current trade has spread ~0.16% (small rates)
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
+
+        # Redis has a qualified opp with much higher spread, in entry window
+        better_opp = {
+            "symbol": "DOGE/USDT",
+            "long_exchange": "exchange_a",
+            "short_exchange": "exchange_b",
+            "immediate_spread_pct": 1.5,  # 1.5% >> current ~0.16% + 0.5%
+            "qualified": True,
+            "next_funding_ms": (time.time() + 600) * 1000,  # 10 min away
+        }
+        mock_redis.get.return_value = json.dumps({
+            "opportunities": [better_opp],
+            "count": 1,
+        })
+
+        upgraded = await controller._check_upgrade(trade)
+
+        assert upgraded is True
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_no_upgrade_when_delta_too_small(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Don't upgrade if the better opp isn't +0.5% higher."""
+        config.trading_params.upgrade_spread_delta = Decimal("0.5")
+        config.trading_params.entry_offset_seconds = 900
+
+        # Current trade spread = ~0.16%
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
+
+        # Redis opp is only slightly better — not enough for upgrade
+        weak_opp = {
+            "symbol": "DOGE/USDT",
+            "long_exchange": "exchange_a",
+            "short_exchange": "exchange_b",
+            "immediate_spread_pct": 0.4,  # ~0.16% + 0.4% threshold not met
+            "qualified": True,
+            "next_funding_ms": (time.time() + 600) * 1000,
+        }
+        mock_redis.get.return_value = json.dumps({
+            "opportunities": [weak_opp],
+            "count": 1,
+        })
+
+        upgraded = await controller._check_upgrade(trade)
+
+        assert upgraded is False
+        assert trade.trade_id in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_no_upgrade_outside_entry_window(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Don't upgrade if the better opp isn't in the 15-min entry window."""
+        config.trading_params.upgrade_spread_delta = Decimal("0.5")
+        config.trading_params.entry_offset_seconds = 900
+
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
+
+        # Great spread but funding is 2 hours away (outside 15-min window)
+        far_opp = {
+            "symbol": "DOGE/USDT",
+            "long_exchange": "exchange_a",
+            "short_exchange": "exchange_b",
+            "immediate_spread_pct": 2.0,
+            "qualified": True,
+            "next_funding_ms": (time.time() + 7200) * 1000,  # 2 hours away
+        }
+        mock_redis.get.return_value = json.dumps({
+            "opportunities": [far_opp],
+            "count": 1,
+        })
+
+        upgraded = await controller._check_upgrade(trade)
+
+        assert upgraded is False
+        assert trade.trade_id in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_no_upgrade_for_same_symbol(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Don't upgrade to the same symbol we're already trading."""
+        config.trading_params.upgrade_spread_delta = Decimal("0.5")
+        config.trading_params.entry_offset_seconds = 900
+
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("-0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            else:
+                adapter.get_funding_rate.return_value = {
+                    "rate": Decimal("0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+
+        trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
+
+        # Same symbol — should not trigger upgrade
+        same_opp = {
+            "symbol": "BTC/USDT",
+            "long_exchange": "exchange_a",
+            "short_exchange": "exchange_b",
+            "immediate_spread_pct": 3.0,
+            "qualified": True,
+            "next_funding_ms": (time.time() + 600) * 1000,
+        }
+        mock_redis.get.return_value = json.dumps({
+            "opportunities": [same_opp],
+            "count": 1,
+        })
+
+        upgraded = await controller._check_upgrade(trade)
+
+        assert upgraded is False

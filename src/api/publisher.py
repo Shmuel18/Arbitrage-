@@ -26,7 +26,7 @@ class APIPublisher:
             "active_positions": positions_count,
             "uptime": round((datetime.utcnow() - self.start_time).total_seconds() / 3600, 2)
         }
-        await self.redis.set("trinity:status", json.dumps(status))
+        await self.redis.set("trinity:status", json.dumps(status), ex=15)
     
     async def publish_balances(self, balances: Dict[str, float]):
         """Publish exchange balances"""

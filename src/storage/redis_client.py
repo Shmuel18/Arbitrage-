@@ -49,6 +49,13 @@ class RedisClient:
         """Set a raw key/value (no prefix applied)."""
         await self._client.set(key, value, ex=ex)
 
+    async def get(self, key: str) -> Optional[str]:
+        """Get a raw key value (no prefix applied)."""
+        val = await self._client.get(key)
+        if val is None:
+            return None
+        return val if isinstance(val, str) else val.decode()
+
     async def zadd(self, key: str, mapping: Dict[str, float]) -> None:
         """Add to a sorted set (no prefix applied)."""
         await self._client.zadd(key, mapping)

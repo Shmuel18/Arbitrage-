@@ -457,12 +457,107 @@ class ExecutionController:
                     trade = self._active_trades.get(trade_id)
                     if not trade or trade.state != TradeState.OPEN:
                         continue
+                    # Check for upgrade BEFORE normal exit check
+                    upgraded = await self._check_upgrade(trade)
+                    if upgraded:
+                        continue  # trade was closed, skip exit check
                     await self._check_exit(trade)
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
             await asyncio.sleep(30)
+
+    async def _check_upgrade(self, trade: TradeRecord) -> bool:
+        """Check if a significantly better opportunity exists.
+
+        Reads qualified opportunities from Redis. If one has
+        immediate_spread >= current_spread + upgrade_spread_delta
+        AND is in the 15-min entry window → close current trade
+        so the scanner can pick up the better one on next cycle.
+
+        Returns True if the trade was closed for upgrade.
+        """
+        upgrade_delta = getattr(
+            self._cfg.trading_params, 'upgrade_spread_delta', Decimal("0.5")
+        )
+        if upgrade_delta <= 0:
+            return False
+
+        # Get current trade's live spread
+        long_adapter = self._exchanges.get(trade.long_exchange)
+        short_adapter = self._exchanges.get(trade.short_exchange)
+        try:
+            long_funding = await long_adapter.get_funding_rate(trade.symbol)
+            short_funding = await short_adapter.get_funding_rate(trade.symbol)
+        except Exception:
+            return False
+
+        long_interval = long_funding.get("interval_hours", 8)
+        short_interval = short_funding.get("interval_hours", 8)
+        spread_info = calculate_funding_spread(
+            long_funding["rate"], short_funding["rate"],
+            long_interval_hours=long_interval,
+            short_interval_hours=short_interval,
+        )
+        current_spread = spread_info["funding_spread_pct"]
+
+        # Read latest opportunities from Redis
+        try:
+            raw = await self._redis.get("trinity:opportunities")
+            if not raw:
+                return False
+            data = json.loads(raw)
+            candidates = data.get("opportunities", [])
+        except Exception as e:
+            logger.debug(f"Upgrade check: cannot read opportunities: {e}")
+            return False
+
+        entry_offset = self._cfg.trading_params.entry_offset_seconds
+        now_ms = _time.time() * 1000
+        threshold = current_spread + upgrade_delta
+
+        for cand in candidates:
+            # Must be qualified and a different symbol
+            if not cand.get("qualified", False):
+                continue
+            if cand.get("symbol") == trade.symbol:
+                continue
+
+            cand_spread = Decimal(str(cand.get("immediate_spread_pct", 0)))
+            if cand_spread < threshold:
+                continue
+
+            # Must be in the 15-min entry window
+            next_ms = cand.get("next_funding_ms")
+            if next_ms is None:
+                continue
+            seconds_until = (next_ms - now_ms) / 1000
+            if not (0 < seconds_until <= entry_offset):
+                continue
+
+            # Found a significantly better opportunity — upgrade!
+            hold_min = 0
+            if trade.opened_at:
+                hold_min = int(
+                    (datetime.now(timezone.utc) - trade.opened_at).total_seconds() / 60
+                )
+            logger.info(
+                f"⬆️  UPGRADE: closing {trade.symbol} (spread {float(current_spread):.4f}%) "
+                f"for {cand['symbol']} (spread {float(cand_spread):.4f}%) — "
+                f"delta {float(cand_spread - current_spread):.4f}% ≥ {float(upgrade_delta):.2f}% "
+                f"(held {hold_min}min)",
+                extra={
+                    "trade_id": trade.trade_id,
+                    "symbol": trade.symbol,
+                    "action": "upgrade_exit",
+                    "upgrade_to": cand["symbol"],
+                },
+            )
+            await self._close_trade(trade)
+            return True
+
+        return False
 
     async def _check_exit(self, trade: TradeRecord) -> None:
         """Check if trade should be closed.
@@ -571,20 +666,57 @@ class ExecutionController:
 
         # Check if still profitable to hold (funding spread)
         quick_cycle = getattr(self._cfg.trading_params, 'quick_cycle', False)
-        
+        hold_min = 0
+        if trade.opened_at:
+            hold_min = int((now - trade.opened_at).total_seconds() / 60)
+
         if quick_cycle:
-            # Zero-Dead-Time: always exit after first funding payment
-            # This frees capital for the next best opportunity
-            hold_min = 0
-            if trade.opened_at:
-                hold_min = int((now - trade.opened_at).total_seconds() / 60)
-            logger.info(
-                f"🔄 Trade {trade.trade_id}: QUICK CYCLE — exiting after funding payment "
-                f"(held {hold_min}min, spread was {float(current_spread):.4f}%) — freeing capital for re-scan",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "quick_cycle_exit"},
+            # ── Hold-or-Exit: check if spread still meets threshold ──
+            hold_min_spread = getattr(
+                self._cfg.trading_params, 'hold_min_spread', Decimal("0.5")
             )
-            await self._close_trade(trade)
-            return
+
+            if current_spread >= hold_min_spread:
+                # Spread is still good → HOLD for next payment cycle
+                # Advance trackers to next payment
+                long_next = long_funding.get("next_timestamp")
+                short_next = short_funding.get("next_timestamp")
+                if long_next:
+                    trade.next_funding_long = datetime.fromtimestamp(
+                        long_next / 1000, tz=timezone.utc
+                    )
+                if short_next:
+                    trade.next_funding_short = datetime.fromtimestamp(
+                        short_next / 1000, tz=timezone.utc
+                    )
+                logger.info(
+                    f"🔄 Trade {trade.trade_id}: HOLD — spread {float(current_spread):.4f}% "
+                    f"≥ {float(hold_min_spread):.2f}% threshold (held {hold_min}min) | "
+                    f"Next: {trade.long_exchange}="
+                    f"{trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
+                    f"{trade.short_exchange}="
+                    f"{trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "hold_after_payment",
+                    },
+                )
+                return
+            else:
+                # Spread dropped below threshold → EXIT
+                logger.info(
+                    f"🔄 Trade {trade.trade_id}: EXIT — spread {float(current_spread):.4f}% "
+                    f"< {float(hold_min_spread):.2f}% threshold (held {hold_min}min) — "
+                    f"freeing capital for re-scan",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "quick_cycle_exit",
+                    },
+                )
+                await self._close_trade(trade)
+                return
 
         long_spec = await long_adapter.get_instrument_spec(trade.symbol)
         short_spec = await short_adapter.get_instrument_spec(trade.symbol)
