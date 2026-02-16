@@ -84,7 +84,8 @@ class Scanner:
 
                 # Sort all by hourly return for display
                 all_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
-                qualified_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
+                # Sort qualified by NET edge for execution (best absolute profit first)
+                qualified_opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
 
                 # Display top 5: qualified first, then fill with display-only
                 display_qualified = [o for o in all_opps if o.qualified][:5]
@@ -162,14 +163,21 @@ class Scanner:
                     )
                     
                     if execute_only_best and qualified_opps:
-                        # Send ONLY the best opportunity (highest net edge)
-                        best_opp = qualified_opps[0]
-                        logger.info(
-                            f"🎯 Sending BEST opportunity to controller: {best_opp.symbol} "
-                            f"({best_opp.long_exchange}↔{best_opp.short_exchange}) "
-                            f"net={best_opp.net_edge_pct:.4f}%"
-                        )
-                        await callback(best_opp)
+                        # Send best opportunity PER exchange pair
+                        # (sorted by net_edge_pct desc, so first hit per pair is the best)
+                        seen_pairs: set[tuple[str, str]] = set()
+                        best_per_pair: list = []
+                        for opp in qualified_opps:
+                            pair = tuple(sorted([opp.long_exchange, opp.short_exchange]))
+                            if pair not in seen_pairs:
+                                seen_pairs.add(pair)
+                                best_per_pair.append(opp)
+                        for opp in best_per_pair:
+                            logger.info(
+                                f"🎯 Sending BEST for {opp.long_exchange}↔{opp.short_exchange}: "
+                                f"{opp.symbol} net={opp.net_edge_pct:.4f}%"
+                            )
+                            await callback(opp)
                     else:
                         # Send top qualified opportunities — controller handles further filtering
                         for opp in qualified_opps[:5]:
@@ -438,6 +446,9 @@ class Scanner:
                 qualified = False
             else:
                 closest_ms = primary_next
+        elif primary_next and primary_next <= now_ms:
+            # Timestamp is in the past (stale data) — disqualify
+            qualified = False
         else:
             closest_ms = None  # no timestamp available — allow
 

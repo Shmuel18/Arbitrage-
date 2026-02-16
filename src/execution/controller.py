@@ -62,6 +62,8 @@ class ExecutionController:
         self._monitor_task: Optional[asyncio.Task] = None
         # Runtime blacklist: maps "symbol:exchange" -> expiry timestamp
         self._blacklist: Dict[str, float] = {}
+        # Track consecutive order-timeout failures: "symbol:exchange" -> count
+        self._timeout_streak: Dict[str, int] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -146,6 +148,18 @@ class ExecutionController:
             )
             return
 
+        # Exchange-in-use guard — each exchange can only be in ONE trade at a time
+        busy_exchanges: set[str] = set()
+        for t in self._active_trades.values():
+            busy_exchanges.add(t.long_exchange)
+            busy_exchanges.add(t.short_exchange)
+        for ex in (opp.long_exchange, opp.short_exchange):
+            if ex in busy_exchanges:
+                logger.info(
+                    f"🔒 Skipping {opp.symbol}: {ex} already in use by another trade"
+                )
+                return
+
         # ── Funding spread gate (safety check) ──
         # For HOLD mode: raw funding_spread_pct must meet threshold
         # For CHERRY_PICK: gross_edge_pct (total collections) must meet threshold
@@ -201,8 +215,10 @@ class ExecutionController:
 
         if primary_next is None:
             logger.info(
-                f"⏰ [{opp.symbol}] No funding timestamp for primary contributor ({primary_side}) — allowing entry"
+                f"⏳ Skipping {opp.symbol}: no funding timestamp for primary contributor "
+                f"({primary_side} {primary_exchange}) — cannot verify entry window"
             )
+            return
         else:
             seconds_until = (primary_next - now_ms) / 1000
             if not (0 < seconds_until <= entry_offset):
@@ -1061,16 +1077,40 @@ class ExecutionController:
 
     # ── Helpers ──────────────────────────────────────────────────
 
+    _TIMEOUT_COOLDOWN_SEC = 600        # 10 min cooldown after first order timeout
+    _TIMEOUT_BLACKLIST_THRESHOLD = 2     # blacklist after N consecutive timeouts
+
     async def _place_with_timeout(self, adapter, req: OrderRequest) -> Optional[dict]:
         """Place order with timeout. Returns fill dict or None."""
         timeout = self._cfg.execution.order_timeout_ms / 1000
+        streak_key = f"{req.symbol}:{req.exchange}"
         try:
-            return await asyncio.wait_for(adapter.place_order(req), timeout=timeout)
+            result = await asyncio.wait_for(adapter.place_order(req), timeout=timeout)
+            # Success — reset streak counter
+            self._timeout_streak.pop(streak_key, None)
+            return result
         except asyncio.TimeoutError:
+            count = self._timeout_streak.get(streak_key, 0) + 1
+            self._timeout_streak[streak_key] = count
             logger.error(
-                f"Order timeout ({timeout}s) on {req.exchange}/{req.symbol}",
+                f"Order timeout ({timeout}s) on {req.exchange}/{req.symbol} "
+                f"(streak {count}/{self._TIMEOUT_BLACKLIST_THRESHOLD})",
                 extra={"exchange": req.exchange, "symbol": req.symbol, "action": "order_timeout"},
             )
+            if count >= self._TIMEOUT_BLACKLIST_THRESHOLD:
+                self._add_to_blacklist(req.symbol, req.exchange)
+                logger.warning(
+                    f"⛔ {req.symbol} blacklisted on {req.exchange} after "
+                    f"{count} consecutive timeouts",
+                )
+                self._timeout_streak.pop(streak_key, None)
+            else:
+                # Short cooldown to stop immediate retry
+                await self._redis.set_cooldown(req.symbol, self._TIMEOUT_COOLDOWN_SEC)
+                logger.warning(
+                    f"⏸️ {req.symbol} cooldown {self._TIMEOUT_COOLDOWN_SEC}s after timeout "
+                    f"on {req.exchange}",
+                )
             return None
         except Exception as e:
             err_str = str(e).lower()

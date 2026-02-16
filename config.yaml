@@ -29,7 +29,7 @@ trading_params:
   execute_only_best_opportunity: true
 
 execution:
-  concurrent_opportunities: 1
+  concurrent_opportunities: 3
   order_timeout_ms: 5000
   batch_scan_concurrent: true
   scan_parallelism: 10

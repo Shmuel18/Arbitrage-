@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 import asyncio
+import time as _time
 
 import ccxt.pro as ccxtpro
 
@@ -56,12 +57,24 @@ class ExchangeAdapter:
             opts["sandbox"] = True
 
         self._exchange = cls(opts)
-        await self._exchange.load_markets()
+        try:
+            await self._exchange.load_markets()
+        except Exception as e:
+            # Some exchanges (e.g. Gate.io) may partially fail load_markets
+            # but still populate the markets dict — continue if we got data
+            if not self._exchange.markets:
+                raise
+            logger.warning(
+                f"{self.exchange_id}: load_markets partial error ({e}), "
+                f"continuing with {len(self._exchange.markets)} raw markets",
+                extra={"exchange": self.exchange_id, "action": "load_markets_partial"},
+            )
 
-        # Filter to USDT-settled linear perpetuals only
+        # Filter to ACTIVE USDT-settled linear perpetuals only
         filtered = {
             k: v for k, v in self._exchange.markets.items()
             if v.get("swap") and v.get("linear") and v.get("settle") == "USDT"
+            and v.get("active") is not False  # exclude delisted/settling markets
         }
         self._exchange.markets = filtered
         self._exchange.symbols = list(filtered.keys())
@@ -196,12 +209,22 @@ class ExchangeAdapter:
 
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
+        interval_hours = self._get_funding_interval(symbol, data)
+        next_ts = data.get("fundingTimestamp")
+
+        # If next_timestamp is in the past, advance by interval until future
+        if next_ts:
+            now_ms = _time.time() * 1000
+            interval_ms = interval_hours * 3_600_000
+            while next_ts <= now_ms and interval_ms > 0:
+                next_ts += interval_ms
+
         self._funding_rate_cache[symbol] = {
             "rate": Decimal(str(data.get("fundingRate", 0))),
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
-            "next_timestamp": data.get("fundingTimestamp"),
-            "interval_hours": self._get_funding_interval(symbol, data),
+            "next_timestamp": next_ts,
+            "interval_hours": interval_hours,
         }
 
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -260,7 +283,8 @@ class ExchangeAdapter:
         consecutive_failures = 0
         while True:
             try:
-                all_rates = await self._exchange.fetch_funding_rates(symbols)
+                # Fetch without symbol filter — avoids OKX "must be same type" error
+                all_rates = await self._exchange.fetch_funding_rates()
                 count = 0
                 for symbol, data in all_rates.items():
                     if symbol in self._exchange.markets:
@@ -449,12 +473,22 @@ class ExchangeAdapter:
 
     async def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
         data = await self._exchange.fetch_funding_rate(symbol)
+        interval_hours = self._get_funding_interval(symbol, data)
+        next_ts = data.get("fundingTimestamp")
+
+        # If next_timestamp is in the past, advance by interval until future
+        if next_ts:
+            now_ms = _time.time() * 1000
+            interval_ms = interval_hours * 3_600_000
+            while next_ts <= now_ms and interval_ms > 0:
+                next_ts += interval_ms
+
         return {
             "rate": Decimal(str(data.get("fundingRate", 0))),
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
-            "next_timestamp": data.get("fundingTimestamp"),
-            "interval_hours": self._get_funding_interval(symbol, data),
+            "next_timestamp": next_ts,
+            "interval_hours": interval_hours,
         }
 
     def _get_funding_interval(self, symbol: str, funding_data: dict) -> int:
