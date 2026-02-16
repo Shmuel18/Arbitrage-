@@ -67,6 +67,9 @@ export interface Translations {
   fundingS: string;
   netPct: string;
   fundingSpread: string;
+  immediateSpreadOpp: string;
+  hourlyRate: string;
+  interval: string;
   belowThreshold: string;
 
   // Analytics
@@ -152,6 +155,9 @@ const en: Translations = {
   fundingS: 'FUND. S',
   netPct: 'NET %',
   fundingSpread: 'SPREAD %',
+  immediateSpreadOpp: 'IMMED %',
+  hourlyRate: '/HOUR %',
+  interval: 'INT',
   belowThreshold: 'Below threshold (0.5%)',
 
   pnlChart: 'PnL Chart (24h)',
@@ -234,6 +240,9 @@ const he: Translations = {
   fundingS: 'מימון ש׳',
   netPct: '% נטו',
   fundingSpread: '% ספרד',
+  immediateSpreadOpp: '% מיידי',
+  hourlyRate: '% לשעה',
+  interval: 'אינט',
   belowThreshold: 'מתחת לסף (0.5%)',
 
   pnlChart: 'גרף רווח והפסד (24 שעות)',

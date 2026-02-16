@@ -168,49 +168,46 @@ class ExecutionController:
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
 
-        # ── Entry timing gate: ONLY for CHERRY_PICK mode ──
-        # HOLD mode: enter immediately — you hold and collect funding every cycle
-        # CHERRY_PICK mode: must enter close to funding to collect & exit in time
-        if opp.mode == "cherry_pick":
-            entry_offset = self._cfg.trading_params.entry_offset_seconds
-            try:
-                long_funding = await long_adapter.get_funding_rate(opp.symbol)
-                short_funding = await short_adapter.get_funding_rate(opp.symbol)
-            except Exception as e:
-                logger.info(f"Cannot fetch funding time for {opp.symbol}: {e} — allowing entry")
-                long_funding = {}
-                short_funding = {}
+        # ── Entry timing gate: enter only within 15 min before funding ──
+        entry_offset = self._cfg.trading_params.entry_offset_seconds
+        try:
+            long_funding = await long_adapter.get_funding_rate(opp.symbol)
+            short_funding = await short_adapter.get_funding_rate(opp.symbol)
+        except Exception as e:
+            logger.info(f"Cannot fetch funding time for {opp.symbol}: {e} — allowing entry")
+            long_funding = {}
+            short_funding = {}
 
-            now_ms = _time.time() * 1000
-            long_next = long_funding.get("next_timestamp")
-            short_next = short_funding.get("next_timestamp")
+        now_ms = _time.time() * 1000
+        long_next = long_funding.get("next_timestamp")
+        short_next = short_funding.get("next_timestamp")
 
-            if long_next is None and short_next is None:
-                logger.info(
-                    f"⏰ [{opp.symbol}] No funding timestamp — allowing cherry-pick entry"
-                )
-            else:
-                in_entry_window = False
+        if long_next is None and short_next is None:
+            logger.info(
+                f"⏰ [{opp.symbol}] No funding timestamp — allowing entry"
+            )
+        else:
+            in_entry_window = False
+            if long_next:
+                seconds_until_long = (long_next - now_ms) / 1000
+                if 0 < seconds_until_long <= entry_offset:
+                    in_entry_window = True
+            if short_next:
+                seconds_until_short = (short_next - now_ms) / 1000
+                if 0 < seconds_until_short <= entry_offset:
+                    in_entry_window = True
+
+            if not in_entry_window:
+                next_str = ""
                 if long_next:
-                    seconds_until_long = (long_next - now_ms) / 1000
-                    if 0 < seconds_until_long <= entry_offset:
-                        in_entry_window = True
+                    next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
                 if short_next:
-                    seconds_until_short = (short_next - now_ms) / 1000
-                    if 0 < seconds_until_short <= entry_offset:
-                        in_entry_window = True
-
-                if not in_entry_window:
-                    next_str = ""
-                    if long_next:
-                        next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
-                    if short_next:
-                        next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
-                    logger.info(
-                        f"⏳ Skipping {opp.symbol}: cherry-pick not in entry window "
-                        f"(next funding: {next_str}). Entry allowed {entry_offset}s before payment."
-                    )
-                    return
+                    next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: not in entry window "
+                    f"(next funding: {next_str}). Entry allowed {entry_offset}s before payment."
+                )
+                return
 
         logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
 
@@ -218,8 +215,10 @@ class ExecutionController:
         try:
             long_ticker = await long_adapter.get_ticker(opp.symbol)
             short_ticker = await short_adapter.get_ticker(opp.symbol)
-            long_ask = Decimal(str(long_ticker.get("ask", opp.reference_price)))
-            short_bid = Decimal(str(short_ticker.get("bid", opp.reference_price)))
+            raw_ask = long_ticker.get("ask") or opp.reference_price
+            raw_bid = short_ticker.get("bid") or opp.reference_price
+            long_ask = Decimal(str(raw_ask)) if raw_ask else Decimal(str(opp.reference_price))
+            short_bid = Decimal(str(raw_bid)) if raw_bid else Decimal(str(opp.reference_price))
             
             # Basis loss = (ask_long - bid_short) / bid_short * 100%
             if short_bid > 0:

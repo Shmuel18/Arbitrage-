@@ -103,14 +103,13 @@ class ExchangeAdapter:
             task = asyncio.create_task(self._batch_funding_poll_loop(eligible))
             self._ws_tasks.append(task)
         else:
-            # Batch not supported (e.g. KuCoin) — use per-symbol polling
+            # Batch not supported (e.g. KuCoin) — single task, sequential with semaphore
             logger.info(
-                f"Starting funding rate PER-SYMBOL polling for {len(eligible)} symbols",
+                f"Starting funding rate SEQUENTIAL polling for {len(eligible)} symbols",
                 extra={"exchange": self.exchange_id, "action": "ws_start"},
             )
-            for symbol in eligible:
-                task = asyncio.create_task(self._watch_funding_rate_polling(symbol))
-                self._ws_tasks.append(task)
+            task = asyncio.create_task(self._sequential_funding_poll_loop(eligible))
+            self._ws_tasks.append(task)
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket."""
@@ -254,6 +253,37 @@ class ExchangeAdapter:
                 logger.debug(f"Batch funding poll error on {self.exchange_id}: {e}")
             await asyncio.sleep(poll_interval)
 
+    async def _sequential_funding_poll_loop(self, symbols: List[str]) -> None:
+        """Poll funding rates sequentially with concurrency limit.
+        Used for exchanges that don't support batch fetch (e.g. KuCoin).
+        One task, 10 concurrent fetches, cycles through all symbols every ~60s.
+        """
+        sem = asyncio.Semaphore(10)
+        while True:
+            try:
+                count = 0
+
+                async def _fetch(sym: str):
+                    nonlocal count
+                    async with sem:
+                        try:
+                            data = await self._exchange.fetch_funding_rate(sym)
+                            self._update_funding_cache(sym, data)
+                            count += 1
+                        except Exception:
+                            pass
+
+                await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+                logger.debug(
+                    f"Sequential funding refresh: {count}/{len(symbols)} on {self.exchange_id}",
+                    extra={"exchange": self.exchange_id},
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.debug(f"Sequential funding poll error on {self.exchange_id}: {e}")
+            await asyncio.sleep(30)  # wait between full cycles
+
     async def disconnect(self) -> None:
         if self._exchange:
             await self._exchange.close()
@@ -288,10 +318,15 @@ class ExchangeAdapter:
                 logger.warning(f"Margin mode issue on {self.exchange_id} {symbol}: {e}",
                                extra={"exchange": self.exchange_id, "symbol": symbol})
 
-        # 2) Set leverage — include mgnMode param for OKX
+        # 2) Set leverage — include mgnMode param for OKX, marginMode for KuCoin
         try:
             if hasattr(ex, "set_leverage"):
-                lev_params = {"mgnMode": margin} if self.exchange_id == "okx" else {}
+                if self.exchange_id == "okx":
+                    lev_params = {"mgnMode": margin}
+                elif self.exchange_id == "kucoin":
+                    lev_params = {"marginMode": "cross"}
+                else:
+                    lev_params = {}
                 await ex.set_leverage(lev, symbol, lev_params)
                 logger.info(f"{self.exchange_id} {symbol}: leverage → {lev}x",
                             extra={"exchange": self.exchange_id, "symbol": symbol})

@@ -81,6 +81,11 @@ class OpportunityCandidate:
     net_edge_pct: Decimal
     suggested_qty: Decimal
     reference_price: Decimal
+    # Immediate spread (raw, before 8h normalization)
+    immediate_spread_pct: Decimal = Decimal("0")
+    # Ranking: return per hour (net_edge / min_interval)
+    min_interval_hours: int = 8            # fastest funding interval in this pair
+    hourly_rate_pct: Decimal = Decimal("0") # net_edge_pct / min_interval_hours
     # Cherry-pick fields
     mode: str = "hold"                    # "hold" or "cherry_pick"
     exit_before: Optional[datetime] = None # when to exit (before costly payment)

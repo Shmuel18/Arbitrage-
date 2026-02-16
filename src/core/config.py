@@ -27,6 +27,7 @@ class RiskLimits(BaseSettings):
 
 class TradingParams(BaseSettings):
     min_funding_spread: Decimal = Decimal("0.5")
+    min_immediate_spread: Decimal = Decimal("0.5")   # min IMMEDIATE spread (next payment)
     min_net_pct: Decimal = Decimal("0.5")  # ← Requires 0.5% net profit (not 0.01%) after all fees & slippage
     max_slippage_pct: Decimal = Decimal("0.10")
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit

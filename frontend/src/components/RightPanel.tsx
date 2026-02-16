@@ -10,6 +10,9 @@ interface Opportunity {
   net_pct: number;
   gross_pct: number;
   funding_spread_pct?: number;
+  immediate_spread_pct?: number;
+  hourly_rate_pct?: number;
+  min_interval_hours?: number;
   price: number;
   mode: string;
 }
@@ -34,7 +37,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
-  const MIN_SPREAD_THRESHOLD = 0.5; // must match backend min_funding_spread
+  const MIN_SPREAD_THRESHOLD = 0.5; // must match backend min_immediate_spread
 
   const getRateStyle = (rate: number): React.CSSProperties => {
     if (rate > 0) return { color: 'var(--green)' };
@@ -42,11 +45,13 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return { color: 'var(--text-muted)' };
   };
 
-  const aboveThreshold = opps.filter(o => (o.funding_spread_pct ?? 0) >= MIN_SPREAD_THRESHOLD);
-  const belowThreshold = opps.filter(o => (o.funding_spread_pct ?? 0) < MIN_SPREAD_THRESHOLD);
+  const aboveThreshold = opps.filter(o => (o.immediate_spread_pct ?? 0) >= MIN_SPREAD_THRESHOLD);
+  const belowThreshold = opps.filter(o => (o.immediate_spread_pct ?? 0) < MIN_SPREAD_THRESHOLD);
 
   const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
-    const spread = opp.funding_spread_pct ?? (opp.short_rate - opp.long_rate);
+    const immediateSpread = opp.immediate_spread_pct ?? 0;
+    const hourlyRate = opp.hourly_rate_pct ?? 0;
+    const interval = opp.min_interval_hours ?? 8;
     const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
     return (
       <tr key={i} style={rowStyle}>
@@ -57,14 +62,14 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
         </td>
         <td>{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
         <td>{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
-        <td className="text-end mono" style={getRateStyle(opp.long_rate)}>
-          {formatFunding(opp.long_rate)}
+        <td className="text-end mono font-semibold" style={getRateStyle(immediateSpread)}>
+          {formatSpread(immediateSpread)}
         </td>
-        <td className="text-end mono" style={getRateStyle(opp.short_rate)}>
-          {formatFunding(opp.short_rate)}
+        <td className="text-end mono font-semibold" style={getRateStyle(hourlyRate)}>
+          {formatSpread(hourlyRate)}
         </td>
-        <td className="text-end mono font-semibold" style={getRateStyle(spread)}>
-          {formatSpread(spread)}
+        <td className="text-end mono" style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+          {interval}h
         </td>
       </tr>
     );
@@ -88,9 +93,9 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                 <th>{t.pair}</th>
                 <th>{t.long}</th>
                 <th>{t.short}</th>
-                <th className="text-end">{t.fundingL}</th>
-                <th className="text-end">{t.fundingS}</th>
-                <th className="text-end">{t.fundingSpread}</th>
+                <th className="text-end">{t.immediateSpreadOpp}</th>
+                <th className="text-end">{t.hourlyRate}</th>
+                <th className="text-end">{t.interval}</th>
               </tr>
             </thead>
             <tbody>

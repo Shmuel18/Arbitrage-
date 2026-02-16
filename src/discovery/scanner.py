@@ -80,14 +80,14 @@ class Scanner:
                 
                 # Sort by funding_spread_pct and display top 5 opportunities
                 if opps:
-                    opps.sort(key=lambda o: o.funding_spread_pct, reverse=True)
+                    opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
                     top_5 = opps[:5]
 
                     now_ts = time.time()
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
                         logger.info(
-                            "📊 TOP 5 OPPORTUNITIES (by Funding Spread)",
+                            "📊 TOP 5 OPPORTUNITIES (by Hourly Return)",
                             extra={"action": "top_opportunities"},
                         )
                         for idx, opp in enumerate(top_5, 1):
@@ -97,7 +97,8 @@ class Scanner:
                             logger.info(
                                 f"  {idx}. {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
                                 f"L={opp.long_funding_rate:.6f} S={opp.short_funding_rate:.6f} | "
-                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}%",
+                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}% | "
+                                f"/h: {opp.hourly_rate_pct:.4f}% ({opp.min_interval_hours}h)",
                                 extra={
                                     "action": "opportunity",
                                     "data": {
@@ -125,6 +126,9 @@ class Scanner:
                                 "net_pct": float(o.net_edge_pct),
                                 "gross_pct": float(o.gross_edge_pct),
                                 "funding_spread_pct": float(o.funding_spread_pct),
+                                "immediate_spread_pct": float(o.immediate_spread_pct),
+                                "hourly_rate_pct": float(o.hourly_rate_pct),
+                                "min_interval_hours": o.min_interval_hours,
                                 "long_rate": float(o.long_funding_rate),
                                 "short_rate": float(o.short_funding_rate),
                                 "price": float(o.reference_price),
@@ -364,6 +368,15 @@ class Scanner:
             f"Basis={tp.basis_buffer_pct:.4f}%"
         )
 
+        # ── Immediate spread gate: reject if next payment spread < threshold ──
+        min_imm = getattr(tp, 'min_immediate_spread', tp.min_funding_spread)
+        if immediate_spread < min_imm:
+            logger.debug(
+                f"[{symbol}] Rejected: immediate_spread={immediate_spread:.4f}% < "
+                f"min_immediate={min_imm:.4f}%"
+            )
+            return None
+
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
             # Gate: funding spread must pass threshold
@@ -524,6 +537,9 @@ class Scanner:
             short_interval_hours=short_interval_hours,
         )
 
+        min_interval = min(long_interval_hours, short_interval_hours)
+        hourly_rate = net_pct / Decimal(str(min_interval)) if min_interval > 0 else net_pct
+
         return OpportunityCandidate(
             symbol=symbol,
             long_exchange=long_eid,
@@ -531,11 +547,14 @@ class Scanner:
             long_funding_rate=long_rate,
             short_funding_rate=short_rate,
             funding_spread_pct=spread_info["funding_spread_pct"],
+            immediate_spread_pct=spread_info["immediate_spread_pct"],
             gross_edge_pct=gross_pct,
             fees_pct=fees_pct,
             net_edge_pct=net_pct,
             suggested_qty=quantity,
             reference_price=price,
+            min_interval_hours=min_interval,
+            hourly_rate_pct=hourly_rate,
             mode=mode,
             exit_before=exit_before,
             n_collections=n_collections,

@@ -12,6 +12,7 @@ risk_limits:
 
 trading_params:
   min_funding_spread: 0.5 # minimum gross funding-rate spread per 8h settlement (%)
+  min_immediate_spread: 0.5 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
   min_net_pct: 0.01 # minimum net spread after fees (%) — safety floor
   max_slippage_pct: 0.10 # max price slippage to allow entry (%)
   slippage_buffer_pct: 0.015
@@ -81,7 +82,7 @@ exchanges:
     rate_limit_ms: 100
     max_leverage: 20
     leverage: 5
-    margin_mode: "isolated"
+    margin_mode: "cross"
     position_mode: "oneway"
 
   kraken:
