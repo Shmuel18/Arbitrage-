@@ -168,7 +168,7 @@ class ExecutionController:
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
 
-        # ── Entry timing gate: enter only within 15 min before funding ──
+        # ── Entry timing gate: PRIMARY CONTRIBUTOR must be within 15 min ──
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         try:
             long_funding = await long_adapter.get_funding_rate(opp.symbol)
@@ -181,31 +181,35 @@ class ExecutionController:
         now_ms = _time.time() * 1000
         long_next = long_funding.get("next_timestamp")
         short_next = short_funding.get("next_timestamp")
+        long_rate = long_funding.get("rate", 0)
+        short_rate = short_funding.get("rate", 0)
 
-        if long_next is None and short_next is None:
+        # Determine primary contributor (who makes the money?)
+        long_contribution = abs(long_rate) if long_rate < 0 else 0
+        short_contribution = abs(short_rate) if short_rate > 0 else 0
+        
+        if long_contribution > short_contribution:
+            primary_side = "long"
+            primary_exchange = opp.long_exchange
+            primary_next = long_next
+            primary_contribution = long_contribution
+        else:
+            primary_side = "short"
+            primary_exchange = opp.short_exchange
+            primary_next = short_next
+            primary_contribution = short_contribution
+
+        if primary_next is None:
             logger.info(
-                f"⏰ [{opp.symbol}] No funding timestamp — allowing entry"
+                f"⏰ [{opp.symbol}] No funding timestamp for primary contributor ({primary_side}) — allowing entry"
             )
         else:
-            in_entry_window = False
-            if long_next:
-                seconds_until_long = (long_next - now_ms) / 1000
-                if 0 < seconds_until_long <= entry_offset:
-                    in_entry_window = True
-            if short_next:
-                seconds_until_short = (short_next - now_ms) / 1000
-                if 0 < seconds_until_short <= entry_offset:
-                    in_entry_window = True
-
-            if not in_entry_window:
-                next_str = ""
-                if long_next:
-                    next_str += f"{opp.long_exchange}={int((long_next - now_ms)/60000)}min "
-                if short_next:
-                    next_str += f"{opp.short_exchange}={int((short_next - now_ms)/60000)}min"
+            seconds_until = (primary_next - now_ms) / 1000
+            if not (0 < seconds_until <= entry_offset):
                 logger.info(
-                    f"⏳ Skipping {opp.symbol}: not in entry window "
-                    f"(next funding: {next_str}). Entry allowed {entry_offset}s before payment."
+                    f"⏳ Skipping {opp.symbol}: primary contributor ({primary_side} {primary_exchange}, "
+                    f"contributes {float(primary_contribution)*100:.4f}%) not in entry window. "
+                    f"Next funding in {int(seconds_until/60)}min. Entry allowed ≤{entry_offset}s before payment."
                 )
                 return
 

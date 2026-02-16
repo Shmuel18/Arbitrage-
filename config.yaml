@@ -96,7 +96,7 @@ exchanges:
     rate_limit_ms: 100
     max_leverage: 10
     leverage: 5
-    margin_mode: "isolated"
+    margin_mode: "cross"
     position_mode: "oneway"
 
   gateio:
@@ -106,7 +106,7 @@ exchanges:
     rate_limit_ms: 100
     max_leverage: 20
     leverage: 5
-    margin_mode: "isolated"
+    margin_mode: "cross"
     position_mode: "oneway"
 
 symbols:

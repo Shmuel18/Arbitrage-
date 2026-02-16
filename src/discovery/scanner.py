@@ -156,9 +156,24 @@ class Scanner:
                                 f"Top 5 updated: {len(qualified_opps)} qualified, {len(all_opps) - len(qualified_opps)} display-only"
                             )
                     
-                    # Try ONLY qualified opportunities — controller handles further filtering
-                    for opp in qualified_opps[:5]:
-                        await callback(opp)
+                    # Send opportunities to controller
+                    execute_only_best = getattr(
+                        self._cfg.trading_params, 'execute_only_best_opportunity', True
+                    )
+                    
+                    if execute_only_best and qualified_opps:
+                        # Send ONLY the best opportunity (highest net edge)
+                        best_opp = qualified_opps[0]
+                        logger.info(
+                            f"🎯 Sending BEST opportunity to controller: {best_opp.symbol} "
+                            f"({best_opp.long_exchange}↔{best_opp.short_exchange}) "
+                            f"net={best_opp.net_edge_pct:.4f}%"
+                        )
+                        await callback(best_opp)
+                    else:
+                        # Send top qualified opportunities — controller handles further filtering
+                        for opp in qualified_opps[:5]:
+                            await callback(opp)
                 else:
                     if self._publisher:
                         await self._publisher.publish_opportunities([])
@@ -396,21 +411,33 @@ class Scanner:
         if immediate_spread < min_imm:
             qualified = False
 
-        # ── 60-minute entry window ───────────────────────────────
+        # ── 60-minute entry window (PRIMARY CONTRIBUTOR ONLY) ────
+        # Only check timing for the side that contributes most to the spread
         max_window = getattr(tp, 'max_entry_window_minutes', 60)
         now_ms = time.time() * 1000
         long_next = funding[long_eid].get("next_timestamp")
         short_next = funding[short_eid].get("next_timestamp")
+        
+        # Determine primary contributor: who makes the money?
+        long_contribution = abs(long_rate) if long_rate < 0 else Decimal("0")
+        short_contribution = abs(short_rate) if short_rate > 0 else Decimal("0")
+        
+        if long_contribution > short_contribution:
+            # Long side is primary contributor — check ONLY long timing
+            primary_side = "long"
+            primary_next = long_next
+        else:
+            # Short side is primary contributor — check ONLY short timing
+            primary_side = "short"
+            primary_next = short_next
+        
         closest_ms = None
-        if long_next and long_next > now_ms:
-            closest_ms = long_next
-        if short_next and short_next > now_ms:
-            if closest_ms is None or short_next < closest_ms:
-                closest_ms = short_next
-        if closest_ms is not None:
-            minutes_until = (closest_ms - now_ms) / 60_000
+        if primary_next and primary_next > now_ms:
+            minutes_until = (primary_next - now_ms) / 60_000
             if minutes_until > max_window:
                 qualified = False
+            else:
+                closest_ms = primary_next
         else:
             closest_ms = None  # no timestamp available — allow
 
