@@ -112,11 +112,17 @@ class ExchangeAdapter:
             self._ws_tasks.append(task)
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
-        """Continuously watch funding rate for a symbol via WebSocket."""
-        retry_count = 0
-        max_retries = 5
-        
-        while retry_count < max_retries:
+        """Continuously watch funding rate for a symbol via WebSocket.
+
+        Uses infinite retry with exponential backoff (capped at 60 s).
+        Backoff resets after every successful data receive so transient
+        errors don't accumulate towards a permanent shutdown.
+        """
+        backoff = 5          # initial wait after failure (seconds)
+        max_backoff = 60     # cap
+        consecutive_failures = 0
+
+        while True:
             try:
                 # Try WebSocket if available (ccxt.pro)
                 if self._ws_funding_supported and hasattr(self._exchange, 'watch_funding_rate'):
@@ -124,11 +130,14 @@ class ExchangeAdapter:
                 else:
                     # Fallback: fast polling every 5 seconds
                     await self._watch_funding_rate_polling(symbol)
+                # If the inner loop returns normally, reset backoff
+                consecutive_failures = 0
+                backoff = 5
             except asyncio.CancelledError:
                 logger.debug(f"Funding watcher cancelled for {symbol}")
                 return
             except Exception as e:
-                retry_count += 1
+                consecutive_failures += 1
                 msg = str(e).lower()
                 if "not supported" in msg or "does not support" in msg:
                     self._ws_funding_supported = False
@@ -138,14 +147,27 @@ class ExchangeAdapter:
                             f"{self.exchange_id} watch_funding_rate() not supported — falling back to polling",
                             extra={"exchange": self.exchange_id, "action": "ws_funding_disabled"},
                         )
-                    # Switch to polling without per-symbol warnings
-                    await self._watch_funding_rate_polling(symbol)
-                    return
-                logger.warning(
-                    f"Funding watcher error for {symbol}: {e}",
-                    extra={"exchange": self.exchange_id, "symbol": symbol, "retry": retry_count},
-                )
-                await asyncio.sleep(5)  # Wait before retry
+                    # Switch to polling (infinite loop inside); if it
+                    # raises we'll come back to the outer while True.
+                    continue
+
+                # Escalate log level after repeated failures
+                if consecutive_failures <= 3:
+                    logger.warning(
+                        f"Funding watcher error for {symbol}: {e}",
+                        extra={"exchange": self.exchange_id, "symbol": symbol,
+                               "retry": consecutive_failures},
+                    )
+                elif consecutive_failures % 10 == 0:
+                    # Log every 10th failure at ERROR to avoid spam
+                    logger.error(
+                        f"Funding watcher for {symbol} has failed {consecutive_failures} times "
+                        f"in a row — cached data may be STALE: {e}",
+                        extra={"exchange": self.exchange_id, "symbol": symbol,
+                               "retry": consecutive_failures},
+                    )
+                wait = min(backoff * (2 ** min(consecutive_failures - 1, 5)), max_backoff)
+                await asyncio.sleep(wait)
 
     async def _watch_funding_rate_websocket(self, symbol: str) -> None:
         """Watch funding rate via WebSocket (ccxt.pro)."""
@@ -235,6 +257,7 @@ class ExchangeAdapter:
     async def _batch_funding_poll_loop(self, symbols: List[str]) -> None:
         """Periodically fetch ALL funding rates in one batch API call."""
         poll_interval = 30  # seconds between batch refreshes
+        consecutive_failures = 0
         while True:
             try:
                 all_rates = await self._exchange.fetch_funding_rates(symbols)
@@ -243,6 +266,7 @@ class ExchangeAdapter:
                     if symbol in self._exchange.markets:
                         self._update_funding_cache(symbol, data)
                         count += 1
+                consecutive_failures = 0
                 logger.debug(
                     f"Batch funding refresh: {count} rates on {self.exchange_id}",
                     extra={"exchange": self.exchange_id},
@@ -250,7 +274,18 @@ class ExchangeAdapter:
             except asyncio.CancelledError:
                 return
             except Exception as e:
-                logger.debug(f"Batch funding poll error on {self.exchange_id}: {e}")
+                consecutive_failures += 1
+                if consecutive_failures <= 3:
+                    logger.warning(
+                        f"Batch funding poll error on {self.exchange_id}: {e}",
+                        extra={"exchange": self.exchange_id, "retry": consecutive_failures},
+                    )
+                elif consecutive_failures % 10 == 0:
+                    logger.error(
+                        f"Batch funding poll has failed {consecutive_failures} times "
+                        f"in a row on {self.exchange_id} — cached data may be STALE: {e}",
+                        extra={"exchange": self.exchange_id, "retry": consecutive_failures},
+                    )
             await asyncio.sleep(poll_interval)
 
     async def _sequential_funding_poll_loop(self, symbols: List[str]) -> None:
@@ -259,6 +294,7 @@ class ExchangeAdapter:
         One task, 10 concurrent fetches, cycles through all symbols every ~60s.
         """
         sem = asyncio.Semaphore(10)
+        consecutive_full_failures = 0
         while True:
             try:
                 count = 0
@@ -274,6 +310,23 @@ class ExchangeAdapter:
                             pass
 
                 await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
+                if count == 0 and symbols:
+                    consecutive_full_failures += 1
+                    if consecutive_full_failures <= 3:
+                        logger.warning(
+                            f"Sequential funding refresh: 0/{len(symbols)} succeeded on {self.exchange_id}",
+                            extra={"exchange": self.exchange_id,
+                                   "retry": consecutive_full_failures},
+                        )
+                    elif consecutive_full_failures % 10 == 0:
+                        logger.error(
+                            f"Sequential funding poll fully failed {consecutive_full_failures} "
+                            f"cycles in a row on {self.exchange_id} — cached data may be STALE",
+                            extra={"exchange": self.exchange_id,
+                                   "retry": consecutive_full_failures},
+                        )
+                else:
+                    consecutive_full_failures = 0
                 logger.debug(
                     f"Sequential funding refresh: {count}/{len(symbols)} on {self.exchange_id}",
                     extra={"exchange": self.exchange_id},
@@ -281,7 +334,20 @@ class ExchangeAdapter:
             except asyncio.CancelledError:
                 return
             except Exception as e:
-                logger.debug(f"Sequential funding poll error on {self.exchange_id}: {e}")
+                consecutive_full_failures += 1
+                if consecutive_full_failures <= 3:
+                    logger.warning(
+                        f"Sequential funding poll error on {self.exchange_id}: {e}",
+                        extra={"exchange": self.exchange_id,
+                               "retry": consecutive_full_failures},
+                    )
+                elif consecutive_full_failures % 10 == 0:
+                    logger.error(
+                        f"Sequential funding poll error {consecutive_full_failures} "
+                        f"cycles in a row on {self.exchange_id}: {e}",
+                        extra={"exchange": self.exchange_id,
+                               "retry": consecutive_full_failures},
+                    )
             await asyncio.sleep(30)  # wait between full cycles
 
     async def disconnect(self) -> None:

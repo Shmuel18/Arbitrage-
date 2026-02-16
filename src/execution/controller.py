@@ -370,11 +370,83 @@ class ExecutionController:
                     f"| Short={short_filled_qty}/{short_order_qty} "
                     f"| Mismatch={qty_mismatch} | Fees=${float(entry_fees):.2f}"
                 )
-                if qty_mismatch:
-                    logger.warning(
-                        f"🔴 QUANTITY MISMATCH: L={long_filled_qty} != S={short_filled_qty} — "
-                        f"Unhedged exposure of {abs(long_filled_qty - short_filled_qty)}!"
+
+            # ── Delta correction: fix unhedged exposure from short partial fill ──
+            if qty_mismatch and long_filled_qty > short_filled_qty:
+                excess = long_filled_qty - short_filled_qty
+                logger.warning(
+                    f"🔴 DELTA CORRECTION: L={long_filled_qty} > S={short_filled_qty} — "
+                    f"trimming {excess} on {opp.long_exchange} (reduceOnly)"
+                )
+                try:
+                    trim_req = OrderRequest(
+                        exchange=opp.long_exchange,
+                        symbol=opp.symbol,
+                        side=OrderSide.SELL,
+                        quantity=excess,
+                        reduce_only=True,
                     )
+                    trim_fill = await self._place_with_timeout(long_adapter, trim_req)
+                    if trim_fill:
+                        trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
+                        long_filled_qty -= trimmed
+                        trim_fee = self._extract_fee(trim_fill)
+                        entry_fees += trim_fee
+                        logger.info(
+                            f"✅ Delta corrected: trimmed {trimmed} on {opp.long_exchange}, "
+                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
+                            f"unhedged {excess} on {opp.long_exchange}! MANUAL CHECK REQUIRED"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"❌ DELTA CORRECTION ERROR for {opp.symbol}: {e} — "
+                        f"unhedged {excess} on {opp.long_exchange}! MANUAL CHECK REQUIRED"
+                    )
+            elif qty_mismatch and short_filled_qty > long_filled_qty:
+                excess = short_filled_qty - long_filled_qty
+                logger.warning(
+                    f"🔴 DELTA CORRECTION: S={short_filled_qty} > L={long_filled_qty} — "
+                    f"trimming {excess} on {opp.short_exchange} (reduceOnly)"
+                )
+                try:
+                    trim_req = OrderRequest(
+                        exchange=opp.short_exchange,
+                        symbol=opp.symbol,
+                        side=OrderSide.BUY,
+                        quantity=excess,
+                        reduce_only=True,
+                    )
+                    trim_fill = await self._place_with_timeout(short_adapter, trim_req)
+                    if trim_fill:
+                        trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
+                        short_filled_qty -= trimmed
+                        trim_fee = self._extract_fee(trim_fill)
+                        entry_fees += trim_fee
+                        logger.info(
+                            f"✅ Delta corrected: trimmed {trimmed} on {opp.short_exchange}, "
+                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
+                            f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"❌ DELTA CORRECTION ERROR for {opp.symbol}: {e} — "
+                        f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
+                    )
+
+            # If after correction both legs are zero, abort trade
+            if long_filled_qty <= 0 or short_filled_qty <= 0:
+                logger.error(
+                    f"❌ [{opp.symbol}] No viable position after fills — aborting trade"
+                )
+                return
 
             trade = TradeRecord(
                 trade_id=trade_id,

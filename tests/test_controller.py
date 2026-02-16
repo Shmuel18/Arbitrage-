@@ -62,11 +62,17 @@ class TestHandleOpportunity:
         long_adapter.place_order.return_value = {
             "id": "o1", "filled": 0.008, "average": 50000, "status": "closed",
         }
+        # Short must match long's partial fill to stay delta-neutral
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        short_adapter.place_order.return_value = {
+            "id": "o2", "filled": 0.008, "average": 50000, "status": "closed",
+        }
 
         await controller.handle_opportunity(sample_opportunity)
 
         trade = list(controller._active_trades.values())[0]
         assert trade.long_qty == Decimal("0.008")
+        assert trade.short_qty == Decimal("0.008")  # delta neutral
 
 
 class TestCloseOrphan:
@@ -94,6 +100,36 @@ class TestCloseOrphan:
         assert len(controller._active_trades) == 0
         # Cooldown should be set
         mock_redis.set_cooldown.assert_called()
+
+
+class TestDeltaCorrection:
+    @pytest.mark.asyncio
+    async def test_trims_long_when_short_partial_fill(
+        self, controller, sample_opportunity, mock_exchange_mgr, mock_redis
+    ):
+        """If short leg partially fills, excess on long must be trimmed (reduceOnly)."""
+        call_count = 0
+
+        async def mock_place(adapter, req):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # long leg — full fill
+                return {"id": "o1", "filled": 0.01, "average": 50000, "status": "closed"}
+            if call_count == 2:  # short leg — partial fill (only 0.007)
+                return {"id": "o2", "filled": 0.007, "average": 50000, "status": "closed"}
+            # call_count == 3 → trim order on long side (reduceOnly)
+            return {"id": "o3", "filled": 0.003, "average": 50000, "status": "closed"}
+
+        controller._place_with_timeout = mock_place
+        await controller.handle_opportunity(sample_opportunity)
+
+        # Trade should be opened with balanced quantities
+        assert len(controller._active_trades) == 1
+        trade = list(controller._active_trades.values())[0]
+        assert trade.long_qty == trade.short_qty  # delta neutral
+        assert trade.long_qty == Decimal("0.007")
+        # 3 orders placed: long, short, trim
+        assert call_count == 3
 
 
 class TestRecovery:
