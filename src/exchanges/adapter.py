@@ -31,6 +31,8 @@ class ExchangeAdapter:
         self._instrument_cache: Dict[str, InstrumentSpec] = {}
         self._settings_applied: set = set()
         self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
+        # Symbol mapping: normalized (USDT) → original exchange symbol (e.g. USD for Kraken)
+        self._symbol_map: Dict[str, str] = {}
         self._ws_tasks: List = []  # Track running WebSocket tasks
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
@@ -70,20 +72,117 @@ class ExchangeAdapter:
                 extra={"exchange": self.exchange_id, "action": "load_markets_partial"},
             )
 
-        # Filter to ACTIVE USDT-settled linear perpetuals only
+        # Filter to ACTIVE linear perpetuals settled in USDT or USD
         filtered = {
             k: v for k, v in self._exchange.markets.items()
-            if v.get("swap") and v.get("linear") and v.get("settle") == "USDT"
+            if v.get("swap") and v.get("linear")
+            and v.get("settle") in ("USDT", "USD")
             and v.get("active") is not False  # exclude delisted/settling markets
         }
-        self._exchange.markets = filtered
-        self._exchange.symbols = list(filtered.keys())
+
+        # Normalize USD-settled symbols to USDT format for cross-exchange matching
+        # e.g. Kraken "BTC/USD:USD" → "BTC/USDT:USDT"
+        remapped: Dict[str, Any] = {}
+        self._symbol_map = {}
+        for orig_sym, mkt in filtered.items():
+            if mkt.get("settle") == "USD":
+                norm_sym = orig_sym.replace("/USD:USD", "/USDT:USDT")
+                self._symbol_map[norm_sym] = orig_sym
+                remapped[norm_sym] = mkt
+                # Keep original key too so ccxt internal lookups work
+                remapped[orig_sym] = mkt
+            else:
+                remapped[orig_sym] = mkt
+
+        self._exchange.markets = remapped
+        # Only expose normalized symbols (not the USD originals) to scanner
+        normalized_symbols = [
+            s for s in remapped
+            if s not in self._symbol_map.values()  # exclude raw USD keys
+        ]
+        self._exchange.symbols = normalized_symbols
+
+        # krakenfutures has ccxt bugs in parse_funding_rate:
+        # 1) String comparison instead of numeric for clamping (positive rates → -0.25)
+        # 2) Precise.string_div returns None → crashes batch fetch
+        # Fix: monkey-patch parse_funding_rate with corrected logic
+        # Also: batch fetch_funding_rates still fails because ccxt tries to parse
+        # non-swap instruments (e.g. FI_XRPUSD_250131) → keep batch off
+        if self._cfg.get("ccxt_id", self.exchange_id) == "krakenfutures":
+            self._patch_kraken_funding_parser()
+            self._batch_funding_supported = False
+
+        if self._symbol_map:
+            logger.info(
+                f"{self.exchange_id}: remapped {len(self._symbol_map)} USD→USDT symbols",
+                extra={"exchange": self.exchange_id, "action": "symbol_remap"},
+            )
 
         logger.info(
             f"Connected to {self.exchange_id}",
             extra={"exchange": self.exchange_id,
                    "action": "connect",
                    "data": {"markets": len(filtered)}},
+        )
+
+    def _patch_kraken_funding_parser(self) -> None:
+        """Monkey-patch krakenfutures.parse_funding_rate to fix ccxt bugs.
+        
+        ccxt bug: uses string comparison ('0.00001' > '-0.25' → True) instead of
+        numeric for clamping, causing ALL positive rates to become -0.25.
+        Also: Precise.string_div can return None, crashing batch fetch.
+        """
+        ex = self._exchange
+
+        def _patched_parse_funding_rate(ticker, market=None):
+            market_id = ex.safe_string(ticker, 'symbol')
+            symbol = ex.symbol(market_id)
+            timestamp = ex.parse8601(ex.safe_string(ticker, 'lastTime'))
+            mark_price_str = ex.safe_string(ticker, 'markPrice')
+            funding_rate_str = ex.safe_string(ticker, 'fundingRate')
+            next_rate_str = ex.safe_string(ticker, 'fundingRatePrediction')
+
+            # Compute rate = fundingRate / markPrice (safe numeric division)
+            funding_rate = None
+            next_funding_rate = None
+            try:
+                if funding_rate_str and mark_price_str:
+                    fr = float(funding_rate_str) / float(mark_price_str)
+                    funding_rate = max(-0.25, min(0.25, fr))
+            except (ValueError, ZeroDivisionError):
+                pass
+            try:
+                if next_rate_str and mark_price_str:
+                    nfr = float(next_rate_str) / float(mark_price_str)
+                    next_funding_rate = max(-0.25, min(0.25, nfr))
+            except (ValueError, ZeroDivisionError):
+                pass
+
+            return {
+                'info': ticker,
+                'symbol': symbol,
+                'markPrice': ex.parse_number(mark_price_str),
+                'indexPrice': ex.safe_number(ticker, 'indexPrice'),
+                'interestRate': None,
+                'estimatedSettlePrice': None,
+                'timestamp': timestamp,
+                'datetime': ex.iso8601(timestamp),
+                'fundingRate': funding_rate,
+                'fundingTimestamp': None,
+                'fundingDatetime': None,
+                'nextFundingRate': next_funding_rate,
+                'nextFundingTimestamp': None,
+                'nextFundingDatetime': None,
+                'previousFundingRate': None,
+                'previousFundingTimestamp': None,
+                'previousFundingDatetime': None,
+                'interval': '1h',
+            }
+
+        ex.parse_funding_rate = _patched_parse_funding_rate
+        logger.debug(
+            f"Patched parse_funding_rate on {self.exchange_id}",
+            extra={"exchange": self.exchange_id},
         )
 
     async def verify_credentials(self) -> bool:
@@ -98,9 +197,28 @@ class ExchangeAdapter:
             )
             return False
 
+    def _resolve_symbol(self, symbol: str) -> str:
+        """Return the original exchange symbol for ccxt API calls.
+        
+        For most exchanges this is identity. For Kraken, maps e.g.
+        'BTC/USDT:USDT' back to 'BTC/USD:USD'.
+        """
+        return self._symbol_map.get(symbol, symbol)
+
+    def _normalize_symbol(self, orig_symbol: str) -> str:
+        """Return normalized (USDT) symbol from an original exchange symbol.
+        
+        Reverse of _resolve_symbol. For batch API results from Kraken,
+        maps 'BTC/USD:USD' back to 'BTC/USDT:USDT'.
+        """
+        # Build reverse map on first call
+        if not hasattr(self, '_reverse_symbol_map'):
+            self._reverse_symbol_map = {v: k for k, v in self._symbol_map.items()}
+        return self._reverse_symbol_map.get(orig_symbol, orig_symbol)
+
     async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
         """Start funding rate polling — batch if supported, per-symbol otherwise."""
-        eligible = [s for s in symbols if s in self._exchange.markets]
+        eligible = [s for s in symbols if s in self._exchange.symbols]
         if not eligible:
             logger.info(
                 f"Starting funding rate polling for 0 symbols",
@@ -186,7 +304,7 @@ class ExchangeAdapter:
         """Watch funding rate via WebSocket (ccxt.pro)."""
         while True:
             try:
-                data = await self._exchange.watch_funding_rate(symbol)
+                data = await self._exchange.watch_funding_rate(self._resolve_symbol(symbol))
                 self._update_funding_cache(symbol, data)
                 logger.debug(
                     f"WS funding update: {symbol}",
@@ -200,27 +318,46 @@ class ExchangeAdapter:
         """Fast polling fallback every 5 seconds."""
         while True:
             try:
-                data = await self._exchange.fetch_funding_rate(symbol)
+                data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
                 self._update_funding_cache(symbol, data)
                 await asyncio.sleep(5)  # Poll every 5 seconds instead of 30s scan
             except Exception as e:
                 logger.debug(f"Funding poll error for {symbol}: {e}")
                 await asyncio.sleep(5)
 
+    # Maximum plausible absolute funding rate per interval (1% = 0.01)
+    _MAX_SANE_RATE = Decimal("0.01")
+
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
+        rate = Decimal(str(data.get("fundingRate", 0)))
+
+        # Sanity check: skip obviously broken rates (e.g. Kraken returning -0.25)
+        if abs(rate) > self._MAX_SANE_RATE:
+            logger.debug(
+                f"Skipping insane funding rate {rate} for {symbol} on {self.exchange_id}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return
+
         interval_hours = self._get_funding_interval(symbol, data)
         next_ts = data.get("fundingTimestamp")
 
+        now_ms = _time.time() * 1000
+        interval_ms = interval_hours * 3_600_000
+
+        # If exchange doesn't provide next funding time, compute it from interval
+        # (e.g. Kraken 1h funding → next full hour boundary)
+        if not next_ts and interval_ms > 0:
+            next_ts = (int(now_ms // interval_ms) + 1) * interval_ms
+
         # If next_timestamp is in the past, advance by interval until future
-        if next_ts:
-            now_ms = _time.time() * 1000
-            interval_ms = interval_hours * 3_600_000
-            while next_ts <= now_ms and interval_ms > 0:
+        if next_ts and interval_ms > 0:
+            while next_ts <= now_ms:
                 next_ts += interval_ms
 
         self._funding_rate_cache[symbol] = {
-            "rate": Decimal(str(data.get("fundingRate", 0))),
+            "rate": rate,
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
             "next_timestamp": next_ts,
@@ -233,30 +370,34 @@ class ExchangeAdapter:
 
     async def warm_up_funding_rates(self, symbols: List[str] = None) -> int:
         """Batch-fetch ALL funding rates in one API call to pre-populate cache.
-        Falls back to per-symbol fetch if batch not supported (e.g. KuCoin)."""
-        # Try batch first
-        try:
-            all_rates = await self._exchange.fetch_funding_rates(symbols)
-            count = 0
-            for symbol, data in all_rates.items():
-                if symbol in self._exchange.markets:
-                    self._update_funding_cache(symbol, data)
-                    count += 1
-            logger.info(
-                f"Warmed up {count} funding rates on {self.exchange_id}",
-                extra={"exchange": self.exchange_id, "action": "funding_warm_up"},
-            )
-            return count
-        except Exception as e:
-            self._batch_funding_supported = False
-            logger.warning(
-                f"Batch fetch not supported on {self.exchange_id}, using per-symbol warmup",
-                extra={"exchange": self.exchange_id, "action": "funding_warm_up_fallback"},
-            )
+        Falls back to per-symbol fetch if batch not supported (e.g. KuCoin, Kraken)."""
+        if not symbols:
+            symbols = [s for s in self._exchange.symbols
+                       if s in self._exchange.markets]
+
+        # Try batch first (if supported)
+        if self._batch_funding_supported:
+            try:
+                all_rates = await self._exchange.fetch_funding_rates()
+                count = 0
+                for sym_raw, data in all_rates.items():
+                    symbol = self._normalize_symbol(sym_raw)
+                    if symbol in self._exchange.symbols:
+                        self._update_funding_cache(symbol, data)
+                        count += 1
+                logger.info(
+                    f"Warmed up {count} funding rates on {self.exchange_id}",
+                    extra={"exchange": self.exchange_id, "action": "funding_warm_up"},
+                )
+                return count
+            except Exception as e:
+                self._batch_funding_supported = False
+                logger.warning(
+                    f"Batch fetch not supported on {self.exchange_id}, using per-symbol warmup",
+                    extra={"exchange": self.exchange_id, "action": "funding_warm_up_fallback"},
+                )
 
         # Fallback: per-symbol fetch with concurrency limit
-        if not symbols:
-            symbols = list(self._exchange.markets.keys())
         sem = asyncio.Semaphore(20)
         count = 0
 
@@ -264,7 +405,7 @@ class ExchangeAdapter:
             nonlocal count
             async with sem:
                 try:
-                    data = await self._exchange.fetch_funding_rate(sym)
+                    data = await self._exchange.fetch_funding_rate(self._resolve_symbol(sym))
                     self._update_funding_cache(sym, data)
                     count += 1
                 except Exception:
@@ -286,9 +427,10 @@ class ExchangeAdapter:
                 # Fetch without symbol filter — avoids OKX "must be same type" error
                 all_rates = await self._exchange.fetch_funding_rates()
                 count = 0
-                for symbol, data in all_rates.items():
-                    if symbol in self._exchange.markets:
-                        self._update_funding_cache(symbol, data)
+                for sym_raw, data in all_rates.items():
+                    sym = self._normalize_symbol(sym_raw)
+                    if sym in self._exchange.symbols:
+                        self._update_funding_cache(sym, data)
                         count += 1
                 consecutive_failures = 0
                 logger.debug(
@@ -327,7 +469,7 @@ class ExchangeAdapter:
                     nonlocal count
                     async with sem:
                         try:
-                            data = await self._exchange.fetch_funding_rate(sym)
+                            data = await self._exchange.fetch_funding_rate(self._resolve_symbol(sym))
                             self._update_funding_cache(sym, data)
                             count += 1
                         except Exception:
@@ -387,6 +529,7 @@ class ExchangeAdapter:
         if symbol in self._settings_applied:
             return
         ex = self._exchange
+        native_sym = self._resolve_symbol(symbol)  # use original symbol for exchange API
         lev_raw = self._cfg.get("leverage", 1) or 1
         max_lev = int(self._cfg.get("max_leverage", 125) or 125)
         lev = max(1, min(int(lev_raw), max_lev))
@@ -399,7 +542,7 @@ class ExchangeAdapter:
         try:
             if hasattr(ex, "set_margin_mode"):
                 mode_params = {"lever": str(lev)} if self.exchange_id == "okx" else {}
-                await ex.set_margin_mode(margin, symbol, mode_params)
+                await ex.set_margin_mode(margin, native_sym, mode_params)
                 logger.info(f"{self.exchange_id} {symbol}: margin mode → {margin}",
                             extra={"exchange": self.exchange_id, "symbol": symbol})
         except Exception as e:
@@ -417,7 +560,7 @@ class ExchangeAdapter:
                     lev_params = {"marginMode": "cross"}
                 else:
                     lev_params = {}
-                await ex.set_leverage(lev, symbol, lev_params)
+                await ex.set_leverage(lev, native_sym, lev_params)
                 logger.info(f"{self.exchange_id} {symbol}: leverage → {lev}x",
                             extra={"exchange": self.exchange_id, "symbol": symbol})
         except Exception as e:
@@ -430,7 +573,7 @@ class ExchangeAdapter:
         try:
             if hasattr(ex, "set_position_mode"):
                 hedged = (pos_mode == "hedged")
-                await ex.set_position_mode(hedged, symbol)
+                await ex.set_position_mode(hedged, native_sym)
         except Exception as e:
             msg = str(e).lower()
             if not any(kw.lower() in msg for kw in ok_keywords):
@@ -449,7 +592,7 @@ class ExchangeAdapter:
         if symbol in self._instrument_cache:
             return self._instrument_cache[symbol]
 
-        mkt = self._exchange.market(symbol)
+        mkt = self._exchange.markets.get(symbol)
         if not mkt:
             return None
 
@@ -469,22 +612,32 @@ class ExchangeAdapter:
         return spec
 
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:
-        return await self._exchange.fetch_ticker(symbol)
+        return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
 
     async def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
-        data = await self._exchange.fetch_funding_rate(symbol)
+        data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
         interval_hours = self._get_funding_interval(symbol, data)
         next_ts = data.get("fundingTimestamp")
+        rate = Decimal(str(data.get("fundingRate", 0)))
+
+        # Sanity check: clamp insane rates to zero
+        if abs(rate) > self._MAX_SANE_RATE:
+            rate = Decimal("0")
 
         # If next_timestamp is in the past, advance by interval until future
-        if next_ts:
-            now_ms = _time.time() * 1000
-            interval_ms = interval_hours * 3_600_000
-            while next_ts <= now_ms and interval_ms > 0:
+        now_ms = _time.time() * 1000
+        interval_ms = interval_hours * 3_600_000
+
+        # If exchange doesn't provide next funding time, compute from interval
+        if not next_ts and interval_ms > 0:
+            next_ts = (int(now_ms // interval_ms) + 1) * interval_ms
+
+        if next_ts and interval_ms > 0:
+            while next_ts <= now_ms:
                 next_ts += interval_ms
 
         return {
-            "rate": Decimal(str(data.get("fundingRate", 0))),
+            "rate": rate,
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
             "next_timestamp": next_ts,
@@ -502,7 +655,7 @@ class ExchangeAdapter:
                 pass
 
         # 2) Market info (Bybit provides fundingInterval in minutes)
-        mkt = self._exchange.market(symbol) if symbol in self._exchange.markets else None
+        mkt = self._exchange.markets.get(symbol)
         if mkt:
             info = mkt.get("info", {})
             # Bybit: fundingInterval (minutes)
@@ -520,7 +673,10 @@ class ExchangeAdapter:
 
     async def get_balance(self) -> Dict[str, Any]:
         bal = await self._exchange.fetch_balance()
+        # Try USDT first, fall back to USD (e.g. Kraken Futures settles in USD)
         usdt = bal.get("USDT", {})
+        if not usdt.get("total"):
+            usdt = bal.get("USD", {})
         return {
             "total": Decimal(str(usdt.get("total", 0) or 0)),
             "free":  Decimal(str(usdt.get("free", 0) or 0)),
@@ -528,7 +684,7 @@ class ExchangeAdapter:
         }
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
-        symbols = [symbol] if symbol else None
+        symbols = [self._resolve_symbol(symbol)] if symbol else None
         raw = await self._exchange.fetch_positions(symbols)
         positions: List[Position] = []
         for p in raw:
@@ -537,8 +693,8 @@ class ExchangeAdapter:
                 continue
 
             # Convert from contracts to base currency (tokens)
-            sym = p["symbol"]
-            mkt = self._exchange.market(sym) if sym in self._exchange.markets else None
+            sym = self._normalize_symbol(p["symbol"])  # convert back to normalized
+            mkt = self._exchange.markets.get(sym)
             contract_sz = float(mkt.get("contractSize", 1) or 1) if mkt else 1.0
             amt_base = amt * contract_sz
 
@@ -601,7 +757,7 @@ class ExchangeAdapter:
             native_qty = max(native_qty, lot)
 
         order = await self._exchange.create_order(
-            symbol=req.symbol,
+            symbol=self._resolve_symbol(req.symbol),
             type="market",
             side=req.side.value,
             amount=native_qty,

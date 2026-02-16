@@ -217,7 +217,7 @@ class Scanner:
             return []
 
         # Get all symbols available on at least 2 exchanges (not just ALL)
-        symbol_sets = [set(adapters[eid]._exchange.markets.keys()) for eid in exchange_ids]
+        symbol_sets = [set(adapters[eid]._exchange.symbols) for eid in exchange_ids]
         all_symbols = set.union(*symbol_sets)
         symbol_counts = {s: sum(1 for ss in symbol_sets if s in ss) for s in all_symbols}
         common_symbols = {s for s, c in symbol_counts.items() if c >= 2}
@@ -274,7 +274,7 @@ class Scanner:
 
         # Fetch funding from in-memory cache (updated by WebSocket)
         funding: Dict[str, dict] = {}
-        eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid]._exchange.markets]
+        eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid]._exchange.symbols]
         if len(eligible_eids) < 2:
             return []
         

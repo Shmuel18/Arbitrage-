@@ -104,6 +104,7 @@ def mock_adapter(btc_spec):
     # Mock exchange markets for scanner symbol intersection
     adapter._exchange = MagicMock()
     adapter._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
+    adapter._exchange.symbols = ["BTC/USDT", "ETH/USDT"]
     # Add funding rate cache for WebSocket-based scanner
     adapter._funding_rate_cache = {}
     adapter.get_funding_rate_cached = lambda sym: adapter._funding_rate_cache.get(sym)
@@ -133,6 +134,7 @@ def mock_exchange_mgr(mock_adapter):
     # Mock exchange markets for scanner symbol intersection
     adapter_b._exchange = MagicMock()
     adapter_b._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
+    adapter_b._exchange.symbols = ["BTC/USDT", "ETH/USDT"]
     # Add funding rate cache for WebSocket-based scanner
     adapter_b._funding_rate_cache = {}
     adapter_b.get_funding_rate_cached = lambda sym: adapter_b._funding_rate_cache.get(sym)
