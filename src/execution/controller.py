@@ -601,6 +601,7 @@ class ExecutionController:
             short_interval_hours=short_interval,
         )
         current_spread = spread_info["funding_spread_pct"]
+        current_immediate = spread_info["immediate_spread_pct"]
 
         # Read latest opportunities from Redis
         try:
@@ -615,20 +616,39 @@ class ExecutionController:
 
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         now_ms = _time.time() * 1000
-        threshold = current_spread + upgrade_delta
+        threshold_cross = current_spread + upgrade_delta       # cross-symbol (8h-norm)
+        threshold_same = current_immediate + upgrade_delta     # same-symbol pair switch
 
         for cand in candidates:
-            # Must be qualified and a different symbol
             if not cand.get("qualified", False):
                 continue
-            if cand.get("symbol") == trade.symbol:
-                continue
 
+            cand_symbol = cand.get("symbol", "")
+            cand_long = cand.get("long_exchange", "")
+            cand_short = cand.get("short_exchange", "")
             cand_spread = Decimal(str(cand.get("immediate_spread_pct", 0)))
-            if cand_spread < threshold:
-                continue
+            same_symbol = cand_symbol == trade.symbol
 
-            # Must be in the 15-min entry window
+            if same_symbol:
+                # Same symbol — only upgrade if the exchange pair is DIFFERENT
+                if cand_long == trade.long_exchange and cand_short == trade.short_exchange:
+                    continue
+                # Ensure candidate's exchanges aren't busy with OTHER trades
+                other_busy: set[str] = set()
+                for t in self._active_trades.values():
+                    if t.trade_id != trade.trade_id:
+                        other_busy.add(t.long_exchange)
+                        other_busy.add(t.short_exchange)
+                if cand_long in other_busy or cand_short in other_busy:
+                    continue
+                # Compare immediate spreads (same symbol = same time horizon)
+                if cand_spread < threshold_same:
+                    continue
+            else:
+                if cand_spread < threshold_cross:
+                    continue
+
+            # Must be in the entry window
             next_ms = cand.get("next_funding_ms")
             if next_ms is None:
                 continue
@@ -642,16 +662,20 @@ class ExecutionController:
                 hold_min = int(
                     (datetime.now(timezone.utc) - trade.opened_at).total_seconds() / 60
                 )
+            upgrade_type = "PAIR SWITCH" if same_symbol else "UPGRADE"
+            cur_display = float(current_immediate) if same_symbol else float(current_spread)
             logger.info(
-                f"⬆️  UPGRADE: closing {trade.symbol} (spread {float(current_spread):.4f}%) "
-                f"for {cand['symbol']} (spread {float(cand_spread):.4f}%) — "
-                f"delta {float(cand_spread - current_spread):.4f}% ≥ {float(upgrade_delta):.2f}% "
-                f"(held {hold_min}min)",
+                f"⬆️  {upgrade_type}: closing {trade.symbol} on "
+                f"{trade.long_exchange}↔{trade.short_exchange} (spread {cur_display:.4f}%) "
+                f"→ {cand_symbol} on {cand_long}↔{cand_short} (spread {float(cand_spread):.4f}%) — "
+                f"delta {float(cand_spread - (current_immediate if same_symbol else current_spread)):.4f}% "
+                f"≥ {float(upgrade_delta):.2f}% (held {hold_min}min)",
                 extra={
                     "trade_id": trade.trade_id,
                     "symbol": trade.symbol,
                     "action": "upgrade_exit",
-                    "upgrade_to": cand["symbol"],
+                    "upgrade_to": cand_symbol,
+                    "upgrade_pair": f"{cand_long}_{cand_short}",
                 },
             )
             await self._close_trade(trade)
@@ -696,10 +720,16 @@ class ExecutionController:
             return
 
         # Track next funding time per exchange (update when stale)
+        # _funding_paid_* flags indicate we already collected this cycle's payment
+        # and are in continuous hold-or-exit monitoring. Don't advance trackers
+        # until we explicitly decide to HOLD for the next cycle.
         long_next_ts = long_funding.get("next_timestamp")
         if long_next_ts:
             candidate_long = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
-            if not trade.next_funding_long or trade.next_funding_long < now:
+            if not trade.next_funding_long or (
+                trade.next_funding_long < now
+                and not getattr(trade, '_funding_paid_long', False)
+            ):
                 trade.next_funding_long = candidate_long
                 li = long_funding.get("interval_hours", "?")
                 logger.info(f"Trade {trade.trade_id}: {trade.long_exchange} next at "
@@ -708,7 +738,10 @@ class ExecutionController:
         short_next_ts = short_funding.get("next_timestamp")
         if short_next_ts:
             candidate_short = datetime.fromtimestamp(short_next_ts / 1000, tz=timezone.utc)
-            if not trade.next_funding_short or trade.next_funding_short < now:
+            if not trade.next_funding_short or (
+                trade.next_funding_short < now
+                and not getattr(trade, '_funding_paid_short', False)
+            ):
                 trade.next_funding_short = candidate_short
                 si = short_funding.get("interval_hours", "?")
                 logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
@@ -734,6 +767,15 @@ class ExecutionController:
         
         long_str = f"{long_until}min" if long_until is not None else "?"
         short_str = f"{short_until}min" if short_until is not None else "?"
+        # If funding already paid, show next funding from API instead
+        if long_until is not None and long_until < 0 and long_next_ts:
+            api_long = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
+            api_long_min = int((api_long - now).total_seconds() / 60)
+            long_str = f"PAID (next {api_long_min}min)"
+        if short_until is not None and short_until < 0 and short_next_ts:
+            api_short = datetime.fromtimestamp(short_next_ts / 1000, tz=timezone.utc)
+            api_short_min = int((api_short - now).total_seconds() / 60)
+            short_str = f"PAID (next {api_short_min}min)"
         
         logger.info(
             f"🔔 {trade.symbol}: Immediate Spread = {float(immediate_spread):.4f}% "
@@ -761,11 +803,21 @@ class ExecutionController:
         if not (long_paid or short_paid):
             return
 
+        # Mark that this cycle's funding has been collected —
+        # prevents tracker auto-advance so we keep checking every 30s.
+        if long_paid:
+            trade._funding_paid_long = True
+        if short_paid:
+            trade._funding_paid_short = True
+
         which_paid = "long" if long_paid else "short"
-        logger.info(
-            f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — closing",
-            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
-        )
+        # Log first detection only (avoid spamming every 30s)
+        if not getattr(trade, '_exit_check_active', False):
+            trade._exit_check_active = True
+            logger.info(
+                f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — evaluating hold/exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
+            )
 
         # Check if still profitable to hold (funding spread)
         quick_cycle = getattr(self._cfg.trading_params, 'quick_cycle', False)
@@ -781,31 +833,31 @@ class ExecutionController:
             )
 
             if immediate_spread >= hold_min_spread:
-                # Spread is still good → HOLD for next payment cycle
-                # Advance trackers to next payment
-                long_next = long_funding.get("next_timestamp")
-                short_next = short_funding.get("next_timestamp")
-                if long_next:
-                    trade.next_funding_long = datetime.fromtimestamp(
+                # Spread is still good — keep holding.
+                # Log HOLD decision periodically (every 5 min) to avoid spam.
+                # Do NOT advance trackers — keep gate open so we check every 30s.
+                if not getattr(trade, '_hold_logged_until', None) or trade._hold_logged_until < now:
+                    # Show next funding from API (for display only)
+                    long_next = long_funding.get("next_timestamp")
+                    short_next = short_funding.get("next_timestamp")
+                    next_long_str = datetime.fromtimestamp(
                         long_next / 1000, tz=timezone.utc
-                    )
-                if short_next:
-                    trade.next_funding_short = datetime.fromtimestamp(
+                    ).strftime('%H:%M') if long_next else '?'
+                    next_short_str = datetime.fromtimestamp(
                         short_next / 1000, tz=timezone.utc
+                    ).strftime('%H:%M') if short_next else '?'
+                    trade._hold_logged_until = now + timedelta(minutes=5)
+                    logger.info(
+                        f"🔄 Trade {trade.trade_id}: HOLD — immediate spread {float(immediate_spread):.4f}% "
+                        f"≥ {float(hold_min_spread):.2f}% threshold (held {hold_min}min) | "
+                        f"Next funding: {trade.long_exchange}={next_long_str}, "
+                        f"{trade.short_exchange}={next_short_str}",
+                        extra={
+                            "trade_id": trade.trade_id,
+                            "symbol": trade.symbol,
+                            "action": "hold_after_payment",
+                        },
                     )
-                logger.info(
-                    f"🔄 Trade {trade.trade_id}: HOLD — immediate spread {float(immediate_spread):.4f}% "
-                    f"≥ {float(hold_min_spread):.2f}% threshold (held {hold_min}min) | "
-                    f"Next: {trade.long_exchange}="
-                    f"{trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
-                    f"{trade.short_exchange}="
-                    f"{trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}",
-                    extra={
-                        "trade_id": trade.trade_id,
-                        "symbol": trade.symbol,
-                        "action": "hold_after_payment",
-                    },
-                )
                 return
             else:
                 # Spread dropped below threshold → EXIT
