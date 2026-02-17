@@ -25,6 +25,7 @@ from src.core.contracts import (
     OpportunityCandidate,
     OrderRequest,
     OrderSide,
+    Position,
     TradeRecord,
     TradeState,
 )
@@ -543,8 +544,15 @@ class ExecutionController:
     # ── Exit monitor ─────────────────────────────────────────────
 
     async def _exit_monitor_loop(self) -> None:
+        reconcile_counter = 0
         while self._running:
             try:
+                # ── Position reconciliation every ~2 min (4 × 30s) ──
+                reconcile_counter += 1
+                if reconcile_counter >= 4:
+                    reconcile_counter = 0
+                    await self._reconcile_positions()
+
                 for trade_id in list(self._active_trades):
                     trade = self._active_trades.get(trade_id)
                     if not trade or trade.state != TradeState.OPEN:
@@ -576,12 +584,14 @@ class ExecutionController:
         if upgrade_delta <= 0:
             return False
 
-        # Get current trade's live spread
+        # Get current trade's spread from cache (no REST call)
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
         try:
-            long_funding = await long_adapter.get_funding_rate(trade.symbol)
-            short_funding = await short_adapter.get_funding_rate(trade.symbol)
+            long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
+            short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
+            if not long_funding or not short_funding:
+                return False
         except Exception:
             return False
 
@@ -677,30 +687,31 @@ class ExecutionController:
                 )
                 return
 
-        # ── HOLD: wait for both sides to pay, then re-evaluate ───
+        # ── HOLD: use cached rates (no REST call) ─────────────────
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
 
-        try:
-            long_funding = await long_adapter.get_funding_rate(trade.symbol)
-            short_funding = await short_adapter.get_funding_rate(trade.symbol)
-        except Exception as e:
-            logger.warning(f"Funding fetch failed for exit check on {trade.symbol}: {e}")
+        long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
+        short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
+        if not long_funding or not short_funding:
+            logger.debug(f"No cached funding for {trade.symbol} — skipping exit check")
             return
 
-        # Track next funding time per exchange
-        if not trade.next_funding_long:
-            long_next = long_funding.get("next_timestamp")
-            if long_next:
-                trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
+        # Track next funding time per exchange (update when stale)
+        long_next_ts = long_funding.get("next_timestamp")
+        if long_next_ts:
+            candidate_long = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
+            if not trade.next_funding_long or trade.next_funding_long < now:
+                trade.next_funding_long = candidate_long
                 li = long_funding.get("interval_hours", "?")
                 logger.info(f"Trade {trade.trade_id}: {trade.long_exchange} next at "
                             f"{trade.next_funding_long.strftime('%H:%M UTC')} (every {li}h)")
 
-        if not trade.next_funding_short:
-            short_next = short_funding.get("next_timestamp")
-            if short_next:
-                trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
+        short_next_ts = short_funding.get("next_timestamp")
+        if short_next_ts:
+            candidate_short = datetime.fromtimestamp(short_next_ts / 1000, tz=timezone.utc)
+            if not trade.next_funding_short or trade.next_funding_short < now:
+                trade.next_funding_short = candidate_short
                 si = short_funding.get("interval_hours", "?")
                 logger.info(f"Trade {trade.trade_id}: {trade.short_exchange} next at "
                             f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
@@ -843,6 +854,130 @@ class ExecutionController:
                 f"Next payment: {trade.long_exchange}={trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
                 f"{trade.short_exchange}={trade.next_funding_short.strftime('%H:%M') if trade.next_funding_short else '?'}"
             )
+
+    # ── Position reconciliation (detect manual closes) ──────────
+
+    async def _reconcile_positions(self) -> None:
+        """Detect trades that were manually closed on the exchange.
+
+        For each active OPEN trade, fetch real positions from both exchanges.
+        - Both legs gone   -> fully manually closed -> clean up state
+        - One leg gone     -> partial manual close  -> close remaining leg
+        - Both legs exist  -> normal, do nothing
+        """
+        if not self._active_trades:
+            return
+
+        # Collect exchanges that have active trades
+        exchanges_needed: set[str] = set()
+        for trade in self._active_trades.values():
+            if trade.state == TradeState.OPEN:
+                exchanges_needed.add(trade.long_exchange)
+                exchanges_needed.add(trade.short_exchange)
+
+        if not exchanges_needed:
+            return
+
+        # One REST call per exchange to get all positions
+        exchange_positions: Dict[str, List[Position]] = {}
+        for exch_id in exchanges_needed:
+            adapter = self._exchanges.get(exch_id)
+            if not adapter:
+                continue
+            try:
+                positions = await adapter.get_positions()
+                exchange_positions[exch_id] = positions
+            except Exception as e:
+                logger.warning(
+                    f"Reconcile: failed to fetch positions from {exch_id}: {e}",
+                    extra={"exchange": exch_id, "action": "reconcile_error"},
+                )
+                # Don't act on incomplete data — skip this cycle entirely
+                return
+
+        # Check each active trade against real positions
+        for trade_id in list(self._active_trades):
+            trade = self._active_trades.get(trade_id)
+            if not trade or trade.state != TradeState.OPEN:
+                continue
+
+            long_positions = exchange_positions.get(trade.long_exchange, [])
+            short_positions = exchange_positions.get(trade.short_exchange, [])
+
+            long_exists = any(
+                p.symbol == trade.symbol and p.side == OrderSide.BUY
+                for p in long_positions
+            )
+            short_exists = any(
+                p.symbol == trade.symbol and p.side == OrderSide.SELL
+                for p in short_positions
+            )
+
+            if long_exists and short_exists:
+                continue  # both legs intact
+
+            if not long_exists and not short_exists:
+                # ── Fully manually closed ─────────────────────────
+                logger.warning(
+                    f"MANUAL CLOSE DETECTED: Trade {trade.trade_id} ({trade.symbol}) -- "
+                    f"no positions on {trade.long_exchange} or {trade.short_exchange}. "
+                    f"Removing from active trades.",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "manual_close_detected",
+                    },
+                )
+                trade.state = TradeState.CLOSED
+                trade.closed_at = datetime.now(timezone.utc)
+                await self._redis.delete_trade_state(trade.trade_id)
+                del self._active_trades[trade.trade_id]
+
+            elif not long_exists:
+                # ── Long leg gone, short remains ──────────────────
+                logger.warning(
+                    f"PARTIAL MANUAL CLOSE: Trade {trade.trade_id} ({trade.symbol}) -- "
+                    f"long on {trade.long_exchange} GONE. "
+                    f"Closing remaining short on {trade.short_exchange}.",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "partial_manual_close",
+                    },
+                )
+                short_adapter = self._exchanges.get(trade.short_exchange)
+                if short_adapter:
+                    await self._close_orphan(
+                        short_adapter, trade.short_exchange, trade.symbol,
+                        OrderSide.BUY, {"filled": float(trade.short_qty)},
+                    )
+                trade.state = TradeState.CLOSED
+                trade.closed_at = datetime.now(timezone.utc)
+                await self._redis.delete_trade_state(trade.trade_id)
+                del self._active_trades[trade.trade_id]
+
+            else:
+                # ── Short leg gone, long remains ──────────────────
+                logger.warning(
+                    f"PARTIAL MANUAL CLOSE: Trade {trade.trade_id} ({trade.symbol}) -- "
+                    f"short on {trade.short_exchange} GONE. "
+                    f"Closing remaining long on {trade.long_exchange}.",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "partial_manual_close",
+                    },
+                )
+                long_adapter = self._exchanges.get(trade.long_exchange)
+                if long_adapter:
+                    await self._close_orphan(
+                        long_adapter, trade.long_exchange, trade.symbol,
+                        OrderSide.SELL, {"filled": float(trade.long_qty)},
+                    )
+                trade.state = TradeState.CLOSED
+                trade.closed_at = datetime.now(timezone.utc)
+                await self._redis.delete_trade_state(trade.trade_id)
+                del self._active_trades[trade.trade_id]
 
     # ── Close trade ──────────────────────────────────────────────
 

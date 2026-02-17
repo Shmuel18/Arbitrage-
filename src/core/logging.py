@@ -7,6 +7,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
+import platform
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -66,8 +67,29 @@ def get_logger(
             maxBytes=max_mb * 1024 * 1024,
             backupCount=backup_count,
             encoding="utf-8",
+            delay=True,  # Don't open file until first write (avoids Windows lock issues)
         )
         fh.setFormatter(fmt)
+        # Windows: override namer/rotator to handle locked files gracefully
+        if platform.system() == "Windows":
+            import time as _wtime, shutil as _shutil
+            def _win_rotator(source, dest):
+                """Rotate with retry for Windows file-locking."""
+                for attempt in range(5):
+                    try:
+                        if Path(dest).exists():
+                            Path(dest).unlink()
+                        _shutil.move(source, dest)
+                        return
+                    except PermissionError:
+                        _wtime.sleep(0.1 * (attempt + 1))
+                # Last resort: just truncate the source
+                try:
+                    with open(source, 'w'):
+                        pass
+                except Exception:
+                    pass
+            fh.rotator = _win_rotator
         logger.addHandler(fh)
 
     return logger

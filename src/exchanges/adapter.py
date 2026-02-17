@@ -307,8 +307,8 @@ class ExchangeAdapter:
                 data = await self._exchange.watch_funding_rate(self._resolve_symbol(symbol))
                 self._update_funding_cache(symbol, data)
                 logger.debug(
-                    f"WS funding update: {symbol}",
-                    extra={"exchange": self.exchange_id, "symbol": symbol},
+                    f"[WS] Funding update for {symbol}: {data.get('fundingRate')}",
+                    extra={"exchange": self.exchange_id, "symbol": symbol, "ws_rate": str(data.get('fundingRate'))},
                 )
             except Exception as e:
                 logger.debug(f"WebSocket funding error for {symbol}: {e}")
@@ -325,17 +325,33 @@ class ExchangeAdapter:
                 logger.debug(f"Funding poll error for {symbol}: {e}")
                 await asyncio.sleep(5)
 
-    # Maximum plausible absolute funding rate per interval (1% = 0.01)
-    _MAX_SANE_RATE = Decimal("0.01")
+    # Maximum plausible absolute funding rate per interval (3% = 0.03 allows legitimate extremes like ORCA -2%)
+    _MAX_SANE_RATE = Decimal("0.03")
 
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
         rate = Decimal(str(data.get("fundingRate", 0)))
+        
+        # Raw ccxt data — DEBUG level to avoid log spam
+        logger.debug(
+            f"[{self.exchange_id}] Raw ccxt funding data for {symbol}: "
+            f"fundingRate={data.get('fundingRate')}, mark={data.get('markPrice')}, "
+            f"index={data.get('indexPrice')}, timestamp={data.get('timestamp')}, "
+            f"fundingTimestamp={data.get('fundingTimestamp')}",
+            extra={
+                "exchange": self.exchange_id,
+                "symbol": symbol,
+                "action": "ccxt_raw_funding",
+                "raw_rate": str(data.get("fundingRate")),
+                "interval_ms": data.get("fundingTimestamp"),
+            },
+        )
 
         # Sanity check: skip obviously broken rates (e.g. Kraken returning -0.25)
         if abs(rate) > self._MAX_SANE_RATE:
-            logger.debug(
-                f"Skipping insane funding rate {rate} for {symbol} on {self.exchange_id}",
+            logger.warning(
+                f"[WARNING] Skipping insane funding rate {rate} for {symbol} on {self.exchange_id} "
+                f"(exceeds {self._MAX_SANE_RATE})",
                 extra={"exchange": self.exchange_id, "symbol": symbol},
             )
             return
@@ -363,10 +379,37 @@ class ExchangeAdapter:
             "next_timestamp": next_ts,
             "interval_hours": interval_hours,
         }
+        
+        # Cached funding — DEBUG level to avoid log spam
+        logger.debug(
+            f"[{self.exchange_id}] Cached funding for {symbol}: "
+            f"rate={rate:.8f} ({rate*100:.6f}%), interval={interval_hours}h, next_ts={next_ts}",
+            extra={
+                "exchange": self.exchange_id,
+                "symbol": symbol,
+                "action": "funding_cached",
+                "cached_rate": str(rate),
+                "interval_hours": interval_hours,
+            },
+        )
 
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get latest cached funding rate (low-latency, no network call)."""
-        return self._funding_rate_cache.get(symbol)
+        cached = self._funding_rate_cache.get(symbol)
+        if cached:
+            # [DEBUG] Log cache retrieval
+            logger.debug(
+                f"[{self.exchange_id}] Retrieved cached rate for {symbol}: "
+                f"rate={cached['rate']:.8f} ({cached['rate']*100:.6f}%), "
+                f"interval={cached.get('interval_hours')}h, age_ms={(_time.time()*1000 - (cached.get('timestamp') or 0)):.0f}",
+                extra={
+                    "exchange": self.exchange_id,
+                    "symbol": symbol,
+                    "action": "cache_retrieved",
+                    "cached_rate": str(cached["rate"]),
+                },
+            )
+        return cached
 
     async def warm_up_funding_rates(self, symbols: List[str] = None) -> int:
         """Batch-fetch ALL funding rates in one API call to pre-populate cache.
@@ -386,8 +429,8 @@ class ExchangeAdapter:
                         self._update_funding_cache(symbol, data)
                         count += 1
                 logger.info(
-                    f"Warmed up {count} funding rates on {self.exchange_id}",
-                    extra={"exchange": self.exchange_id, "action": "funding_warm_up"},
+                    f"[OK] Warmed up {count} funding rates on {self.exchange_id}",
+                    extra={"exchange": self.exchange_id, "action": "funding_warm_up", "count": count},
                 )
                 return count
             except Exception as e:
@@ -619,9 +662,25 @@ class ExchangeAdapter:
         interval_hours = self._get_funding_interval(symbol, data)
         next_ts = data.get("fundingTimestamp")
         rate = Decimal(str(data.get("fundingRate", 0)))
+        
+        # 🔍 DEBUG: Log REST fetch
+        logger.info(
+            f"📡 [{self.exchange_id}] REST fetch_funding_rate for {symbol}: "
+            f"raw_rate={data.get('fundingRate')}, rate_decimal={rate:.8f}",
+            extra={
+                "exchange": self.exchange_id,
+                "symbol": symbol,
+                "action": "rest_funding_fetch",
+                "raw_rate": str(data.get("fundingRate")),
+            },
+        )
 
         # Sanity check: clamp insane rates to zero
         if abs(rate) > self._MAX_SANE_RATE:
+            logger.warning(
+                f"⚠️  Clamping insane rate {rate} to 0 for {symbol} on {self.exchange_id}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
             rate = Decimal("0")
 
         # If next_timestamp is in the past, advance by interval until future

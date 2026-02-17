@@ -92,7 +92,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {p.long_exchange?.slice(0,2).toUpperCase()}/{p.short_exchange?.slice(0,2).toUpperCase()}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
-                      {p.long_qty}/{p.short_qty}
+                      {parseFloat(p.long_qty).toPrecision(6)}/{parseFloat(p.short_qty).toPrecision(6)}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatSpread(p.entry_edge_pct)}

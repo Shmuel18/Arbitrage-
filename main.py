@@ -43,7 +43,7 @@ async def main() -> None:
 
     # Live-mode gate
     if not cfg.paper_trading and not cfg.dry_run:
-        print("\n⚠️  LIVE TRADING MODE — real money at risk!")
+        print("\n[WARNING] LIVE TRADING MODE --- real money at risk!")
         print(f"   Exchanges : {cfg.enabled_exchanges}")
         print(f"   Position size: {cfg.risk_limits.position_size_pct} (70% of min balance × leverage)")
         answer = input("   Type YES to continue: ")
@@ -195,12 +195,14 @@ async def main() -> None:
                         "current_long_rate": None,
                         "current_short_rate": None,
                     }
-                    # Fetch live funding rates to compute current spread
+                    # Use cached funding rates to compute current spread (no REST)
                     try:
                         long_ad = mgr.get(trade.long_exchange)
                         short_ad = mgr.get(trade.short_exchange)
-                        live_long = await long_ad.get_funding_rate(trade.symbol)
-                        live_short = await short_ad.get_funding_rate(trade.symbol)
+                        live_long = long_ad.get_funding_rate_cached(trade.symbol)
+                        live_short = short_ad.get_funding_rate_cached(trade.symbol)
+                        if not live_long or not live_short:
+                            raise ValueError("no cached rate")
                         spread_info = calculate_funding_spread(
                             live_long["rate"], live_short["rate"],
                             long_interval_hours=live_long.get("interval_hours", 8),

@@ -287,12 +287,18 @@ class Scanner:
         if len(funding) < 2:
             return []
 
-        # Debug: show all available funding rates for this symbol
-        funding_display = " | ".join(
-            f"{eid}={funding[eid]['rate']:.6f} ({funding[eid].get('interval_hours', 8)}h)"
+        # [DEBUG] Log all retrieved rates with full detail
+        funding_detail = " | ".join(
+            f"{eid}: rate={funding[eid]['rate']:.8f} ({funding[eid]['rate']*100:.6f}%), interval={funding[eid].get('interval_hours', 8)}h"
             for eid in sorted(funding.keys())
         )
-        logger.debug(f"[{symbol}] Available rates: {funding_display}")
+        logger.debug(
+            f"[ALL_RATES] [{symbol}] SCANNER RETRIEVED RATES: {funding_detail}",
+            extra={
+                "action": "scanner_rates_retrieved",
+                "symbol": symbol,
+            },
+        )
 
         # Try every pair
         results = []
@@ -377,12 +383,20 @@ class Scanner:
         immediate_spread = spread_info["immediate_spread_pct"]
         funding_spread = spread_info["funding_spread_pct"]
         
-        # Log funding rates for clarity
+        # Log funding rates for clarity (DEBUG to avoid log spam)
         logger.debug(
-            f"[{symbol}] Pair evaluation: "
-            f"LONG({long_eid}, {long_interval}h)={long_rate:.6f} | "
-            f"SHORT({short_eid}, {short_interval}h)={short_rate:.6f} | "
-            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h)"
+            f"[PAIR_EVAL] [{symbol}] PAIR EVALUATION: "
+            f"LONG({long_eid})={long_rate:.8f} ({long_rate*100:.6f}%, {long_interval}h) | "
+            f"SHORT({short_eid})={short_rate:.8f} ({short_rate*100:.6f}%, {short_interval}h) | "
+            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h norm)",
+            extra={
+                "action": "pair_evaluation",
+                "symbol": symbol,
+                "long_eid": long_eid,
+                "short_eid": short_eid,
+                "long_rate": str(long_rate),
+                "short_rate": str(short_rate),
+            },
         )
 
         # ── Per-payment analysis ─────────────────────────────────
@@ -467,9 +481,16 @@ class Scanner:
             if qualified:
                 logger.info(
                     f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
-                    f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
+                    f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
                     f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
-                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
+                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%",
+                    extra={
+                        "action": "opportunity_found",
+                        "symbol": symbol,
+                        "mode": "hold",
+                        "long_rate": str(long_rate),
+                        "short_rate": str(short_rate),
+                    },
                 )
         else:
             # ── One side income, one side cost ───────────────────
@@ -478,9 +499,16 @@ class Scanner:
                 if qualified:
                     logger.info(
                         f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
-                        f"L({long_eid}) @ {long_rate:.6f} | S({short_eid}) @ {short_rate:.6f} | "
+                        f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
                         f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
-                        f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%"
+                        f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%",
+                        extra={
+                            "action": "opportunity_found",
+                            "symbol": symbol,
+                            "mode": "hold_mixed",
+                            "long_rate": str(long_rate),
+                            "short_rate": str(short_rate),
+                        },
                     )
             elif qualified:
                 # Try CHERRY_PICK only if still potentially qualified
@@ -548,7 +576,8 @@ class Scanner:
         else:
             # Lightweight display-only candidate (no API calls for balance/ticker)
             min_interval = min(long_interval, short_interval)
-            hourly_rate = net_pct / Decimal(str(min_interval)) if min_interval > 0 else net_pct
+            # net_pct is normalized to 8h period; divide by 8 for true per-hour rate
+            hourly_rate = net_pct / Decimal("8")
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
@@ -613,7 +642,8 @@ class Scanner:
         )
 
         min_interval = min(long_interval_hours, short_interval_hours)
-        hourly_rate = net_pct / Decimal(str(min_interval)) if min_interval > 0 else net_pct
+        # net_pct is normalized to 8h period; divide by 8 for true per-hour rate
+        hourly_rate = net_pct / Decimal("8")
 
         return OpportunityCandidate(
             symbol=symbol,
