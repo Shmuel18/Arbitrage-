@@ -16,6 +16,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import uvicorn
+
 from src.core.config import init_config
 from src.core.logging import get_logger
 from src.discovery.scanner import Scanner
@@ -118,6 +120,33 @@ async def main() -> None:
 
     await controller.start()
     await guard.start()
+
+    # ── Embedded API server (runs inside bot process — never dies separately) ──
+    from api.main import app as api_app, manager as ws_manager
+    # Inject the bot's own Redis client into the API routes
+    from api.routes import positions as pos_route, trades as trades_route
+    from api.routes import controls as ctrl_route, analytics as ana_route
+    pos_route.set_redis_client(redis)
+    trades_route.set_redis_client(redis)
+    ctrl_route.set_redis_client(redis)
+    ana_route.set_redis_client(redis)
+    # Store reference so broadcast_updates() can use it
+    import api.main as api_module
+    api_module.redis_client = redis
+
+    uvicorn_config = uvicorn.Config(
+        api_app, host="0.0.0.0", port=8000,
+        log_level="warning",   # suppress noisy access logs
+        lifespan="off",        # we manage lifecycle ourselves (Redis already connected)
+    )
+    uvicorn_server = uvicorn.Server(uvicorn_config)
+
+    api_task = asyncio.create_task(uvicorn_server.serve(), name="api-server")
+    # Start the WebSocket broadcast loop (normally started by lifespan)
+    from api.main import broadcast_updates
+    broadcast_task = asyncio.create_task(broadcast_updates(), name="ws-broadcast")
+    logger.info("Embedded API server started on port 8000",
+                extra={"action": "api_started"})
 
     # ── Shutdown signal ──────────────────────────────────────────
     shutdown_event = asyncio.Event()
@@ -310,7 +339,13 @@ async def main() -> None:
     scanner.stop()
     scan_task.cancel()
     status_task.cancel()
-    await asyncio.gather(scan_task, status_task, return_exceptions=True)
+    broadcast_task.cancel()
+    uvicorn_server.should_exit = True
+    await asyncio.gather(scan_task, status_task, broadcast_task, return_exceptions=True)
+    # Give uvicorn a moment to close sockets
+    await asyncio.sleep(0.5)
+    api_task.cancel()
+    await asyncio.gather(api_task, return_exceptions=True)
 
     # Close all open positions before exiting
     await controller.close_all_positions()

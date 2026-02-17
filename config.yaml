@@ -30,7 +30,7 @@ trading_params:
 
 execution:
   concurrent_opportunities: 3
-  order_timeout_ms: 5000
+  order_timeout_ms: 10000
   batch_scan_concurrent: true
   scan_parallelism: 10
 

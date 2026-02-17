@@ -74,9 +74,17 @@ class RiskGuard:
             await asyncio.sleep(interval)
 
     async def _check_delta(self) -> None:
-        """Sum net exposure across all exchanges per symbol."""
+        """Sum net exposure across all exchanges per symbol.
+        
+        CRITICAL: If any exchange fails to return positions, we abort the
+        entire delta check for this cycle.  Running a delta check with
+        incomplete data causes false breaches (e.g. seeing only the LONG
+        leg because the SHORT leg's exchange API timed out).
+        """
         delta_by_symbol: Dict[str, Decimal] = {}
         now = time.time()
+        positions_by_symbol: Dict[str, list] = {}  # For detailed logging
+        failed_exchanges: list[str] = []
 
         for eid, adapter in self._exchanges.all().items():
             try:
@@ -84,11 +92,26 @@ class RiskGuard:
             except Exception as e:
                 logger.warning(f"Cannot fetch positions from {eid}: {e}",
                                extra={"exchange": eid})
+                failed_exchanges.append(eid)
                 continue
 
             for pos in positions:
                 signed = pos.quantity if pos.side == OrderSide.BUY else -pos.quantity
                 delta_by_symbol[pos.symbol] = delta_by_symbol.get(pos.symbol, Decimal(0)) + signed
+                
+                if pos.symbol not in positions_by_symbol:
+                    positions_by_symbol[pos.symbol] = []
+                positions_by_symbol[pos.symbol].append((eid, pos.side.value, float(pos.quantity), float(signed)))
+
+        # ── SAFETY: abort if any exchange failed ─────────────────
+        if failed_exchanges:
+            logger.warning(
+                f"Delta check SKIPPED — {len(failed_exchanges)} exchange(s) "
+                f"failed to return positions: {', '.join(failed_exchanges)}. "
+                f"Cannot safely evaluate delta with incomplete data.",
+                extra={"action": "delta_skip"},
+            )
+            return
 
         threshold = self._cfg.risk_limits.delta_threshold_pct / Decimal(100)
 
@@ -101,8 +124,13 @@ class RiskGuard:
                     del self._grace_timestamps[symbol]
             
             if abs(net) > threshold:
+                # Log detailed position breakdown
+                pos_breakdown = "; ".join(
+                    f"{eid}({side}): {qty:.1f}" 
+                    for eid, side, qty, _ in positions_by_symbol.get(symbol, [])
+                )
                 logger.warning(
-                    f"Delta breach: {symbol} net={net}",
+                    f"Delta breach: {symbol} net={net} [threshold={threshold}] — Positions: {pos_breakdown}",
                     extra={"symbol": symbol, "action": "delta_breach", "data": {"net": str(net)}},
                 )
                 if self._cfg.risk_guard.enable_panic_close:

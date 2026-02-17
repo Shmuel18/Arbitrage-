@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("execution")
 
-_ORDER_TIMEOUT_SEC = 5
+_ORDER_TIMEOUT_SEC = 10
 
 
 class ExecutionController:
@@ -316,6 +316,7 @@ class ExecutionController:
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)
+                logger.info(f"✅ Grace period activated for {opp.symbol} (30s delta skip)")
             
             long_fill = await self._place_with_timeout(
                 long_adapter,
@@ -363,7 +364,14 @@ class ExecutionController:
                 )
                 return
 
-            # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
+            short_actual_filled = Decimal(str(short_fill.get("filled", 0) or short_order_qty))
+            
+            logger.info(
+                f"🔓 Trade FULLY OPEN {opp.symbol}: "
+                f"LONG({opp.long_exchange})={long_actual_filled} | "
+                f"SHORT({opp.short_exchange})={short_actual_filled} — "
+                f"Expecting delta=0 in next position fetch"
+            )            # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
             long_filled_qty = Decimal(str(long_fill.get("filled", 0) or order_qty))
             short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
             entry_price_long = self._extract_avg_price(long_fill)
@@ -715,6 +723,7 @@ class ExecutionController:
             short_interval_hours=short_interval,
         )
         current_spread = spread_info["funding_spread_pct"]
+        immediate_spread = spread_info["immediate_spread_pct"]
         
         long_until = None
         short_until = None
@@ -727,7 +736,8 @@ class ExecutionController:
         short_str = f"{short_until}min" if short_until is not None else "?"
         
         logger.info(
-            f"🔔 {trade.symbol}: Current Spread = {float(current_spread):.4f}% | "
+            f"🔔 {trade.symbol}: Immediate Spread = {float(immediate_spread):.4f}% "
+            f"(norm={float(current_spread):.4f}%) | "
             f"{trade.long_exchange} in {long_str} | {trade.short_exchange} in {short_str}",
             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "spread_update"},
         )
@@ -764,12 +774,13 @@ class ExecutionController:
             hold_min = int((now - trade.opened_at).total_seconds() / 60)
 
         if quick_cycle:
-            # ── Hold-or-Exit: check if spread still meets threshold ──
+            # ── Hold-or-Exit: check if IMMEDIATE spread (actual next payment)
+            #    meets threshold — NOT the normalized spread ──
             hold_min_spread = getattr(
                 self._cfg.trading_params, 'hold_min_spread', Decimal("0.5")
             )
 
-            if current_spread >= hold_min_spread:
+            if immediate_spread >= hold_min_spread:
                 # Spread is still good → HOLD for next payment cycle
                 # Advance trackers to next payment
                 long_next = long_funding.get("next_timestamp")
@@ -783,7 +794,7 @@ class ExecutionController:
                         short_next / 1000, tz=timezone.utc
                     )
                 logger.info(
-                    f"🔄 Trade {trade.trade_id}: HOLD — spread {float(current_spread):.4f}% "
+                    f"🔄 Trade {trade.trade_id}: HOLD — immediate spread {float(immediate_spread):.4f}% "
                     f"≥ {float(hold_min_spread):.2f}% threshold (held {hold_min}min) | "
                     f"Next: {trade.long_exchange}="
                     f"{trade.next_funding_long.strftime('%H:%M') if trade.next_funding_long else '?'}, "
@@ -799,7 +810,7 @@ class ExecutionController:
             else:
                 # Spread dropped below threshold → EXIT
                 logger.info(
-                    f"🔄 Trade {trade.trade_id}: EXIT — spread {float(current_spread):.4f}% "
+                    f"🔄 Trade {trade.trade_id}: EXIT — immediate spread {float(immediate_spread):.4f}% "
                     f"< {float(hold_min_spread):.2f}% threshold (held {hold_min}min) — "
                     f"freeing capital for re-scan",
                     extra={

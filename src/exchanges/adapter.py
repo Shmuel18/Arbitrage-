@@ -808,7 +808,20 @@ class ExchangeAdapter:
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         symbols = [self._resolve_symbol(symbol)] if symbol else None
-        raw = await self._exchange.fetch_positions(symbols)
+
+        # Retry up to 2 times on transient API failures (rate-limit, timeout)
+        last_err: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                raw = await self._exchange.fetch_positions(symbols)
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+        else:
+            raise last_err  # type: ignore[misc]
+
         positions: List[Position] = []
         for p in raw:
             amt = float(p.get("contracts", 0) or 0)

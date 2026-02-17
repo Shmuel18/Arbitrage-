@@ -46,7 +46,7 @@ class TradingParams(BaseSettings):
 
 class ExecutionConfig(BaseSettings):
     concurrent_opportunities: int = 3
-    order_timeout_ms: int = 5000
+    order_timeout_ms: int = 10000
     batch_scan_concurrent: bool = True
     scan_parallelism: int = 10
 
