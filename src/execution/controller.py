@@ -184,44 +184,34 @@ class ExecutionController:
         short_adapter = self._exchanges.get(opp.short_exchange)
 
         # ── Entry timing gate: PRIMARY CONTRIBUTOR must be within 15 min ──
+        # Use next_funding_ms from scanner (no REST call needed)
         entry_offset = self._cfg.trading_params.entry_offset_seconds
-        try:
-            long_funding = await long_adapter.get_funding_rate(opp.symbol)
-            short_funding = await short_adapter.get_funding_rate(opp.symbol)
-        except Exception as e:
-            logger.info(f"Cannot fetch funding time for {opp.symbol}: {e} — allowing entry")
-            long_funding = {}
-            short_funding = {}
-
         now_ms = _time.time() * 1000
-        long_next = long_funding.get("next_timestamp")
-        short_next = short_funding.get("next_timestamp")
-        long_rate = long_funding.get("rate", 0)
-        short_rate = short_funding.get("rate", 0)
 
-        # Determine primary contributor (who makes the money?)
-        long_contribution = abs(long_rate) if long_rate < 0 else 0
-        short_contribution = abs(short_rate) if short_rate > 0 else 0
+        # Determine primary contributor from rates already in opportunity (no REST call)
+        long_rate = opp.long_funding_rate
+        short_rate = opp.short_funding_rate
+        long_contribution = abs(long_rate) if long_rate < 0 else Decimal("0")
+        short_contribution = abs(short_rate) if short_rate > 0 else Decimal("0")
         
         if long_contribution > short_contribution:
             primary_side = "long"
             primary_exchange = opp.long_exchange
-            primary_next = long_next
             primary_contribution = long_contribution
         else:
             primary_side = "short"
             primary_exchange = opp.short_exchange
-            primary_next = short_next
             primary_contribution = short_contribution
 
-        if primary_next is None:
+        # Use next_funding_ms from scanner
+        primary_next_ms = opp.next_funding_ms
+        if primary_next_ms is None:
             logger.info(
-                f"⏳ Skipping {opp.symbol}: no funding timestamp for primary contributor "
-                f"({primary_side} {primary_exchange}) — cannot verify entry window"
+                f"⏳ Skipping {opp.symbol}: no funding timestamp available from scanner"
             )
             return
         else:
-            seconds_until = (primary_next - now_ms) / 1000
+            seconds_until = (primary_next_ms - now_ms) / 1000
             if not (0 < seconds_until <= entry_offset):
                 logger.info(
                     f"⏳ Skipping {opp.symbol}: primary contributor ({primary_side} {primary_exchange}, "

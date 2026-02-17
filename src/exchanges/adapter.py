@@ -37,6 +37,7 @@ class ExchangeAdapter:
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
+        self._funding_intervals: Dict[str, int] = {}  # symbol → interval hours (from exchange API)
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -112,6 +113,11 @@ class ExchangeAdapter:
             self._patch_kraken_funding_parser()
             self._batch_funding_supported = False
 
+        # Binance: fetch /fapi/v1/fundingInfo for correct funding intervals
+        # (ccxt doesn't expose this — many newer coins have 4h instead of 8h)
+        if self.exchange_id == "binance":
+            await self._fetch_binance_funding_intervals()
+
         if self._symbol_map:
             logger.info(
                 f"{self.exchange_id}: remapped {len(self._symbol_map)} USD→USDT symbols",
@@ -124,6 +130,56 @@ class ExchangeAdapter:
                    "action": "connect",
                    "data": {"markets": len(filtered)}},
         )
+
+    async def _fetch_binance_funding_intervals(self) -> None:
+        """Fetch Binance /fapi/v1/fundingInfo to get correct funding intervals.
+
+        Many newer Binance coins have 4h (or other) funding intervals,
+        but ccxt doesn't expose this — the 'interval' field is always None
+        and market info lacks 'fundingInterval'. This endpoint is the only
+        reliable source.
+        """
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://fapi.binance.com/fapi/v1/fundingInfo",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(
+                            f"Binance fundingInfo returned status {resp.status}",
+                            extra={"exchange": "binance"},
+                        )
+                        return
+                    data = await resp.json()
+
+            non_default = 0
+            for item in data:
+                raw_sym = item.get("symbol", "")
+                hours = item.get("fundingIntervalHours")
+                if not hours:
+                    continue
+                hours = int(hours)
+                # Map raw symbol (e.g. "MMTUSDT") to ccxt format ("MMT/USDT:USDT")
+                # Try direct lookup in markets
+                for ccxt_sym, mkt in self._exchange.markets.items():
+                    if mkt.get("id") == raw_sym or mkt.get("info", {}).get("symbol") == raw_sym:
+                        self._funding_intervals[ccxt_sym] = hours
+                        if hours != 8:
+                            non_default += 1
+                        break
+
+            logger.info(
+                f"Binance fundingInfo: loaded {len(self._funding_intervals)} intervals "
+                f"({non_default} non-8h)",
+                extra={"exchange": "binance", "action": "funding_intervals_loaded"},
+            )
+        except Exception as e:
+            logger.warning(
+                f"Failed to fetch Binance fundingInfo: {e}",
+                extra={"exchange": "binance"},
+            )
 
     def _patch_kraken_funding_parser(self) -> None:
         """Monkey-patch krakenfutures.parse_funding_rate to fix ccxt bugs.
@@ -414,6 +470,10 @@ class ExchangeAdapter:
     async def warm_up_funding_rates(self, symbols: List[str] = None) -> int:
         """Batch-fetch ALL funding rates in one API call to pre-populate cache.
         Falls back to per-symbol fetch if batch not supported (e.g. KuCoin, Kraken)."""
+        # Ensure Binance funding intervals are loaded (fallback if connect() failed)
+        if self.exchange_id == "binance" and not self._funding_intervals:
+            await self._fetch_binance_funding_intervals()
+
         if not symbols:
             symbols = [s for s in self._exchange.symbols
                        if s in self._exchange.markets]
@@ -725,7 +785,11 @@ class ExchangeAdapter:
                 except (ValueError, TypeError):
                     pass
 
-        # 3) Default 8h
+        # 3) Binance: pre-fetched from /fapi/v1/fundingInfo (4h, 8h coins)
+        if symbol in self._funding_intervals:
+            return self._funding_intervals[symbol]
+
+        # 4) Default 8h
         return 8
 
     # ── Account ──────────────────────────────────────────────────
