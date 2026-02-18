@@ -325,7 +325,14 @@ class ExecutionController:
             )
 
             # Open both legs
-            
+
+            # Pre-apply trading settings on BOTH exchanges OUTSIDE the order timeout.
+            # ensure_trading_settings (margin mode, leverage, position mode) can take
+            # 6-8s on slow exchanges (kucoin). Doing it inside _place_with_timeout
+            # ate most of the 10s order timeout, leaving <2s for the actual order.
+            await long_adapter.ensure_trading_settings(opp.symbol)
+            await short_adapter.ensure_trading_settings(opp.symbol)
+
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)

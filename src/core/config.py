@@ -34,6 +34,7 @@ class TradingParams(BaseSettings):
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
     basis_buffer_pct: Decimal = Decimal("0.01")      # Basis risk penalty
     cooldown_after_orphan_hours: int = 2
+    max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
     max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes

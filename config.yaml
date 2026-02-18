@@ -19,6 +19,7 @@ trading_params:
   safety_buffer_pct: 0.02
   basis_buffer_pct: 0.01
   cooldown_after_orphan_hours: 2
+  max_sane_funding_rate: 0.10 # max absolute funding rate before filtering (10%)
   entry_offset_seconds: 900
   exit_offset_seconds: 900
   max_entry_window_minutes: 60 # Only scan opportunities with funding < 60 min away

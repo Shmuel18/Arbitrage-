@@ -38,6 +38,7 @@ class ExchangeAdapter:
         self._ws_funding_disabled_logged = False
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
         self._funding_intervals: Dict[str, int] = {}  # symbol → interval hours (from exchange API)
+        self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -381,8 +382,8 @@ class ExchangeAdapter:
                 logger.debug(f"Funding poll error for {symbol}: {e}")
                 await asyncio.sleep(5)
 
-    # Maximum plausible absolute funding rate per interval (3% = 0.03 allows legitimate extremes like ORCA -2%)
-    _MAX_SANE_RATE = Decimal("0.03")
+    # Maximum plausible absolute funding rate per interval — configurable via config.yaml
+    _DEFAULT_MAX_SANE_RATE = Decimal("0.10")
 
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
@@ -522,11 +523,20 @@ class ExchangeAdapter:
         return count
 
     async def _batch_funding_poll_loop(self, symbols: List[str]) -> None:
-        """Periodically fetch ALL funding rates in one batch API call."""
+        """Periodically fetch ALL funding rates in one batch API call.
+        Also refreshes Binance funding intervals every 30 minutes."""
         poll_interval = 30  # seconds between batch refreshes
+        interval_refresh_every = 1800  # re-fetch funding intervals every 30 min
         consecutive_failures = 0
+        last_interval_refresh = _time.time()
         while True:
             try:
+                # ── Periodically refresh Binance fundingInfo (intervals can change) ──
+                if (self.exchange_id == "binance"
+                        and _time.time() - last_interval_refresh >= interval_refresh_every):
+                    await self._fetch_binance_funding_intervals()
+                    last_interval_refresh = _time.time()
+
                 # Fetch without symbol filter — avoids OKX "must be same type" error
                 all_rates = await self._exchange.fetch_funding_rates()
                 count = 0
@@ -764,33 +774,74 @@ class ExchangeAdapter:
         }
 
     def _get_funding_interval(self, symbol: str, funding_data: dict) -> int:
-        """Detect funding interval in hours from CCXT data."""
+        """Detect funding interval in hours from CCXT data.
+
+        Dynamically updates stored intervals when live data reports a change
+        (exchanges can adjust intervals based on market conditions).
+        """
+        detected: int | None = None
+
         # 1) CCXT normalized 'interval' field (e.g. '1h', '4h', '8h')
         interval_str = funding_data.get("interval") or ""
         if interval_str:
             try:
-                return int(interval_str.replace("h", ""))
+                detected = int(interval_str.replace("h", ""))
             except ValueError:
                 pass
 
-        # 2) Market info (Bybit provides fundingInterval in minutes)
-        mkt = self._exchange.markets.get(symbol)
-        if mkt:
-            info = mkt.get("info", {})
-            # Bybit: fundingInterval (minutes)
-            fi_min = info.get("fundingInterval")
-            if fi_min:
-                try:
-                    return max(1, int(fi_min) // 60)
-                except (ValueError, TypeError):
-                    pass
+        # 2) Raw API info — Bybit fundingInterval (minutes),
+        #    Binance fundingIntervalHours, Gate.io funding_interval, etc.
+        if detected is None:
+            info = funding_data.get("info", {})
+            if isinstance(info, dict):
+                # Bybit: fundingInterval in minutes
+                fi_min = info.get("fundingInterval")
+                if fi_min:
+                    try:
+                        detected = max(1, int(fi_min) // 60)
+                    except (ValueError, TypeError):
+                        pass
+                # Binance: fundingIntervalHours
+                if detected is None:
+                    fi_h = info.get("fundingIntervalHours")
+                    if fi_h:
+                        try:
+                            detected = int(fi_h)
+                        except (ValueError, TypeError):
+                            pass
 
-        # 3) Binance: pre-fetched from /fapi/v1/fundingInfo (4h, 8h coins)
-        if symbol in self._funding_intervals:
+        # 3) Fallback: market info (static from exchange load)
+        if detected is None:
+            mkt = self._exchange.markets.get(symbol)
+            if mkt:
+                mkt_info = mkt.get("info", {})
+                fi_min = mkt_info.get("fundingInterval")
+                if fi_min:
+                    try:
+                        detected = max(1, int(fi_min) // 60)
+                    except (ValueError, TypeError):
+                        pass
+
+        # 4) Pre-fetched from Binance /fapi/v1/fundingInfo
+        if detected is None and symbol in self._funding_intervals:
             return self._funding_intervals[symbol]
 
-        # 4) Default 8h
-        return 8
+        # 5) Default 8h
+        if detected is None:
+            return 8
+
+        # ── Dynamic update: persist detected interval & log changes ──
+        old = self._funding_intervals.get(symbol)
+        if old is not None and old != detected:
+            logger.warning(
+                f"⏱️ Funding interval CHANGED for {symbol} on {self.exchange_id}: "
+                f"{old}h → {detected}h",
+                extra={"exchange": self.exchange_id, "symbol": symbol,
+                       "action": "interval_changed",
+                       "old_hours": old, "new_hours": detected},
+            )
+        self._funding_intervals[symbol] = detected
+        return detected
 
     # ── Account ──────────────────────────────────────────────────
 

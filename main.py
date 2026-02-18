@@ -67,7 +67,9 @@ async def main() -> None:
         if not exc_cfg:
             logger.warning(f"No config for exchange {eid}, skipping")
             continue
-        mgr.register(eid, exc_cfg.model_dump())
+        exc_dict = exc_cfg.model_dump()
+        exc_dict["max_sane_funding_rate"] = float(cfg.trading_params.max_sane_funding_rate)
+        mgr.register(eid, exc_dict)
 
     await mgr.connect_all()
 
