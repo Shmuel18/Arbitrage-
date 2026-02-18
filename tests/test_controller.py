@@ -198,21 +198,24 @@ class TestHoldOrExit:
         config.trading_params.exit_offset_seconds = 0  # instant for testing
 
         # Set exchange funding rates to produce a high spread (0.6%)
+        # Must populate _funding_rate_cache since _check_exit uses get_funding_rate_cached()
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             past_ms = (time.time() - 1200) * 1000  # 20 min ago
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0030"),  # negative = we receive
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0030"),  # positive = we receive on short
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
 
@@ -232,21 +235,24 @@ class TestHoldOrExit:
         config.trading_params.exit_offset_seconds = 0
 
         # Set exchange funding rates to produce a LOW spread (< 0.5%)
+        # Must populate _funding_rate_cache since _check_exit uses get_funding_rate_cached()
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             past_ms = (time.time() - 1200) * 1000
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0001"),  # tiny
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0001"),  # tiny
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
 
@@ -268,20 +274,23 @@ class TestUpgrade:
         config.trading_params.entry_offset_seconds = 900
 
         # Current trade has spread ~0.16% (small rates)
+        # Must populate _funding_rate_cache since _check_upgrade uses get_funding_rate_cached()
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
 
@@ -313,20 +322,23 @@ class TestUpgrade:
         config.trading_params.entry_offset_seconds = 900
 
         # Current trade spread = ~0.16%
+        # Must populate _funding_rate_cache since _check_upgrade uses get_funding_rate_cached()
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
 
@@ -360,17 +372,19 @@ class TestUpgrade:
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
 
@@ -404,17 +418,19 @@ class TestUpgrade:
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             if eid == "exchange_a":
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("-0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
             else:
-                adapter.get_funding_rate.return_value = {
+                data = {
                     "rate": Decimal("0.0001"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
 

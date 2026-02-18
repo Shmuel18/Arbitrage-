@@ -174,4 +174,5 @@ def sample_opportunity():
         net_edge_pct=Decimal("0.7"),
         suggested_qty=Decimal("0.01"),
         reference_price=Decimal("50000"),
+        next_funding_ms=_future_ms(300),  # 5 min from now — within entry window
     )

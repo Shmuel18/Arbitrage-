@@ -863,6 +863,10 @@ class ExchangeAdapter:
         if req.reduce_only:
             params["reduceOnly"] = True
 
+        # KuCoin: always pass marginMode in order params
+        if self.exchange_id == "kucoin":
+            params["marginMode"] = self._cfg.get("margin_mode", "cross")
+
         # Exchange-specific position side for hedged mode only
         pos_mode = self._cfg.get("position_mode", "oneway")
         if pos_mode == "hedged":

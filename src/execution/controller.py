@@ -65,6 +65,8 @@ class ExecutionController:
         self._blacklist: Dict[str, float] = {}
         # Track consecutive order-timeout failures: "symbol:exchange" -> count
         self._timeout_streak: Dict[str, int] = {}
+        # In-memory guard: symbols currently mid-entry (prevents same-symbol retry within same scan batch)
+        self._symbols_entering: set[str] = set()
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -133,6 +135,16 @@ class ExecutionController:
 
         # Blacklist guard — skip symbols/exchanges flagged as delisting etc.
         if self._is_blacklisted(opp.symbol, opp.long_exchange, opp.short_exchange):
+            return
+
+        # Cooldown guard — skip symbols recently failed (orphan / timeout)
+        if await self._redis.is_cooled_down(opp.symbol):
+            logger.info(f"❄️ Skipping {opp.symbol}: symbol is in cooldown")
+            return
+
+        # In-memory entry lock — prevent same-symbol retry within same scan batch
+        if opp.symbol in self._symbols_entering:
+            logger.info(f"🔒 Skipping {opp.symbol}: entry already in progress")
             return
 
         # Duplicate guard
@@ -260,6 +272,7 @@ class ExecutionController:
             return
 
         trade_id = str(uuid.uuid4())[:12]
+        self._symbols_entering.add(opp.symbol)
         try:
             # ── Position sizing: 70% of smallest balance × leverage ──
             long_bal = await long_adapter.get_balance()
@@ -360,7 +373,7 @@ class ExecutionController:
                 logger.error(f"Short leg failed — closing orphan long for {opp.symbol}")
                 await self._close_orphan(
                     long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, long_fill,
+                    OrderSide.SELL, long_fill, order_qty,
                 )
                 return
 
@@ -537,6 +550,7 @@ class ExecutionController:
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
+            self._symbols_entering.discard(opp.symbol)
             await self._redis.release_lock(lock_key)
 
     # ── Exit monitor ─────────────────────────────────────────────
@@ -1323,12 +1337,18 @@ class ExecutionController:
 
     async def _close_orphan(
         self, adapter, exchange: str, symbol: str,
-        side: OrderSide, fill: dict,
+        side: OrderSide, fill: dict, fallback_qty: Optional[Decimal] = None,
     ) -> None:
         """Emergency close of a single orphaned leg."""
         filled_qty = Decimal(str(fill.get("filled", 0)))
         if filled_qty <= 0:
-            return
+            if fallback_qty and fallback_qty > 0:
+                logger.warning(
+                    f"⚠️ Orphan fill reported 0 — using fallback qty {fallback_qty} for {symbol} on {exchange}"
+                )
+                filled_qty = fallback_qty
+            else:
+                return
         try:
             req = OrderRequest(
                 exchange=exchange,
