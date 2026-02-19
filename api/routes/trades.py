@@ -50,6 +50,27 @@ async def get_trades(
         trades = [json.loads(trade) for trade in trades_data if trade]
         trades.reverse()  # Most recent first
         
+        # ── Normalize field names for frontend ──────────────────
+        def normalize(t: dict) -> dict:
+            invested = float(t.get('invested') or 0)
+            total_pnl = float(t.get('total_pnl') or 0)
+            pnl_pct = (total_pnl / invested) if invested > 0 else 0.0
+            entry_edge = t.get('entry_edge_pct')
+            return {
+                **t,
+                # aliases expected by TradesHistory.tsx
+                'pnl':           total_pnl,
+                'pnl_percentage': pnl_pct,
+                'open_time':     t.get('opened_at'),
+                'close_time':    t.get('closed_at'),
+                'exchanges':     {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
+                'size':          f"${invested:,.0f}",
+                'entry_spread':  float(entry_edge) / 100 if entry_edge else None,
+                'exit_spread':   None,  # not tracked at exit
+            }
+        
+        trades = [normalize(t) for t in trades]
+        
         return {
             "trades": trades,
             "count": len(trades),

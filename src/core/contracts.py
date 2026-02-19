@@ -83,9 +83,11 @@ class OpportunityCandidate:
     reference_price: Decimal
     # Immediate spread (raw, before 8h normalization)
     immediate_spread_pct: Decimal = Decimal("0")
-    # Ranking: return per hour (net_edge / min_interval)
+    # Immediate net = immediate_spread - fees (no 8h normalization) — primary ranking metric
+    immediate_net_pct: Decimal = Decimal("0")
+    # Ranking: return per hour (immediate_net / min_interval)
     min_interval_hours: int = 8            # fastest funding interval in this pair
-    hourly_rate_pct: Decimal = Decimal("0") # net_edge_pct / min_interval_hours
+    hourly_rate_pct: Decimal = Decimal("0") # immediate_net_pct / min_interval_hours
     # Closest funding payout timestamp (ms since epoch)
     next_funding_ms: Optional[float] = None
     # Qualification flag (False = display-only, doesn't pass all trading gates)

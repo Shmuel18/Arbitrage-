@@ -84,8 +84,8 @@ class Scanner:
 
                 # Sort all by hourly return for display
                 all_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
-                # Sort qualified by NET edge for execution (best absolute profit first)
-                qualified_opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
+                # Sort qualified by immediate net edge for execution (best immediate profit first)
+                qualified_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
 
                 # Display top 5: qualified first, then fill with display-only
                 display_qualified = [o for o in all_opps if o.qualified][:5]
@@ -474,9 +474,8 @@ class Scanner:
 
         if pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
-            if funding_spread < tp.min_funding_spread:
-                qualified = False
-            if net_pct < tp.min_net_pct:
+            # Gate on immediate net (immediate_spread - fees); 8h-normalization not used
+            if (immediate_spread - total_cost_pct) < tp.min_net_pct:
                 qualified = False
             if qualified:
                 logger.info(
@@ -494,7 +493,7 @@ class Scanner:
                 )
         else:
             # ── One side income, one side cost ───────────────────
-            if funding_spread >= tp.min_funding_spread and net_pct >= tp.min_net_pct:
+            if immediate_spread >= min_imm and (immediate_spread - total_cost_pct) >= tp.min_net_pct:
                 # Plain HOLD is net-positive
                 if qualified:
                     logger.info(
@@ -576,8 +575,9 @@ class Scanner:
         else:
             # Lightweight display-only candidate (no API calls for balance/ticker)
             min_interval = min(long_interval, short_interval)
-            # net_pct is normalized to 8h period; divide by 8 for true per-hour rate
-            hourly_rate = net_pct / Decimal("8")
+            immediate_net = immediate_spread - total_cost_pct
+            # hourly rate based on immediate net (no 8h normalization)
+            hourly_rate = immediate_net / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
@@ -586,6 +586,7 @@ class Scanner:
                 short_funding_rate=short_rate,
                 funding_spread_pct=funding_spread,
                 immediate_spread_pct=immediate_spread,
+                immediate_net_pct=immediate_net,
                 gross_edge_pct=gross_pct,
                 fees_pct=fees_pct,
                 net_edge_pct=net_pct,
@@ -642,8 +643,9 @@ class Scanner:
         )
 
         min_interval = min(long_interval_hours, short_interval_hours)
-        # net_pct is normalized to 8h period; divide by 8 for true per-hour rate
-        hourly_rate = net_pct / Decimal("8")
+        # hourly rate based on immediate net (no 8h normalization)
+        immediate_net = spread_info["immediate_spread_pct"] - fees_pct
+        hourly_rate = immediate_net / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
 
         return OpportunityCandidate(
             symbol=symbol,
@@ -653,6 +655,7 @@ class Scanner:
             short_funding_rate=short_rate,
             funding_spread_pct=spread_info["funding_spread_pct"],
             immediate_spread_pct=spread_info["immediate_spread_pct"],
+            immediate_net_pct=immediate_net,
             gross_edge_pct=gross_pct,
             fees_pct=fees_pct,
             net_edge_pct=net_pct,

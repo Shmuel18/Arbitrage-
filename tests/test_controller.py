@@ -48,6 +48,8 @@ class TestHandleOpportunity:
             long_exchange="exchange_a", short_exchange="exchange_b",
             long_funding_rate=Decimal("0.0001"), short_funding_rate=Decimal("0.0005"),
             funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
             gross_edge_pct=Decimal("1.2"), fees_pct=Decimal("0.2"),
             net_edge_pct=Decimal("0.7"), suggested_qty=Decimal("0.1"),
             reference_price=Decimal("3000"),
