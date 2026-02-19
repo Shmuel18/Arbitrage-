@@ -226,6 +226,84 @@ class TestHoldOrExit:
         assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
+    async def test_exits_when_next_funding_too_far(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Even if spread >= threshold, EXIT if next funding is beyond hold_max_wait."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
+        config.trading_params.exit_offset_seconds = 0
+
+        # Good spread (0.6%) BUT next_timestamp is 4 hours away
+        future_4h_ms = (time.time() + 4 * 3600) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                data = {
+                    "rate": Decimal("-0.0030"),
+                    "next_timestamp": future_4h_ms,  # 4h away
+                    "interval_hours": 8,
+                }
+            else:
+                data = {
+                    "rate": Decimal("0.0030"),
+                    "next_timestamp": future_4h_ms,
+                    "interval_hours": 8,
+                }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        # Pre-set funding_paid flags so tracker doesn't get overwritten to future
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+
+        await controller._check_exit(trade)
+
+        # Should have exited despite good spread — next funding too far
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_holds_when_next_funding_within_max_wait(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Spread >= threshold AND next funding within hold_max_wait → HOLD."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
+        config.trading_params.exit_offset_seconds = 0
+
+        # Good spread AND next funding in 30 min (within 1h limit)
+        future_30m_ms = (time.time() + 1800) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                data = {
+                    "rate": Decimal("-0.0030"),
+                    "next_timestamp": future_30m_ms,  # 30 min away
+                    "interval_hours": 8,
+                }
+            else:
+                data = {
+                    "rate": Decimal("0.0030"),
+                    "next_timestamp": future_30m_ms,
+                    "interval_hours": 8,
+                }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+
+        await controller._check_exit(trade)
+
+        # Should still be holding — next funding is close enough
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+
+    @pytest.mark.asyncio
     async def test_exits_when_spread_below_threshold(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
@@ -451,3 +529,79 @@ class TestUpgrade:
         upgraded = await controller._check_upgrade(trade)
 
         assert upgraded is False
+
+    @pytest.mark.asyncio
+    async def test_upgrade_sets_cooldown_on_closed_symbol(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """After upgrade, the closed symbol should be in upgrade cooldown."""
+        config.trading_params.upgrade_spread_delta = Decimal("0.5")
+        config.trading_params.upgrade_cooldown_seconds = 300
+        config.trading_params.entry_offset_seconds = 900
+
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            if eid == "exchange_a":
+                data = {
+                    "rate": Decimal("-0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            else:
+                data = {
+                    "rate": Decimal("0.0001"),
+                    "next_timestamp": (time.time() + 600) * 1000,
+                    "interval_hours": 8,
+                }
+            adapter.get_funding_rate.return_value = data
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
+
+        better_opp = {
+            "symbol": "DOGE/USDT",
+            "long_exchange": "exchange_a",
+            "short_exchange": "exchange_b",
+            "immediate_spread_pct": 1.5,
+            "qualified": True,
+            "next_funding_ms": (time.time() + 600) * 1000,
+        }
+        mock_redis.get.return_value = json.dumps({
+            "opportunities": [better_opp],
+            "count": 1,
+        })
+
+        upgraded = await controller._check_upgrade(trade)
+
+        assert upgraded is True
+        # The CLOSED symbol (BTC/USDT) should now be in upgrade cooldown
+        assert "BTC/USDT" in controller._upgrade_cooldown
+        assert controller._upgrade_cooldown["BTC/USDT"] > time.time()
+
+    @pytest.mark.asyncio
+    async def test_upgrade_cooldown_blocks_reentry(
+        self, controller, sample_opportunity, mock_redis
+    ):
+        """Symbol in upgrade cooldown should be rejected at entry gate."""
+        # Set upgrade cooldown for the symbol (5 min from now)
+        controller._upgrade_cooldown["BTC/USDT"] = time.time() + 300
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        # Should NOT have opened a trade
+        assert len(controller._active_trades) == 0
+
+    @pytest.mark.asyncio
+    async def test_upgrade_cooldown_expires(
+        self, controller, sample_opportunity, mock_redis
+    ):
+        """Expired upgrade cooldown should allow re-entry."""
+        # Set upgrade cooldown in the PAST (already expired)
+        controller._upgrade_cooldown["BTC/USDT"] = time.time() - 1
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        # Should have opened normally
+        assert len(controller._active_trades) == 1
+        # Expired entry should be cleaned up
+        assert "BTC/USDT" not in controller._upgrade_cooldown

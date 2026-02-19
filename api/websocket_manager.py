@@ -16,17 +16,19 @@ class ConnectionManager:
         """Accept new WebSocket connection"""
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"✅ New WebSocket connection. Total: {len(self.active_connections)}")
     
     def disconnect(self, websocket: WebSocket):
         """Remove WebSocket connection"""
-        self.active_connections.remove(websocket)
-        print(f"❌ WebSocket disconnected. Total: {len(self.active_connections)}")
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
     
     async def broadcast(self, message: str):
         """Broadcast message to all connected clients"""
+        dead: List[WebSocket] = []
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-            except Exception as e:
-                print(f"Error broadcasting to client: {e}")
+            except Exception:
+                dead.append(connection)
+        for conn in dead:
+            self.disconnect(conn)

@@ -1,6 +1,18 @@
 let ws: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const connectWebSocket = (onMessage: (data: any) => void) => {
+  // Prevent duplicate connections
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+
+  // Clear any pending reconnect
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
   ws = new WebSocket('ws://localhost:8000/ws');
 
   ws.onopen = () => {
@@ -16,14 +28,20 @@ export const connectWebSocket = (onMessage: (data: any) => void) => {
     }
   };
 
-  ws.onerror = (error) => {
-    console.error('WebSocket error:', error);
+  ws.onerror = () => {
+    // onclose will fire after this, handle reconnect there
   };
 
   ws.onclose = () => {
     console.log('❌ WebSocket disconnected');
-    // Attempt to reconnect after 5 seconds
-    setTimeout(() => connectWebSocket(onMessage), 5000);
+    ws = null;
+    // Reconnect after 5 seconds, but only if not already scheduled
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectWebSocket(onMessage);
+      }, 5000);
+    }
   };
 };
 

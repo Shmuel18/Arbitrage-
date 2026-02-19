@@ -125,27 +125,44 @@ class RiskGuard:
             
             if abs(net) > threshold:
                 # Log detailed position breakdown
+                pos_details = positions_by_symbol.get(symbol, [])
                 pos_breakdown = "; ".join(
                     f"{eid}({side}): {qty:.1f}" 
-                    for eid, side, qty, _ in positions_by_symbol.get(symbol, [])
+                    for eid, side, qty, _ in pos_details
                 )
                 logger.warning(
                     f"Delta breach: {symbol} net={net} [threshold={threshold}] — Positions: {pos_breakdown}",
                     extra={"symbol": symbol, "action": "delta_breach", "data": {"net": str(net)}},
                 )
                 if self._cfg.risk_guard.enable_panic_close:
-                    await self._panic_close(symbol)
+                    # Only close on exchanges that actually hold positions
+                    exchanges_with_positions = {eid for eid, _, _, _ in pos_details}
+                    await self._panic_close(symbol, exchanges_with_positions)
 
     # ── Panic close ──────────────────────────────────────────────
 
-    async def _panic_close(self, symbol: str) -> None:
-        """Close all positions for a symbol across all exchanges."""
+    async def _panic_close(self, symbol: str, target_exchanges: set[str] | None = None) -> None:
+        """Close all positions for a symbol.
+        
+        If target_exchanges is provided, only close on those exchanges
+        (avoids noisy errors on exchanges that don't list the symbol).
+        Otherwise falls back to trying all exchanges.
+        """
         logger.warning(f"PANIC CLOSE triggered for {symbol}",
                        extra={"symbol": symbol, "action": "panic_close"})
 
-        for eid, adapter in self._exchanges.all().items():
+        exchanges_to_check = (
+            {eid: adapter for eid, adapter in self._exchanges.all().items()
+             if eid in target_exchanges}
+            if target_exchanges
+            else self._exchanges.all()
+        )
+
+        for eid, adapter in exchanges_to_check.items():
             try:
                 positions = await adapter.get_positions(symbol)
+                if not positions:
+                    continue
                 for pos in positions:
                     close_side = OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY
                     req = OrderRequest(

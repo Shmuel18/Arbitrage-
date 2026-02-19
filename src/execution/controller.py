@@ -67,6 +67,8 @@ class ExecutionController:
         self._timeout_streak: Dict[str, int] = {}
         # In-memory guard: symbols currently mid-entry (prevents same-symbol retry within same scan batch)
         self._symbols_entering: set[str] = set()
+        # Upgrade cooldown: symbol -> expiry timestamp (prevents re-entry after upgrade exit)
+        self._upgrade_cooldown: Dict[str, float] = {}
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -141,6 +143,18 @@ class ExecutionController:
         if await self._redis.is_cooled_down(opp.symbol):
             logger.info(f"❄️ Skipping {opp.symbol}: symbol is in cooldown")
             return
+
+        # Upgrade cooldown guard — prevent rapid re-entry after upgrade exit
+        upgrade_expiry = self._upgrade_cooldown.get(opp.symbol)
+        if upgrade_expiry is not None:
+            if _time.time() < upgrade_expiry:
+                remaining = int(upgrade_expiry - _time.time())
+                logger.info(
+                    f"⬆️ Skipping {opp.symbol}: upgrade cooldown active ({remaining}s left)"
+                )
+                return
+            else:
+                del self._upgrade_cooldown[opp.symbol]
 
         # In-memory entry lock — prevent same-symbol retry within same scan batch
         if opp.symbol in self._symbols_entering:
@@ -700,6 +714,15 @@ class ExecutionController:
                 },
             )
             await self._close_trade(trade)
+            # Set upgrade cooldown so the closed symbol doesn't immediately re-enter
+            cooldown_sec = getattr(
+                self._cfg.trading_params, 'upgrade_cooldown_seconds', 300
+            )
+            self._upgrade_cooldown[trade.symbol] = _time.time() + cooldown_sec
+            logger.info(
+                f"⬆️ Upgrade cooldown set for {trade.symbol}: {cooldown_sec}s",
+                extra={"symbol": trade.symbol, "action": "upgrade_cooldown_set"},
+            )
             return True
 
         return False
@@ -744,12 +767,18 @@ class ExecutionController:
         # _funding_paid_* flags indicate we already collected this cycle's payment
         # and are in continuous hold-or-exit monitoring. Don't advance trackers
         # until we explicitly decide to HOLD for the next cycle.
+        #
+        # IMPORTANT: When old tracker value < now (funding time has passed),
+        # only update if the new candidate is ALSO in the past (stale correction).
+        # If candidate is in the future, the funding was just PAID — don't advance
+        # yet, so the exit_offset check below can fire and trigger hold/exit.
         long_next_ts = long_funding.get("next_timestamp")
         if long_next_ts:
             candidate_long = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
             if not trade.next_funding_long or (
                 trade.next_funding_long < now
                 and not getattr(trade, '_funding_paid_long', False)
+                and candidate_long <= now  # only correct stale data, don't jump to future
             ):
                 trade.next_funding_long = candidate_long
                 li = long_funding.get("interval_hours", "?")
@@ -762,6 +791,7 @@ class ExecutionController:
             if not trade.next_funding_short or (
                 trade.next_funding_short < now
                 and not getattr(trade, '_funding_paid_short', False)
+                and candidate_short <= now  # only correct stale data, don't jump to future
             ):
                 trade.next_funding_short = candidate_short
                 si = short_funding.get("interval_hours", "?")
@@ -854,24 +884,65 @@ class ExecutionController:
             )
 
             if immediate_spread >= hold_min_spread:
-                # Spread is still good — keep holding.
+                # Spread is still good — but check if next funding is too far away.
+                # No point holding capital for hours when we could redeploy it.
+                hold_max_wait = getattr(
+                    self._cfg.trading_params, 'hold_max_wait_seconds', 3600
+                )
+                if hold_max_wait > 0:
+                    long_next = long_funding.get("next_timestamp")
+                    short_next = short_funding.get("next_timestamp")
+                    # Find the NEAREST next funding across both sides
+                    next_funding_candidates = []
+                    if long_next:
+                        next_funding_candidates.append(long_next / 1000)
+                    if short_next:
+                        next_funding_candidates.append(short_next / 1000)
+                    if next_funding_candidates:
+                        nearest_sec = min(next_funding_candidates) - now.timestamp()
+                        if nearest_sec > hold_max_wait:
+                            nearest_min = int(nearest_sec / 60)
+                            logger.info(
+                                f"🔄 Trade {trade.trade_id}: EXIT — spread {float(immediate_spread):.4f}% "
+                                f"≥ {float(hold_min_spread):.2f}% BUT next funding in {nearest_min}min "
+                                f"> max wait {hold_max_wait // 60}min — freeing capital (held {hold_min}min)",
+                                extra={
+                                    "trade_id": trade.trade_id,
+                                    "symbol": trade.symbol,
+                                    "action": "hold_max_wait_exit",
+                                },
+                            )
+                            await self._close_trade(trade)
+                            return
+
+                # Still within acceptable wait time — keep holding.
                 # Log HOLD decision periodically (every 5 min) to avoid spam.
                 # Do NOT advance trackers — keep gate open so we check every 30s.
                 if not getattr(trade, '_hold_logged_until', None) or trade._hold_logged_until < now:
                     # Show next funding from API (for display only)
-                    long_next = long_funding.get("next_timestamp")
-                    short_next = short_funding.get("next_timestamp")
+                    _long_next = long_funding.get("next_timestamp")
+                    _short_next = short_funding.get("next_timestamp")
                     next_long_str = datetime.fromtimestamp(
-                        long_next / 1000, tz=timezone.utc
-                    ).strftime('%H:%M') if long_next else '?'
+                        _long_next / 1000, tz=timezone.utc
+                    ).strftime('%H:%M') if _long_next else '?'
                     next_short_str = datetime.fromtimestamp(
-                        short_next / 1000, tz=timezone.utc
-                    ).strftime('%H:%M') if short_next else '?'
+                        _short_next / 1000, tz=timezone.utc
+                    ).strftime('%H:%M') if _short_next else '?'
+                    # Calculate time until next funding for display
+                    _nearest_min = '?'
+                    _candidates = []
+                    if _long_next:
+                        _candidates.append(_long_next / 1000)
+                    if _short_next:
+                        _candidates.append(_short_next / 1000)
+                    if _candidates:
+                        _nearest_min = f"{int((min(_candidates) - now.timestamp()) / 60)}min"
                     trade._hold_logged_until = now + timedelta(minutes=5)
                     logger.info(
                         f"🔄 Trade {trade.trade_id}: HOLD — immediate spread {float(immediate_spread):.4f}% "
                         f"≥ {float(hold_min_spread):.2f}% threshold (held {hold_min}min) | "
-                        f"Next funding: {trade.long_exchange}={next_long_str}, "
+                        f"Next funding in {_nearest_min} — "
+                        f"{trade.long_exchange}={next_long_str}, "
                         f"{trade.short_exchange}={next_short_str}",
                         extra={
                             "trade_id": trade.trade_id,

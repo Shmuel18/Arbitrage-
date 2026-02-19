@@ -146,6 +146,17 @@ code, .mono {
 .sidebar-logo {
   padding: 20px 20px 16px;
   border-bottom: 1px solid var(--nav-border);
+  text-align: center;
+}
+
+.sidebar-logo-img {
+  width: 80%;
+  max-width: 200px;
+  height: auto;
+  margin: 0 auto 8px;
+  display: block;
+  border-radius: 8px;
+  filter: drop-shadow(0 2px 8px rgba(102, 126, 234, 0.3));
 }
 
 .sidebar-logo h1 {
@@ -657,6 +668,7 @@ code, .mono {
   .sidebar-nav-item span:not(.nav-icon) { display: none; }
   .sidebar-logo h1 { font-size: 14px; text-align: center; }
   .sidebar-logo { padding: 16px 8px; }
+  .sidebar-logo-img { width: 44px; max-width: 44px; border-radius: 6px; }
   .sidebar-nav-item { justify-content: center; padding: 12px; }
   .main-content { margin-left: 60px; max-width: calc(100vw - 60px); }
   [dir="rtl"] .main-content { margin-left: 0; margin-right: 60px; }
