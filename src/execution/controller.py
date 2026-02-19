@@ -30,6 +30,7 @@ from src.core.contracts import (
     TradeState,
 )
 from src.core.logging import get_logger
+from src.core.journal import get_journal
 from src.discovery.calculator import calculate_fees, calculate_funding_spread
 
 if TYPE_CHECKING:
@@ -69,6 +70,8 @@ class ExecutionController:
         self._symbols_entering: set[str] = set()
         # Upgrade cooldown: symbol -> expiry timestamp (prevents re-entry after upgrade exit)
         self._upgrade_cooldown: Dict[str, float] = {}
+        # Trade journal for persistent audit trail
+        self._journal = get_journal()
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -270,6 +273,11 @@ class ExecutionController:
                     f"L_ask={long_ask} > S_bid={short_bid}, "
                     f"basis_loss={basis_loss_pct:.4f}% ≥ net_edge={opp.net_edge_pct:.4f}% — REJECTED"
                 )
+                self._journal.basis_rejection(
+                    opp.symbol, opp.long_exchange, opp.short_exchange,
+                    basis_loss=basis_loss_pct, net_edge=opp.net_edge_pct,
+                    long_ask=long_ask, short_bid=short_bid,
+                )
                 return
             
             logger.debug(
@@ -410,6 +418,23 @@ class ExecutionController:
             short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
             entry_price_long = self._extract_avg_price(long_fill)
             entry_price_short = self._extract_avg_price(short_fill)
+
+            # ── Fallback: if exchange didn't return avg price, use ticker ──
+            if entry_price_long is None:
+                try:
+                    t = await long_adapter.get_ticker(opp.symbol)
+                    entry_price_long = Decimal(str(t.get("last", 0)))
+                    logger.info(f"[{opp.symbol}] Long entry price from ticker: {entry_price_long}")
+                except Exception:
+                    entry_price_long = opp.reference_price  # last resort
+            if entry_price_short is None:
+                try:
+                    t = await short_adapter.get_ticker(opp.symbol)
+                    entry_price_short = Decimal(str(t.get("last", 0)))
+                    logger.info(f"[{opp.symbol}] Short entry price from ticker: {entry_price_short}")
+                except Exception:
+                    entry_price_short = opp.reference_price  # last resort
+
             entry_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
 
             # Log any partial fills and mismatches
@@ -543,17 +568,69 @@ class ExecutionController:
             immediate_spread = (
                 (-opp.long_funding_rate) + opp.short_funding_rate
             ) * Decimal("100")
+
+            # ── Build clear ENTRY REASON ──
+            lr_pct = float(opp.long_funding_rate) * 100
+            sr_pct = float(opp.short_funding_rate) * 100
+            # Income: long side earns when rate < 0 (shorts pay longs),
+            #         short side earns when rate > 0 (longs pay shorts)
+            income_parts = []
+            cost_parts = []
+            if opp.long_funding_rate < 0:
+                income_parts.append(f"{opp.long_exchange}(long) receives {abs(lr_pct):.4f}%")
+            else:
+                cost_parts.append(f"{opp.long_exchange}(long) pays {lr_pct:.4f}%")
+            if opp.short_funding_rate > 0:
+                income_parts.append(f"{opp.short_exchange}(short) receives {sr_pct:.4f}%")
+            else:
+                cost_parts.append(f"{opp.short_exchange}(short) pays {abs(sr_pct):.4f}%")
+            income_str = ", ".join(income_parts) if income_parts else "none"
+            cost_str = ", ".join(cost_parts) if cost_parts else "none"
+
+            entry_reason = (
+                f"{opp.mode.upper()}: spread={float(immediate_spread):.4f}% net={float(opp.net_edge_pct):.4f}% | "
+                f"Income: {income_str} | Cost: {cost_str}"
+            )
+            if opp.mode == "cherry_pick":
+                entry_reason += f" | collections={opp.n_collections}"
+                if opp.exit_before:
+                    entry_reason += f" exit_before={opp.exit_before.strftime('%H:%M UTC')}"
+
+            entry_notional = float(entry_price_long * long_filled_qty) if entry_price_long else 0
+
             entry_msg = (
-                f"ENTRY {trade_id} {opp.symbol} | "
-                f"BUY {opp.long_exchange} {long_filled_qty} @ {entry_price_long} | "
-                f"SELL {opp.short_exchange} {short_filled_qty} @ {entry_price_short} | "
-                f"Fees={entry_fees} | "
-                f"Spread={immediate_spread:.4f}% (immediate), Net={opp.net_edge_pct:.4f}%"
+                f"\n{'='*60}\n"
+                f"  🟢 TRADE ENTRY — {trade_id}\n"
+                f"  Symbol:    {opp.symbol}\n"
+                f"  Mode:      {opp.mode}\n"
+                f"  Reason:    {entry_reason}\n"
+                f"  LONG:      {opp.long_exchange} qty={long_filled_qty} @ ${float(entry_price_long or 0):.6f} "
+                    f"| funding={lr_pct:+.4f}%\n"
+                f"  SHORT:     {opp.short_exchange} qty={short_filled_qty} @ ${float(entry_price_short or 0):.6f} "
+                    f"| funding={sr_pct:+.4f}%\n"
+                f"  Notional:  ${entry_notional:.2f} per leg\n"
+                f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
+                f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"
+                f"  Fees:      ${float(entry_fees):.4f}\n"
+                f"{'='*60}"
             )
             logger.info(entry_msg, extra={"trade_id": trade_id, "symbol": opp.symbol, "action": "trade_entry"})
             if self._publisher:
                 await self._publisher.publish_log("INFO", entry_msg)
-            
+
+            # ── Journal: record trade open ──
+            self._journal.trade_opened(
+                trade_id=trade_id, symbol=opp.symbol, mode=opp.mode,
+                long_exchange=opp.long_exchange, short_exchange=opp.short_exchange,
+                long_qty=long_filled_qty, short_qty=short_filled_qty,
+                entry_price_long=entry_price_long, entry_price_short=entry_price_short,
+                long_funding_rate=opp.long_funding_rate, short_funding_rate=opp.short_funding_rate,
+                spread_pct=opp.funding_spread_pct, net_pct=opp.net_edge_pct,
+                exit_before=opp.exit_before, n_collections=opp.n_collections,
+                notional=entry_notional,
+                entry_reason=entry_reason,
+            )
+
             # Log balances after trade opened (if enabled)
             if hasattr(self._cfg.logging, 'log_balances_after_trade') and self._cfg.logging.log_balances_after_trade:
                 await self._log_exchange_balances()
@@ -578,6 +655,7 @@ class ExecutionController:
 
     async def _exit_monitor_loop(self) -> None:
         reconcile_counter = 0
+        balance_snapshot_counter = 0  # snapshot every 60 cycles (30min)
         while self._running:
             try:
                 # ── Position reconciliation every ~2 min (4 × 30s) ──
@@ -585,6 +663,12 @@ class ExecutionController:
                 if reconcile_counter >= 4:
                     reconcile_counter = 0
                     await self._reconcile_positions()
+
+                # ── Balance snapshot every ~30 min (60 × 30s) ──
+                balance_snapshot_counter += 1
+                if balance_snapshot_counter >= 60:
+                    balance_snapshot_counter = 0
+                    await self._journal_balance_snapshot()
 
                 for trade_id in list(self._active_trades):
                     trade = self._active_trades.get(trade_id)
@@ -869,6 +953,21 @@ class ExecutionController:
                 f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — evaluating hold/exit",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
             )
+            # Journal: log funding payment
+            if long_paid:
+                _lr = long_funding.get('rate')
+                _ln = (trade.entry_price_long or Decimal('0')) * trade.long_qty * abs(_lr) if _lr else None
+                self._journal.funding_detected(
+                    trade.trade_id, trade.symbol, trade.long_exchange, 'long',
+                    rate=_lr, estimated_payment=_ln,
+                )
+            if short_paid:
+                _sr = short_funding.get('rate')
+                _sn = (trade.entry_price_short or Decimal('0')) * trade.short_qty * abs(_sr) if _sr else None
+                self._journal.funding_detected(
+                    trade.trade_id, trade.symbol, trade.short_exchange, 'short',
+                    rate=_sr, estimated_payment=_sn,
+                )
 
         # Check if still profitable to hold (funding spread)
         quick_cycle = getattr(self._cfg.trading_params, 'quick_cycle', False)
@@ -912,6 +1011,12 @@ class ExecutionController:
                                     "action": "hold_max_wait_exit",
                                 },
                             )
+                            trade._exit_reason = f'max_wait_{nearest_min}min'
+                            self._journal.exit_decision(
+                                trade.trade_id, trade.symbol,
+                                reason=f'max_wait (next funding {nearest_min}min > {hold_max_wait//60}min)',
+                                immediate_spread=immediate_spread, hold_min=hold_min,
+                            )
                             await self._close_trade(trade)
                             return
 
@@ -950,6 +1055,11 @@ class ExecutionController:
                             "action": "hold_after_payment",
                         },
                     )
+                    self._journal.hold_decision(
+                        trade.trade_id, trade.symbol,
+                        immediate_spread=immediate_spread,
+                        next_funding_min=_nearest_min,
+                    )
                 return
             else:
                 # Spread dropped below threshold → EXIT
@@ -962,6 +1072,12 @@ class ExecutionController:
                         "symbol": trade.symbol,
                         "action": "quick_cycle_exit",
                     },
+                )
+                trade._exit_reason = f'spread_low_{float(immediate_spread):.4f}pct'
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=f'spread {float(immediate_spread):.4f}% < {float(hold_min_spread):.2f}% threshold',
+                    immediate_spread=immediate_spread, hold_min=hold_min,
                 )
                 await self._close_trade(trade)
                 return
@@ -1147,6 +1263,23 @@ class ExecutionController:
             trade.closed_at = datetime.now(timezone.utc)
             trade.exit_price_long = self._extract_avg_price(long_fill)
             trade.exit_price_short = self._extract_avg_price(short_fill)
+
+            # ── Fallback: if exchange didn't return avg price, use ticker ──
+            if trade.exit_price_long is None and long_adapter:
+                try:
+                    t = await long_adapter.get_ticker(trade.symbol)
+                    trade.exit_price_long = Decimal(str(t.get("last", 0)))
+                    logger.info(f"[{trade.symbol}] Long exit price from ticker: {trade.exit_price_long}")
+                except Exception:
+                    pass
+            if trade.exit_price_short is None and short_adapter:
+                try:
+                    t = await short_adapter.get_ticker(trade.symbol)
+                    trade.exit_price_short = Decimal(str(t.get("last", 0)))
+                    logger.info(f"[{trade.symbol}] Short exit price from ticker: {trade.exit_price_short}")
+                except Exception:
+                    pass
+
             close_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
             total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
             trade.fees_paid_total = total_fees
@@ -1172,26 +1305,60 @@ class ExecutionController:
             funding_net = funding_income - funding_cost
             total_pnl = price_pnl + funding_net - total_fees
             invested = max(entry_notional_long, entry_notional_short)
+            profit_pct = (total_pnl / invested * Decimal("100")) if invested > 0 else Decimal("0")
             hold_minutes = Decimal("0")
             if trade.opened_at and trade.closed_at:
                 hold_minutes = Decimal(str((trade.closed_at - trade.opened_at).total_seconds() / 60))
 
+            # ── Fetch current funding rates at exit for comparison ──
+            exit_funding_long_rate = None
+            exit_funding_short_rate = None
+            try:
+                if long_adapter:
+                    _lf = long_adapter.get_funding_rate_cached(trade.symbol)
+                    exit_funding_long_rate = _lf.get("rate") if _lf else None
+                if short_adapter:
+                    _sf = short_adapter.get_funding_rate_cached(trade.symbol)
+                    exit_funding_short_rate = _sf.get("rate") if _sf else None
+            except Exception:
+                pass  # best-effort
+
+            _exit_reason = getattr(trade, '_exit_reason', 'spread_below_threshold')
+            entry_lr = float(trade.long_funding_rate or 0) * 100
+            entry_sr = float(trade.short_funding_rate or 0) * 100
+            exit_lr = float(exit_funding_long_rate or 0) * 100 if exit_funding_long_rate else None
+            exit_sr = float(exit_funding_short_rate or 0) * 100 if exit_funding_short_rate else None
+
+            # Build funding rates comparison string
+            funding_rates_str = f"  At entry:  {trade.long_exchange}={entry_lr:+.4f}%  {trade.short_exchange}={entry_sr:+.4f}%\n"
+            if exit_lr is not None and exit_sr is not None:
+                funding_rates_str += f"  At exit:   {trade.long_exchange}={exit_lr:+.4f}%  {trade.short_exchange}={exit_sr:+.4f}%"
+            else:
+                funding_rates_str += f"  At exit:   (rates unavailable)"
+
             logger.info(
                 f"\n{'='*60}\n"
-                f"  📊 TRADE SUMMARY — {trade.trade_id}\n"
+                f"  📊 TRADE CLOSED — {trade.trade_id}\n"
                 f"  Symbol:     {trade.symbol}\n"
                 f"  Mode:       {trade.mode}\n"
                 f"  Duration:   {float(hold_minutes):.0f} min\n"
-                f"  Long:       {trade.long_exchange} qty={trade.long_qty} "
-                f"entry=${float(trade.entry_price_long or 0):.4f} exit=${float(trade.exit_price_long or 0):.4f}\n"
-                f"  Short:      {trade.short_exchange} qty={trade.short_qty} "
-                f"entry=${float(trade.entry_price_short or 0):.4f} exit=${float(trade.exit_price_short or 0):.4f}\n"
-                f"  Invested:   ${float(invested):.2f} (notional per leg)\n"
-                f"  Price PnL:  ${float(price_pnl):.4f}\n"
-                f"  Funding:    +${float(funding_income):.4f} -${float(funding_cost):.4f} = ${float(funding_net):.4f}\n"
-                f"  Fees:       ${float(total_fees):.4f}\n"
+                f"  Exit reason: {_exit_reason}\n"
+                f"  ────────── PER-LEG BREAKDOWN ──────────\n"
+                f"  LONG  {trade.long_exchange}:\n"
+                f"    qty={trade.long_qty}  entry=${float(trade.entry_price_long or 0):.6f}  exit=${float(trade.exit_price_long or 0):.6f}\n"
+                f"    PnL: ${float(long_pnl):.4f}  (notional {float(entry_notional_long):.2f} → {float(exit_notional_long):.2f})\n"
+                f"  SHORT {trade.short_exchange}:\n"
+                f"    qty={trade.short_qty}  entry=${float(trade.entry_price_short or 0):.6f}  exit=${float(trade.exit_price_short or 0):.6f}\n"
+                f"    PnL: ${float(short_pnl):.4f}  (notional {float(entry_notional_short):.2f} → {float(exit_notional_short):.2f})\n"
+                f"  ────────── FUNDING RATES ──────────\n"
+                f"{funding_rates_str}\n"
+                f"  ────────── TOTALS ──────────\n"
+                f"  Price PnL:  ${float(price_pnl):.4f}  (long=${float(long_pnl):.4f} + short=${float(short_pnl):.4f})\n"
+                f"  Funding:    +${float(funding_income):.4f} income  -${float(funding_cost):.4f} cost  = ${float(funding_net):.4f} net\n"
+                f"  Fees:       -${float(total_fees):.4f}\n"
+                f"  Invested:   ${float(invested):.2f}\n"
                 f"  ────────────────────────────────\n"
-                f"  NET PROFIT: ${float(total_pnl):.4f}\n"
+                f"  NET PROFIT: ${float(total_pnl):.4f}  ({float(profit_pct):.3f}%)\n"
                 f"{'='*60}",
                 extra={
                     "trade_id": trade.trade_id,
@@ -1199,13 +1366,38 @@ class ExecutionController:
                     "data": {
                         "symbol": trade.symbol,
                         "invested": float(invested),
+                        "long_pnl": float(long_pnl),
+                        "short_pnl": float(short_pnl),
                         "price_pnl": float(price_pnl),
+                        "funding_income": float(funding_income),
+                        "funding_cost": float(funding_cost),
                         "funding_net": float(funding_net),
                         "fees": float(total_fees),
                         "net_profit": float(total_pnl),
+                        "profit_pct": float(profit_pct),
                         "hold_minutes": float(hold_minutes),
                     }
                 },
+            )
+
+            # ── Journal: record trade close ──
+            self._journal.trade_closed(
+                trade_id=trade.trade_id, symbol=trade.symbol, mode=trade.mode,
+                duration_min=float(hold_minutes),
+                entry_price_long=trade.entry_price_long,
+                entry_price_short=trade.entry_price_short,
+                exit_price_long=trade.exit_price_long,
+                exit_price_short=trade.exit_price_short,
+                long_pnl=long_pnl, short_pnl=short_pnl,
+                price_pnl=price_pnl, funding_income=funding_income,
+                funding_cost=funding_cost, funding_net=funding_net,
+                fees=total_fees, net_profit=total_pnl,
+                profit_pct=profit_pct, invested=invested,
+                exit_reason=_exit_reason,
+                entry_funding_long=trade.long_funding_rate,
+                entry_funding_short=trade.short_funding_rate,
+                exit_funding_long=exit_funding_long_rate,
+                exit_funding_short=exit_funding_short_rate,
             )
 
             # ── Publish PnL data point to Redis for frontend chart ──
@@ -1531,3 +1723,23 @@ class ExecutionController:
                     logger.warning(f"Failed to fetch balance for {exchange_id}: {e}")
         except Exception as e:
             logger.error(f"Balance logging error: {e}")
+
+    async def _journal_balance_snapshot(self) -> None:
+        """Record a balance snapshot to the trade journal (every ~30min)."""
+        try:
+            balances = {}
+            total = 0.0
+            for exchange_id in self._cfg.enabled_exchanges:
+                adapter = self._exchanges.get(exchange_id)
+                if not adapter:
+                    continue
+                try:
+                    bal = await adapter.get_balance()
+                    usdt = float(bal.get("free", 0))
+                    balances[exchange_id] = usdt
+                    total += usdt
+                except Exception:
+                    balances[exchange_id] = None
+            self._journal.balance_snapshot(balances, total=total)
+        except Exception as e:
+            logger.debug(f"Balance snapshot error: {e}")
