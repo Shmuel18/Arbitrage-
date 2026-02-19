@@ -140,25 +140,38 @@ async def get_summary():
     try:
         if not redis_client:
             return {
-                "total_pnl": 0,
-                "total_trades": 0,
-                "win_rate": 0,
-                "active_positions": 0,
-                "uptime_hours": 0
+                "total_pnl": 0, "total_trades": 0, "win_rate": 0,
+                "active_positions": 0, "uptime_hours": 0,
+                "all_time_pnl": 0, "avg_pnl": 0,
             }
-        
+
         summary_key = "trinity:summary"
         summary_data = await redis_client._client.get(summary_key)
-        
-        if not summary_data:
-            return {
-                "total_pnl": 0,
-                "total_trades": 0,
-                "win_rate": 0,
-                "active_positions": 0,
-                "uptime_hours": 0
-            }
-        
-        return json.loads(summary_data)
+        base = json.loads(summary_data) if summary_data else {
+            "total_pnl": 0, "total_trades": 0, "win_rate": 0,
+            "active_positions": 0, "uptime_hours": 0,
+        }
+
+        # Compute accurate all-time PnL, win-rate and avg from closed trades history
+        all_time_pnl = 0.0
+        trade_count = 0
+        winning = 0
+        try:
+            trades_raw = await redis_client._client.zrange("trinity:trades:history", 0, -1)
+            for t in trades_raw:
+                td = json.loads(t)
+                pnl = float(td.get('total_pnl', 0))
+                all_time_pnl += pnl
+                trade_count += 1
+                if pnl > 0:
+                    winning += 1
+        except Exception:
+            pass
+
+        base['all_time_pnl'] = round(all_time_pnl, 4)
+        base['avg_pnl'] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0
+        base['total_trades'] = trade_count
+        base['win_rate'] = round(winning / trade_count, 3) if trade_count > 0 else 0.0
+        return base
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

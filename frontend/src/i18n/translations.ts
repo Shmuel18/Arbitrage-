@@ -92,6 +92,16 @@ export interface Translations {
   totalTradesLabel: string;
   winRate: string;
   waitingLogs: string;
+
+  // New stats / columns
+  avgPnlStat: string;
+  allTimePnl: string;
+  netPnl: string;
+  duration: string;
+  sizeUsd: string;
+  nextPayout: string;
+  lastUpdated: string;
+  netImmed: string;
 }
 
 const en: Translations = {
@@ -177,6 +187,15 @@ const en: Translations = {
   totalTradesLabel: 'Total Trades',
   winRate: 'Win Rate',
   waitingLogs: 'Waiting for log data...',
+
+  avgPnlStat: 'AVG P&L / TRADE',
+  allTimePnl: 'ALL-TIME PNL',
+  netPnl: 'Net P&L',
+  duration: 'Duration',
+  sizeUsd: 'Size $',
+  nextPayout: 'Next ⏱',
+  lastUpdated: 'LAST UPDATE',
+  netImmed: 'NET IMMED',
 };
 
 const he: Translations = {
@@ -262,6 +281,15 @@ const he: Translations = {
   totalTradesLabel: 'סה״כ עסקאות',
   winRate: 'אחוז הצלחה',
   waitingLogs: 'ממתין לנתוני יומן...',
+
+  avgPnlStat: 'ממוצע לעסקה',
+  allTimePnl: 'רווח כולל',
+  netPnl: 'רווח נטו',
+  duration: 'משך',
+  sizeUsd: 'גודל $',
+  nextPayout: 'תשלום הבא',
+  lastUpdated: 'עדכון אחרון',
+  netImmed: 'נטו מיידי',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

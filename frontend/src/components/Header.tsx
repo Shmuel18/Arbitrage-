@@ -1,14 +1,30 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { BotStatus } from '../types';
 import { emergencyStop } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 
 interface HeaderProps {
   botStatus: BotStatus;
+  lastFetchedAt?: number;
 }
 
-const Header: React.FC<HeaderProps> = ({ botStatus }) => {
+const Header: React.FC<HeaderProps> = React.memo(({ botStatus, lastFetchedAt }) => {
   const { t, lang, setLang, theme, setTheme } = useSettings();
+  const secsRef = useRef<HTMLElement>(null);
+  const startRef = useRef(Date.now());
+
+  // Reset start time when a new fetch arrives
+  useEffect(() => { startRef.current = Date.now(); }, [lastFetchedAt]);
+
+  // Update DOM directly every second — no React re-render
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (secsRef.current) {
+        secsRef.current.textContent = Math.floor((Date.now() - startRef.current) / 1000) + 's';
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleEmergencyStop = async () => {
     if (window.confirm(t.emergencyStopConfirm)) {
@@ -44,6 +60,10 @@ const Header: React.FC<HeaderProps> = ({ botStatus }) => {
         <div className="info-pill">
           {t.positions}: <strong>{botStatus.active_positions}</strong>
         </div>
+
+        <div className="info-pill">
+          {t.lastUpdated}: <strong ref={secsRef} style={{ display: 'inline-block', minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+        </div>
       </div>
 
       <div className="top-bar-right">
@@ -61,6 +81,6 @@ const Header: React.FC<HeaderProps> = ({ botStatus }) => {
       </div>
     </header>
   );
-};
+});
 
 export default Header;

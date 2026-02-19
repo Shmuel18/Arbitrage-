@@ -20,6 +20,8 @@ interface RecentTrade {
   opened_at?: string | null;
   closed_at?: string | null;
   status?: string | null;
+  total_pnl?: number | null;
+  hold_minutes?: number | null;
 }
 
 interface RecentTradesPanelProps {
@@ -60,6 +62,18 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
     }
   };
 
+  const formatPnl = (v?: number | null) => {
+    if (v == null) return '--';
+    const s = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v);
+    return <span style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{s}</span>;
+  };
+
+  const formatDuration = (mins?: number | null) => {
+    if (mins == null) return '--';
+    if (mins < 60) return `${Math.round(mins)}m`;
+    return `${Math.floor(mins / 60)}h${Math.round(mins % 60) > 0 ? Math.round(mins % 60) + 'm' : ''}`;
+  };
+
   return (
     <div className="card">
       <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
@@ -76,6 +90,8 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
               <th className="text-end">{t.fundingLS}</th>
               <th className="text-end">{t.fundingNet}</th>
               <th className="text-end">{t.fees}</th>
+              <th className="text-end">{t.netPnl}</th>
+              <th className="text-end">{t.duration}</th>
               <th className="text-end">{t.opened}</th>
               <th className="text-end">{t.closed}</th>
             </tr>
@@ -83,7 +99,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={9} className="text-center text-secondary py-8">{t.noTradesYet}</td>
+                <td colSpan={11} className="text-center text-secondary py-8">{t.noTradesYet}</td>
               </tr>
             ) : (
               trades.map((tr) => (
@@ -106,6 +122,12 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
                   </td>
                   <td className="text-end mono">
                     {formatFunding(tr.fees_paid_total)}
+                  </td>
+                  <td className="text-end mono">
+                    {formatPnl(tr.total_pnl)}
+                  </td>
+                  <td className="text-end text-secondary">
+                    {formatDuration(tr.hold_minutes)}
                   </td>
                   <td className="text-end text-secondary">
                     {formatDate(tr.opened_at)}

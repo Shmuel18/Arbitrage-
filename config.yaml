@@ -22,7 +22,7 @@ trading_params:
   max_sane_funding_rate: 0.10 # max absolute funding rate before filtering (10%)
   entry_offset_seconds: 900
   exit_offset_seconds: 900
-  max_entry_window_minutes: 60 # Only scan opportunities with funding < 60 min away
+  max_entry_window_minutes: 15 # Enter ~15 min before funding, collect, exit
   quick_cycle: true # Exit after first funding payment (zero dead time)
   hold_min_spread: 0.5 # Min spread % to hold position after funding collection
   upgrade_spread_delta: 0.5 # Switch to a better opportunity if its spread is +N% higher

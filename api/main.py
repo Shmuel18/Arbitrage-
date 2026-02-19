@@ -167,6 +167,39 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
+async def _compute_summary(client) -> dict:
+    """Compute accurate summary from trade history (same logic as HTTP endpoint)."""
+    base = {"total_pnl": 0, "total_trades": 0, "win_rate": 0,
+            "active_positions": 0, "uptime_hours": 0,
+            "all_time_pnl": 0, "avg_pnl": 0}
+    try:
+        summary_data = await client.get("trinity:summary")
+        if summary_data:
+            base.update(json.loads(summary_data))
+    except Exception:
+        pass
+    # Compute accurate stats from closed trade history
+    all_time_pnl = 0.0
+    trade_count = 0
+    winning = 0
+    try:
+        trades_raw = await client.zrange("trinity:trades:history", 0, -1)
+        for t in trades_raw:
+            td = json.loads(t)
+            pnl = float(td.get('total_pnl', 0))
+            all_time_pnl += pnl
+            trade_count += 1
+            if pnl > 0:
+                winning += 1
+    except Exception:
+        pass
+    base['all_time_pnl'] = round(all_time_pnl, 4)
+    base['avg_pnl'] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0
+    base['total_trades'] = trade_count
+    base['win_rate'] = round(winning / trade_count, 3) if trade_count > 0 else 0.0
+    return base
+
+
 async def broadcast_updates():
     """Background task to broadcast updates to all connected clients"""
     while True:
@@ -177,7 +210,7 @@ async def broadcast_updates():
                 positions_data = await redis_client._client.get("trinity:positions")
                 balances_data = await redis_client._client.get("trinity:balances")
                 opportunities_data = await redis_client._client.get("trinity:opportunities")
-                summary_data = await redis_client._client.get("trinity:summary")
+                summary = await _compute_summary(redis_client._client)
                 logs_data = await redis_client._client.lrange("trinity:logs", 0, 19)
                 pnl_data = await redis_client._client.get("trinity:pnl:latest")
                 
@@ -188,7 +221,7 @@ async def broadcast_updates():
                         "positions": json.loads(positions_data) if positions_data else [],
                         "balances": json.loads(balances_data) if balances_data else None,
                         "opportunities": json.loads(opportunities_data) if opportunities_data else None,
-                        "summary": json.loads(summary_data) if summary_data else None,
+                        "summary": summary,
                         "pnl": json.loads(pnl_data) if pnl_data else None,
                         "logs": [json.loads(l) for l in logs_data] if logs_data else [],
                     },

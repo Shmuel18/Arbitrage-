@@ -428,131 +428,182 @@ class Scanner:
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
 
-        # ── Immediate spread gate ────────────────────────────────
-        min_imm = getattr(tp, 'min_immediate_spread', tp.min_funding_spread)
-        if immediate_spread < min_imm:
-            qualified = False
-
-        # ── 60-minute entry window (PRIMARY CONTRIBUTOR ONLY) ────
-        # Only check timing for the side that contributes most to the spread
-        max_window = getattr(tp, 'max_entry_window_minutes', 60)
+        # ── Entry window: ANY income side with imminent funding ────
+        # Check each side independently.  If ANY income-generating side
+        # has funding within the window, calculate imminent net from
+        # payments that actually fire during the hold.
+        max_window = getattr(tp, 'max_entry_window_minutes', 15)
         now_ms = time.time() * 1000
         long_next = funding[long_eid].get("next_timestamp")
         short_next = funding[short_eid].get("next_timestamp")
-        
-        # Determine primary contributor: who makes the money?
-        long_contribution = abs(long_rate) if long_rate < 0 else Decimal("0")
-        short_contribution = abs(short_rate) if short_rate > 0 else Decimal("0")
-        
-        if long_contribution > short_contribution:
-            # Long side is primary contributor — check ONLY long timing
-            primary_side = "long"
-            primary_next = long_next
-        else:
-            # Short side is primary contributor — check ONLY short timing
-            primary_side = "short"
-            primary_next = short_next
-        
-        closest_ms = None
-        if primary_next and primary_next > now_ms:
-            closest_ms = primary_next  # always store for display
-            minutes_until = (primary_next - now_ms) / 60_000
-            if minutes_until > max_window:
-                qualified = False
-        elif primary_next and primary_next <= now_ms:
-            # Timestamp is in the past (stale data) — disqualify
-            qualified = False
-        else:
-            closest_ms = None  # no timestamp available — allow
 
-        # ── Determine mode & net ─────────────────────────────────
+        # Classify each side: income or cost?
+        long_is_income = long_rate < 0   # long on negative → we get paid
+        short_is_income = short_rate > 0  # short on positive → we get paid
+
+        # Minutes until each side's next funding
+        long_mins = (long_next - now_ms) / 60_000 if (long_next and long_next > now_ms) else None
+        short_mins = (short_next - now_ms) / 60_000 if (short_next and short_next > now_ms) else None
+
+        # Is each income side within the entry window?
+        long_imminent = long_is_income and long_mins is not None and long_mins <= max_window
+        short_imminent = short_is_income and short_mins is not None and short_mins <= max_window
+
+        # Stale: income side has funding timestamp in the past
+        long_stale = long_is_income and long_next is not None and long_next <= now_ms
+        short_stale = short_is_income and short_next is not None and short_next <= now_ms
+
+        # Calculate imminent spread: income from imminent payments
+        # minus cost from payments that also fire during the hold
+        imminent_income_pct = Decimal("0")
+        imminent_cost_pct = Decimal("0")
+        if long_imminent:
+            imminent_income_pct += abs(long_rate) * Decimal("100")
+        if short_imminent:
+            imminent_income_pct += abs(short_rate) * Decimal("100")
+        # Cost sides that also fire during the hold window
+        if not long_is_income and long_mins is not None and long_mins <= max_window:
+            imminent_cost_pct += abs(long_rate) * Decimal("100")
+        if not short_is_income and short_mins is not None and short_mins <= max_window:
+            imminent_cost_pct += abs(short_rate) * Decimal("100")
+        imminent_spread_pct = imminent_income_pct - imminent_cost_pct
+
+        # Earliest income payment within window → entry target
+        closest_ms = None
+        _income_ts = []
+        if long_imminent:
+            _income_ts.append(long_next)
+        if short_imminent:
+            _income_ts.append(short_next)
+        if _income_ts:
+            closest_ms = min(_income_ts)
+        elif long_next and long_next > now_ms:
+            closest_ms = long_next   # display only
+        elif short_next and short_next > now_ms:
+            closest_ms = short_next  # display only
+
+        # ── Gate: imminent income must exist & meet threshold ────
+        hold_qualified = True
+        if long_stale or short_stale:
+            hold_qualified = False
+        elif not (long_imminent or short_imminent):
+            # No income side has funding within the entry window
+            hold_qualified = False
+        elif imminent_spread_pct < tp.min_funding_spread:
+            # Imminent gross spread below 0.5%
+            hold_qualified = False
+
+        # ── Determine mode & net (based on imminent payments) ────
         mode = "hold"
-        net_pct = funding_spread - total_cost_pct
-        gross_pct = funding_spread
+        gross_pct = imminent_spread_pct
+        net_pct = imminent_spread_pct - total_cost_pct
         exit_before = None
         n_collections = 0
 
-        if pnl["both_income"]:
+        if hold_qualified and pnl["both_income"]:
             # ── HOLD mode: both sides are income ────────────────
-            # Gate on immediate net (immediate_spread - fees); 8h-normalization not used
-            if (immediate_spread - total_cost_pct) < tp.min_net_pct:
+            if (imminent_spread_pct - total_cost_pct) < tp.min_net_pct:
                 qualified = False
-            if qualified:
+            else:
+                min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
+                funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
                 logger.info(
                     f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
                     f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
-                    f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
-                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%",
+                    f"IMMINENT={imminent_spread_pct:.4f}% (gross) | "
+                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
                     extra={
                         "action": "opportunity_found",
                         "symbol": symbol,
                         "mode": "hold",
                         "long_rate": str(long_rate),
                         "short_rate": str(short_rate),
+                        "min_to_funding": min_to_funding,
                     },
                 )
+        elif hold_qualified and not pnl["both_cost"]:
+            # ── One side income, one side cost — imminent window met ──
+            if (imminent_spread_pct - total_cost_pct) >= tp.min_net_pct:
+                # Plain HOLD is net-positive from imminent payments
+                min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
+                funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
+                logger.info(
+                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
+                    f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
+                    f"IMMINENT={imminent_spread_pct:.4f}% (gross) | "
+                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
+                    extra={
+                        "action": "opportunity_found",
+                        "symbol": symbol,
+                        "mode": "hold_mixed",
+                        "long_rate": str(long_rate),
+                        "short_rate": str(short_rate),
+                        "min_to_funding": min_to_funding,
+                    },
+                )
+            else:
+                qualified = False
         else:
-            # ── One side income, one side cost ───────────────────
-            if immediate_spread >= min_imm and (immediate_spread - total_cost_pct) >= tp.min_net_pct:
-                # Plain HOLD is net-positive
-                if qualified:
-                    logger.info(
-                        f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
-                        f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
-                        f"SPREAD={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) | "
-                        f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}%",
-                        extra={
-                            "action": "opportunity_found",
-                            "symbol": symbol,
-                            "mode": "hold_mixed",
-                            "long_rate": str(long_rate),
-                            "short_rate": str(short_rate),
-                        },
-                    )
-            elif qualified:
-                # Try CHERRY_PICK only if still potentially qualified
+            # ── HOLD didn't qualify — try CHERRY_PICK ────────────
+            # Cherry-pick works independently of the 15-min window:
+            # Enter now, collect income payments over time, exit
+            # BEFORE the costly side fires.
+            qualified = False  # default off, cherry_pick turns it back on
+            if not pnl["both_cost"] and not (long_stale or short_stale):
                 cherry_ok = False
                 if pnl["long_is_income"]:
                     income_pnl = pnl["long_pnl_per_payment"]
                     income_interval = long_interval
+                    income_eid = long_eid
                     cost_eid = short_eid
-                else:
+                elif pnl["short_is_income"]:
                     income_pnl = pnl["short_pnl_per_payment"]
                     income_interval = short_interval
+                    income_eid = short_eid
                     cost_eid = long_eid
+                else:
+                    income_pnl = None
 
-                cost_next_ts = funding[cost_eid].get("next_timestamp")
-                if cost_next_ts:
-                    cp_now_ms = time.time() * 1000
-                    ms_until_cost = cost_next_ts - cp_now_ms
-                    minutes_until_cost = ms_until_cost / 60_000
+                if income_pnl is not None:
+                    cost_next_ts = funding[cost_eid].get("next_timestamp")
+                    income_next_ts = funding[income_eid].get("next_timestamp")
+                    if cost_next_ts and income_next_ts:
+                        cp_now_ms = time.time() * 1000
+                        ms_until_cost = cost_next_ts - cp_now_ms
+                        ms_until_income = income_next_ts - cp_now_ms
+                        minutes_until_cost = ms_until_cost / 60_000
+                        minutes_until_income = ms_until_income / 60_000
 
-                    if minutes_until_cost >= _MIN_WINDOW_MINUTES:
-                        hours_until_cost = ms_until_cost / 3_600_000
-                        cp_n = int(hours_until_cost / income_interval)
-                        if cp_n >= 1:
-                            cp_gross = calculate_cherry_pick_edge(income_pnl, cp_n)
-                            cp_net = cp_gross - total_cost_pct
-                            if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
-                                cherry_ok = True
-                                mode = "cherry_pick"
-                                gross_pct = cp_gross
-                                net_pct = cp_net
-                                n_collections = cp_n
-                                exit_before = datetime.fromtimestamp(
-                                    (cost_next_ts - 120_000) / 1000, tz=timezone.utc
-                                )
-                                logger.info(
-                                    f"🍒 Cherry-pick {symbol}: collect {cp_n}× every {income_interval}h "
-                                    f"(gross={cp_gross:.4f}%, net={cp_net:.4f}%) — "
-                                    f"exit before {exit_before.strftime('%H:%M UTC')}",
-                                    extra={"action": "cherry_pick_found", "symbol": symbol},
-                                )
-                if not cherry_ok:
-                    qualified = False
-            else:
-                # Already unqualified from earlier gates, keep HOLD estimate
-                qualified = False
+                        # Cost must be far enough away (>30 min)
+                        # Income must arrive before cost
+                        if (minutes_until_cost >= _MIN_WINDOW_MINUTES
+                                and minutes_until_income < minutes_until_cost):
+                            hours_until_cost = ms_until_cost / 3_600_000
+                            cp_n = int(hours_until_cost / income_interval)
+                            if cp_n >= 1:
+                                cp_gross = calculate_cherry_pick_edge(income_pnl, cp_n)
+                                cp_net = cp_gross - total_cost_pct
+                                if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
+                                    # Extra gate: only enter cherry_pick within
+                                    # max_entry_window_minutes of the FIRST income payment
+                                    if minutes_until_income <= max_window:
+                                        cherry_ok = True
+                                        qualified = True
+                                        mode = "cherry_pick"
+                                        gross_pct = cp_gross
+                                        net_pct = cp_net
+                                        n_collections = cp_n
+                                        exit_before = datetime.fromtimestamp(
+                                            (cost_next_ts - 120_000) / 1000, tz=timezone.utc
+                                        )
+                                        closest_ms = income_next_ts
+                                        logger.info(
+                                            f"🍒 Cherry-pick {symbol}: collect {cp_n}× every {income_interval}h "
+                                            f"(gross={cp_gross:.4f}%, net={cp_net:.4f}%) — "
+                                            f"enter {int(minutes_until_income)}min before 1st payment, "
+                                            f"exit before {exit_before.strftime('%H:%M UTC')}",
+                                            extra={"action": "cherry_pick_found", "symbol": symbol},
+                                        )
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
         if not qualified and immediate_spread <= Decimal("0"):

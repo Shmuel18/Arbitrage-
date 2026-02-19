@@ -227,6 +227,9 @@ async def main() -> None:
                         "current_spread_pct": None,
                         "current_long_rate": None,
                         "current_short_rate": None,
+                        "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
+                        "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
+                        "next_funding_ms": None,
                     }
                     # Use cached funding rates to compute current spread (no REST)
                     try:
@@ -245,6 +248,8 @@ async def main() -> None:
                         pos_entry["current_spread_pct"] = str(spread_info["funding_spread_pct"])
                         pos_entry["current_long_rate"] = str(live_long["rate"])
                         pos_entry["current_short_rate"] = str(live_short["rate"])
+                        if live_long.get("next_timestamp"):
+                            pos_entry["next_funding_ms"] = live_long["next_timestamp"]
                     except Exception as fr_err:
                         logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
                     positions_data.append(pos_entry)

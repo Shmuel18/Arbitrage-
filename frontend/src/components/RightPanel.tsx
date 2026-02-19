@@ -17,6 +17,8 @@ interface Opportunity {
   qualified?: boolean;
   price: number;
   mode: string;
+  fees_pct?: number;
+  immediate_net_pct?: number;
 }
 
 interface RightPanelProps {
@@ -87,8 +89,18 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
         <td className="text-end mono font-semibold" style={getRateStyle(immediateSpread)}>
           {formatSpread(immediateSpread)}
         </td>
+        <td className="text-end mono" style={getRateStyle(opp.immediate_net_pct ?? 0)}>
+          {opp.immediate_net_pct != null ? formatSpread(opp.immediate_net_pct) : '--'}
+        </td>
         <td className="text-end mono font-semibold" style={getRateStyle(hourlyRate)}>
           {formatSpread(hourlyRate)}
+        </td>
+        <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
+          {opp.mode === 'cherry_pick'
+            ? <span style={{ color: '#f97316' }}>🍒CHERRY</span>
+            : opp.mode === 'hold_mixed'
+            ? <span style={{ color: '#eab308' }}>MIXED</span>
+            : <span style={{ color: '#22c55e' }}>HOLD</span>}
         </td>
         <td className="text-end mono" style={{
           color: isUrgent ? 'var(--green)' : 'var(--text-muted)',
@@ -122,7 +134,9 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                 <th className="text-end">{t.fundingL}</th>
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
+                <th className="text-end">{t.netImmed}</th>
                 <th className="text-end">{t.hourlyRate}</th>
+                <th className="text-end">MODE</th>
                 <th className="text-end">{t.countdown}</th>
               </tr>
             </thead>
@@ -130,7 +144,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
               {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                 <tr>
-                  <td colSpan={8} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                  <td colSpan={10} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                     ── {t.belowThreshold} ──
                   </td>
                 </tr>

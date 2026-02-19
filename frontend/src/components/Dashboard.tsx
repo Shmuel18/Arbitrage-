@@ -72,7 +72,7 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
       <Sidebar activeSection={activeSection} onNavigate={scrollToSection} />
 
       <div className="main-content">
-        <Header botStatus={data.status} />
+        <Header botStatus={data.status} lastFetchedAt={data.lastFetchedAt} />
 
         <div className="content-area" ref={contentRef}>
           <div className="space-y-5">
@@ -82,6 +82,10 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
                 dailyPnl={data.pnl?.total_pnl ?? 0}
                 activeTrades={data.status.active_positions}
                 systemRunning={data.status.bot_running}
+                winRate={data.summary?.win_rate ?? 0}
+                totalTrades={data.summary?.total_trades ?? 0}
+                allTimePnl={data.summary?.all_time_pnl ?? 0}
+                avgPnl={data.summary?.avg_pnl ?? 0}
               />
             </div>
 
