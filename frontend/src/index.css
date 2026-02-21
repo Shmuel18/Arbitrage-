@@ -69,27 +69,54 @@
 
 /* ── Dark theme override ── */
 [data-theme="dark"] {
-  --content-bg: #111827;
-  --card-bg: #1f2937;
-  --card-border: #374151;
-  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
+  --content-bg: #080d14;
+  --card-bg: rgba(15, 23, 42, 0.72);
+  --card-border: rgba(255, 255, 255, 0.07);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  --card-shadow-hover: 0 4px 24px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+  --nav-bg: #060b12;
+  --nav-bg-hover: #0f1a2e;
+  --nav-border: rgba(255, 255, 255, 0.05);
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #475569;
   --accent-light: rgba(42, 106, 242, 0.15);
-  --green-bg: rgba(16, 185, 129, 0.15);
-  --red-bg: rgba(239, 68, 68, 0.15);
-  --yellow-bg: rgba(245, 158, 11, 0.15);
-  --purple-bg: rgba(139, 92, 246, 0.15);
-  --table-header-bg: #1f2937;
-  --table-border: #374151;
-  --table-stripe: rgba(31, 41, 55, 0.5);
-  --table-hover: rgba(42, 106, 242, 0.1);
-  --input-bg: #1f2937;
-  --input-border: #4b5563;
-  --divider: #374151;
-  --chart-bg: #1f2937;
+  --green-bg: rgba(16, 185, 129, 0.12);
+  --red-bg: rgba(239, 68, 68, 0.12);
+  --yellow-bg: rgba(245, 158, 11, 0.12);
+  --purple-bg: rgba(139, 92, 246, 0.12);
+  --table-header-bg: rgba(15, 23, 42, 0.9);
+  --table-border: rgba(255, 255, 255, 0.05);
+  --table-stripe: rgba(255, 255, 255, 0.02);
+  --table-hover: rgba(42, 106, 242, 0.08);
+  --input-bg: rgba(15, 23, 42, 0.8);
+  --input-border: rgba(255, 255, 255, 0.1);
+  --divider: rgba(255, 255, 255, 0.06);
+  --chart-bg: rgba(15, 23, 42, 0.6);
+}
+
+/* ── Dark theme: glassmorphism cards ── */
+[data-theme="dark"] .card,
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .logs-container {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* ── Dark theme: stat card neon glow ── */
+[data-theme="dark"] .stat-card--blue  { box-shadow: 0 0 0 1px rgba(42, 106, 242, 0.2), 0 4px 24px rgba(42, 106, 242, 0.08); }
+[data-theme="dark"] .stat-card--green { box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.2), 0 4px 24px rgba(16, 185, 129, 0.08); }
+[data-theme="dark"] .stat-card--teal  { box-shadow: 0 0 0 1px rgba(14, 165, 165, 0.2), 0 4px 24px rgba(14, 165, 165, 0.08); }
+[data-theme="dark"] .stat-card--purple{ box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.2), 0 4px 24px rgba(139, 92, 246, 0.08); }
+[data-theme="dark"] .stat-card--blue:hover  { box-shadow: 0 0 0 1px rgba(42, 106, 242, 0.4), 0 8px 32px rgba(42, 106, 242, 0.18); }
+[data-theme="dark"] .stat-card--green:hover { box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4), 0 8px 32px rgba(16, 185, 129, 0.18); }
+[data-theme="dark"] .stat-card--teal:hover  { box-shadow: 0 0 0 1px rgba(14, 165, 165, 0.4), 0 8px 32px rgba(14, 165, 165, 0.18); }
+[data-theme="dark"] .stat-card--purple:hover{ box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.4), 0 8px 32px rgba(139, 92, 246, 0.18); }
+
+/* ── Dark theme: subtle dot-grid background ── */
+[data-theme="dark"] .content-area {
+  background-image: radial-gradient(rgba(42, 106, 242, 0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 /* ══════════════════════════════════════════
@@ -309,6 +336,31 @@ code, .mono {
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* ── Breathing animation for stopped state ── */
+@keyframes breathe {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 rgba(239, 68, 68, 0); }
+  50%       { opacity: 0.35; box-shadow: 0 0 8px rgba(239, 68, 68, 0.3); }
+}
+
+.status-badge--stopped .status-dot {
+  animation: breathe 3.5s ease-in-out infinite;
+}
+
+/* ── Opportunity row glow (qualified) ── */
+@keyframes opp-flash {
+  0%   { background: rgba(16, 185, 129, 0.18); box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.3); }
+  100% { background: transparent; box-shadow: none; }
+}
+
+.opp-row--qualified {
+  animation: opp-flash 1.8s ease-out;
+}
+
+[data-theme="dark"] .opp-row--qualified:hover {
+  background: rgba(16, 185, 129, 0.07) !important;
+  box-shadow: inset 3px 0 0 var(--green);
 }
 
 [dir="rtl"] .status-dot { margin-left: 0; }

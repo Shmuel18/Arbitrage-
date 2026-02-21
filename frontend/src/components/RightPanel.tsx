@@ -67,8 +67,9 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     const countdown = formatCountdown(opp.next_funding_ms);
     const isUrgent = opp.next_funding_ms && (opp.next_funding_ms - Date.now()) < 900000; // < 15 min
     const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
+    const rowClass = dimmed ? '' : 'opp-row--qualified';
     return (
-      <tr key={i} style={rowStyle}>
+      <tr key={i} style={rowStyle} className={rowClass}>
         <td>
           {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
           {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
