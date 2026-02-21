@@ -82,8 +82,8 @@ class Scanner:
                 qualified_opps = [o for o in opps if o.qualified]
                 all_opps = list(opps)  # includes both qualified and display-only
 
-                # Sort all by hourly return for display
-                all_opps.sort(key=lambda o: o.hourly_rate_pct, reverse=True)
+                # Sort all by immediate net for display (next payment only — no hourly normalization)
+                all_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
                 # Sort qualified by immediate net edge for execution (best immediate profit first)
                 qualified_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
 
@@ -98,7 +98,7 @@ class Scanner:
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
                         logger.info(
-                            "📊 TOP 5 OPPORTUNITIES (by Hourly Return)",
+                            "📊 TOP 5 OPPORTUNITIES (by Immediate Net)",
                             extra={"action": "top_opportunities"},
                         )
                         for idx, opp in enumerate(display_top, 1):
