@@ -1,35 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSettings } from '../context/SettingsContext';
-
-interface RecentTrade {
-  id: string;
-  symbol: string;
-  long_exchange: string;
-  short_exchange: string;
-  long_qty: string;
-  short_qty: string;
-  entry_price_long?: string | null;
-  entry_price_short?: string | null;
-  exit_price_long?: string | null;
-  exit_price_short?: string | null;
-  fees_paid_total?: string | null;
-  funding_received_total?: string | null;
-  funding_paid_total?: string | null;
-  long_funding_rate?: string | null;
-  short_funding_rate?: string | null;
-  opened_at?: string | null;
-  closed_at?: string | null;
-  status?: string | null;
-  total_pnl?: number | null;
-  hold_minutes?: number | null;
-}
+import { Trade } from '../types';
+import TradeDetailModal from './TradeDetailModal';
 
 interface RecentTradesPanelProps {
-  trades: RecentTrade[];
+  trades: Trade[];
 }
 
 const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
   const { t } = useSettings();
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
   const formatCurrency = (value?: string | null) => {
     if (!value) return '--';
@@ -75,6 +55,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
   };
 
   return (
+  <>
     <div className="card">
       <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
         {t.last10Trades}
@@ -103,7 +84,12 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
               </tr>
             ) : (
               trades.map((tr) => (
-                <tr key={tr.id}>
+                <tr
+                  key={tr.id}
+                  onClick={() => setSelectedTrade(tr)}
+                  style={{ cursor: 'pointer' }}
+                  title="Click for trade details"
+                >
                   <td className="font-semibold text-accent">{tr.symbol}</td>
                   <td>
                     {tr.long_exchange?.toUpperCase()} / {tr.short_exchange?.toUpperCase()}
@@ -145,6 +131,14 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
         {t.fundingEstimated}
       </div>
     </div>
+
+    {selectedTrade && (
+      <TradeDetailModal
+        trade={selectedTrade}
+        onClose={() => setSelectedTrade(null)}
+      />
+    )}
+  </>
   );
 };
 

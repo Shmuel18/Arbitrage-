@@ -102,6 +102,28 @@ export interface Translations {
   nextPayout: string;
   lastUpdated: string;
   netImmed: string;
+
+  // Trade Detail Modal
+  tradeDetail: string;
+  tradeDetailPrices: string;
+  tradeDetailPnl: string;
+  tradeDetailFunding: string;
+  entryPriceLong: string;
+  entryPriceShort: string;
+  exitPriceLong: string;
+  exitPriceShort: string;
+  pricePnl: string;
+  fundingNetDetail: string;
+  feesDetail: string;
+  totalNetPnl: string;
+  collectionsCount: string;
+  fundingCollectedUsd: string;
+  entryEdge: string;
+  exitReasonLabel: string;
+  openedAt: string;
+  closedAt: string;
+  holdDuration: string;
+  modeLabel: string;
 }
 
 const en: Translations = {
@@ -196,6 +218,28 @@ const en: Translations = {
   nextPayout: 'Next ⏱',
   lastUpdated: 'LAST UPDATE',
   netImmed: 'NET IMMED',
+
+  // Trade Detail Modal
+  tradeDetail: 'Trade Detail',
+  tradeDetailPrices: 'Prices',
+  tradeDetailPnl: 'P&L Breakdown',
+  tradeDetailFunding: 'Funding Collections',
+  entryPriceLong: 'Entry Long',
+  entryPriceShort: 'Entry Short',
+  exitPriceLong: 'Exit Long',
+  exitPriceShort: 'Exit Short',
+  pricePnl: 'Price P&L',
+  fundingNetDetail: 'Funding Net',
+  feesDetail: 'Fees',
+  totalNetPnl: 'Total Net P&L',
+  collectionsCount: 'Collections',
+  fundingCollectedUsd: 'Collected (USD)',
+  entryEdge: 'Entry Edge',
+  exitReasonLabel: 'Exit Reason',
+  openedAt: 'Opened',
+  closedAt: 'Closed',
+  holdDuration: 'Duration',
+  modeLabel: 'Mode',
 };
 
 const he: Translations = {
@@ -290,6 +334,28 @@ const he: Translations = {
   nextPayout: 'תשלום הבא',
   lastUpdated: 'עדכון אחרון',
   netImmed: 'נטו מיידי',
+
+  // Trade Detail Modal
+  tradeDetail: 'פרטי עסקה',
+  tradeDetailPrices: 'מחירים',
+  tradeDetailPnl: 'פירוט רווח/הפסד',
+  tradeDetailFunding: 'גביות מימון',
+  entryPriceLong: 'כניסה לונג',
+  entryPriceShort: 'כניסה שורט',
+  exitPriceLong: 'יציאה לונג',
+  exitPriceShort: 'יציאה שורט',
+  pricePnl: 'רווח מחיר',
+  fundingNetDetail: 'מימון נטו',
+  feesDetail: 'עמלות',
+  totalNetPnl: 'רווח נטו כולל',
+  collectionsCount: 'גביות',
+  fundingCollectedUsd: 'מימון שנגבה (USD)',
+  entryEdge: 'יתרון כניסה',
+  exitReasonLabel: 'סיבת יציאה',
+  openedAt: 'נפתחה',
+  closedAt: 'נסגרה',
+  holdDuration: 'משך',
+  modeLabel: 'מצב',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

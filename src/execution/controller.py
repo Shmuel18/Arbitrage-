@@ -954,21 +954,49 @@ class ExecutionController:
                 f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — evaluating hold/exit",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
             )
-            # Journal: log funding payment
-            if long_paid:
-                _lr = long_funding.get('rate')
-                _ln = (trade.entry_price_long or Decimal('0')) * trade.long_qty * abs(_lr) if _lr else None
+            # ── Per-payment tracking ──────────────────────────────
+            _lr = long_funding.get('rate') if long_paid else None
+            _sr = short_funding.get('rate') if short_paid else None
+            _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * abs(Decimal(str(_lr)))) if _lr else None
+            _short_usd = float((trade.entry_price_short or Decimal('0')) * trade.short_qty * abs(Decimal(str(_sr)))) if _sr else None
+            _net_usd = (_long_usd or 0) + (_short_usd or 0)
+
+            trade.funding_collections += 1
+            trade.funding_collected_usd += Decimal(str(_net_usd))
+
+            # Journal: log individual funding payment detection
+            if long_paid and _lr:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.long_exchange, 'long',
-                    rate=_lr, estimated_payment=_ln,
+                    rate=_lr, estimated_payment=_long_usd,
                 )
-            if short_paid:
-                _sr = short_funding.get('rate')
-                _sn = (trade.entry_price_short or Decimal('0')) * trade.short_qty * abs(_sr) if _sr else None
+            if short_paid and _sr:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.short_exchange, 'short',
-                    rate=_sr, estimated_payment=_sn,
+                    rate=_sr, estimated_payment=_short_usd,
                 )
+
+            # Journal: log this collection cycle with full detail
+            self._journal.funding_collected(
+                trade.trade_id, trade.symbol,
+                collection_num=trade.funding_collections,
+                long_exchange=trade.long_exchange,
+                short_exchange=trade.short_exchange,
+                long_rate=_lr,
+                short_rate=_sr,
+                long_payment_usd=_long_usd,
+                short_payment_usd=_short_usd,
+                net_payment_usd=_net_usd,
+                cumulative_usd=float(trade.funding_collected_usd),
+                immediate_spread=float(immediate_spread),
+            )
+            logger.info(
+                f"💰 [{trade.symbol}] Funding collection #{trade.funding_collections}: "
+                f"~${_net_usd:.4f} this cycle | cumulative ~${float(trade.funding_collected_usd):.4f}",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "funding_collected"},
+            )
+            # Mark snapshot timer start
+            trade._funding_paid_at = now
 
         # Check if still profitable to hold (funding spread)
         quick_cycle = getattr(self._cfg.trading_params, 'quick_cycle', False)
@@ -1087,6 +1115,32 @@ class ExecutionController:
                         immediate_spread=immediate_spread,
                         next_funding_min=_nearest_min,
                     )
+                    # ── 5-min position snapshot (price + spread + unrealized PnL) ──
+                    _min_since = int((now - trade._funding_paid_at).total_seconds() / 60) if getattr(trade, '_funding_paid_at', None) else hold_min
+                    try:
+                        _l_ticker = await long_adapter.get_ticker(trade.symbol)
+                        _s_ticker = await short_adapter.get_ticker(trade.symbol)
+                        _l_price = Decimal(str(_l_ticker.get("last", 0)))
+                        _s_price = Decimal(str(_s_ticker.get("last", 0)))
+                        # Unrealized price PnL: long gains when price rises, short loses and vice-versa
+                        _long_pnl_usd = float((_l_price - (trade.entry_price_long or _l_price)) * trade.long_qty)
+                        _short_pnl_usd = float(((trade.entry_price_short or _s_price) - _s_price) * trade.short_qty)
+                        _price_pnl_usd = _long_pnl_usd + _short_pnl_usd
+                        self._journal.position_snapshot(
+                            trade.trade_id, trade.symbol,
+                            minutes_since_funding=_min_since,
+                            long_exchange=trade.long_exchange,
+                            short_exchange=trade.short_exchange,
+                            long_price=float(_l_price),
+                            short_price=float(_s_price),
+                            immediate_spread=float(immediate_spread),
+                            long_pnl_usd=_long_pnl_usd,
+                            short_pnl_usd=_short_pnl_usd,
+                            price_pnl_usd=_price_pnl_usd,
+                            funding_collected_usd=float(trade.funding_collected_usd),
+                        )
+                    except Exception as _snap_err:
+                        logger.debug(f"Snapshot fetch failed for {trade.symbol}: {_snap_err}")
                 return
             else:
                 # Spread dropped below threshold → EXIT
@@ -1442,6 +1496,7 @@ class ExecutionController:
             trade_data = {
                 "id": trade.trade_id,
                 "symbol": trade.symbol,
+                "mode": trade.mode,
                 "long_exchange": trade.long_exchange,
                 "short_exchange": trade.short_exchange,
                 "long_qty": str(trade.long_qty),
@@ -1464,6 +1519,9 @@ class ExecutionController:
                 "funding_net": float(funding_net),
                 "invested": float(invested),
                 "hold_minutes": float(hold_minutes),
+                "exit_reason": _exit_reason,
+                "funding_collections": trade.funding_collections,
+                "funding_collected_usd": str(trade.funding_collected_usd),
             }
             await self._redis.zadd(
                 "trinity:trades:history",
@@ -1670,6 +1728,7 @@ class ExecutionController:
         await self._redis.set_trade_state(trade.trade_id, {
             "symbol": trade.symbol,
             "state": trade.state.value,
+            "mode": trade.mode,
             "long_exchange": trade.long_exchange,
             "short_exchange": trade.short_exchange,
             "long_qty": str(trade.long_qty),
@@ -1681,6 +1740,8 @@ class ExecutionController:
             "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
             "fees_paid_total": str(trade.fees_paid_total) if trade.fees_paid_total is not None else None,
             "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+            "funding_collections": trade.funding_collections,
+            "funding_collected_usd": str(trade.funding_collected_usd),
         })
 
     async def _recover_trades(self) -> None:
@@ -1695,6 +1756,7 @@ class ExecutionController:
                 trade_id=trade_id,
                 symbol=data["symbol"],
                 state=TradeState(state_val),
+                mode=data.get("mode", "hold"),
                 long_exchange=data["long_exchange"],
                 short_exchange=data["short_exchange"],
                 long_qty=Decimal(data["long_qty"]),
@@ -1706,6 +1768,8 @@ class ExecutionController:
                 entry_price_short=Decimal(data["entry_price_short"]) if data.get("entry_price_short") else None,
                 fees_paid_total=Decimal(data["fees_paid_total"]) if data.get("fees_paid_total") else None,
                 opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else None,
+                funding_collections=int(data.get("funding_collections", 0)),
+                funding_collected_usd=Decimal(data["funding_collected_usd"]) if data.get("funding_collected_usd") else Decimal("0"),
             )
             self._active_trades[trade_id] = trade
             logger.info(

@@ -125,3 +125,6 @@ class TradeRecord:
     exit_before: Optional[datetime] = None # exit BEFORE this time
     next_funding_long: Optional[datetime] = None
     next_funding_short: Optional[datetime] = None
+    # Funding collection tracking
+    funding_collections: int = 0           # how many payments collected so far
+    funding_collected_usd: Decimal = Decimal("0")  # cumulative USD received

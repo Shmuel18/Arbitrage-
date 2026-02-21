@@ -144,6 +144,54 @@ class TradeJournal:
             rate=rate, estimated_payment=estimated_payment,
         )
 
+    def funding_collected(self, trade_id: str, symbol: str,
+                          collection_num: int,
+                          long_exchange: str, short_exchange: str,
+                          long_rate=None, short_rate=None,
+                          long_payment_usd=None, short_payment_usd=None,
+                          net_payment_usd=None,
+                          cumulative_usd=None,
+                          immediate_spread=None):
+        """Log one complete funding cycle with per-payment USD amounts."""
+        self._write(
+            "funding_collected", trade_id,
+            symbol=symbol,
+            collection_num=collection_num,
+            long_exchange=long_exchange,
+            short_exchange=short_exchange,
+            long_rate=long_rate,
+            short_rate=short_rate,
+            long_payment_usd=long_payment_usd,
+            short_payment_usd=short_payment_usd,
+            net_payment_usd=net_payment_usd,
+            cumulative_usd=cumulative_usd,
+            immediate_spread=immediate_spread,
+        )
+
+    def position_snapshot(self, trade_id: str, symbol: str,
+                          minutes_since_funding: int,
+                          long_exchange: str, short_exchange: str,
+                          long_price=None, short_price=None,
+                          immediate_spread=None,
+                          long_pnl_usd=None, short_pnl_usd=None,
+                          price_pnl_usd=None,
+                          funding_collected_usd=None):
+        """5-minute snapshot after funding payment — price + spread at that moment."""
+        self._write(
+            "position_snapshot", trade_id,
+            symbol=symbol,
+            minutes_since_funding=minutes_since_funding,
+            long_exchange=long_exchange,
+            short_exchange=short_exchange,
+            long_price=long_price,
+            short_price=short_price,
+            immediate_spread=immediate_spread,
+            long_pnl_usd=long_pnl_usd,
+            short_pnl_usd=short_pnl_usd,
+            price_pnl_usd=price_pnl_usd,
+            funding_collected_usd=funding_collected_usd,
+        )
+
     def hold_decision(self, trade_id: str, symbol: str,
                       immediate_spread=None, next_funding_min=None):
         self._write(

@@ -54,19 +54,29 @@ async def get_trades(
         def normalize(t: dict) -> dict:
             invested = float(t.get('invested') or 0)
             total_pnl = float(t.get('total_pnl') or 0)
+            price_pnl = float(t.get('price_pnl') or 0)
+            funding_net = float(t.get('funding_net') or 0)
             pnl_pct = (total_pnl / invested) if invested > 0 else 0.0
             entry_edge = t.get('entry_edge_pct')
             return {
                 **t,
                 # aliases expected by TradesHistory.tsx
-                'pnl':           total_pnl,
-                'pnl_percentage': pnl_pct,
-                'open_time':     t.get('opened_at'),
-                'close_time':    t.get('closed_at'),
-                'exchanges':     {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
-                'size':          f"${invested:,.0f}",
-                'entry_spread':  float(entry_edge) / 100 if entry_edge else None,
-                'exit_spread':   None,  # not tracked at exit
+                'pnl':                    total_pnl,
+                'pnl_percentage':         pnl_pct,
+                'open_time':              t.get('opened_at'),
+                'close_time':             t.get('closed_at'),
+                'exchanges':              {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
+                'size':                   f"${invested:,.0f}",
+                'entry_spread':           float(entry_edge) / 100 if entry_edge else None,
+                'exit_spread':            None,  # not tracked at exit
+                # rich detail fields
+                'price_pnl':              price_pnl,
+                'funding_net':            funding_net,
+                'invested':               invested,
+                'mode':                   t.get('mode', 'hold'),
+                'exit_reason':            t.get('exit_reason'),
+                'funding_collections':    int(t.get('funding_collections') or 0),
+                'funding_collected_usd':  float(t.get('funding_collected_usd') or 0),
             }
         
         trades = [normalize(t) for t in trades]
