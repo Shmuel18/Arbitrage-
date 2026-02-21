@@ -577,33 +577,31 @@ class Scanner:
                         # Cost must be far enough away (>30 min)
                         # Income must arrive before cost
                         if (minutes_until_cost >= _MIN_WINDOW_MINUTES
-                                and minutes_until_income < minutes_until_cost):
-                            hours_until_cost = ms_until_cost / 3_600_000
-                            cp_n = int(hours_until_cost / income_interval)
-                            if cp_n >= 1:
-                                cp_gross = calculate_cherry_pick_edge(income_pnl, cp_n)
-                                cp_net = cp_gross - total_cost_pct
-                                if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
-                                    # Extra gate: only enter cherry_pick within
-                                    # max_entry_window_minutes of the FIRST income payment
-                                    if minutes_until_income <= max_window:
-                                        cherry_ok = True
-                                        qualified = True
-                                        mode = "cherry_pick"
-                                        gross_pct = cp_gross
-                                        net_pct = cp_net
-                                        n_collections = cp_n
-                                        exit_before = datetime.fromtimestamp(
-                                            (cost_next_ts - 120_000) / 1000, tz=timezone.utc
-                                        )
-                                        closest_ms = income_next_ts
-                                        logger.info(
-                                            f"🍒 Cherry-pick {symbol}: collect {cp_n}× every {income_interval}h "
-                                            f"(gross={cp_gross:.4f}%, net={cp_net:.4f}%) — "
-                                            f"enter {int(minutes_until_income)}min before 1st payment, "
-                                            f"exit before {exit_before.strftime('%H:%M UTC')}",
-                                            extra={"action": "cherry_pick_found", "symbol": symbol},
-                                        )
+                                and minutes_until_income < minutes_until_cost
+                                and minutes_until_income <= max_window):
+                            # Single-payment cherry_pick: only the immediate income pulse counts.
+                            # Do NOT accumulate multiple payments — if this one payment
+                            # alone yields ≥ min_funding_spread net, enter.
+                            cp_gross = calculate_cherry_pick_edge(income_pnl, 1)
+                            cp_net = cp_gross - total_cost_pct
+                            if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
+                                cherry_ok = True
+                                qualified = True
+                                mode = "cherry_pick"
+                                gross_pct = cp_gross
+                                net_pct = cp_net
+                                n_collections = 1
+                                exit_before = datetime.fromtimestamp(
+                                    (cost_next_ts - 120_000) / 1000, tz=timezone.utc
+                                )
+                                closest_ms = income_next_ts
+                                logger.info(
+                                    f"🍒 Cherry-pick {symbol}: collect 1× {income_interval}h payment "
+                                    f"(gross={float(cp_gross):.4f}%, net={float(cp_net):.4f}%) — "
+                                    f"enter {int(minutes_until_income)}min before payment, "
+                                    f"exit before {exit_before.strftime('%H:%M UTC')}",
+                                    extra={"action": "cherry_pick_found", "symbol": symbol},
+                                )
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
         if not qualified and immediate_spread <= Decimal("0"):
