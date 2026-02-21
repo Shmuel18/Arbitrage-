@@ -373,6 +373,9 @@ class ExecutionController:
             if not long_fill:
                 return
 
+            # Update cached taker_fee from actual fill (real account rate)
+            long_adapter.update_taker_fee_from_fill(opp.symbol, long_fill)
+
             # ── Sync-Fire: adjust short qty to match long's ACTUAL filled qty ──
             long_actual_filled = Decimal(str(long_fill.get("filled", 0) or order_qty))
             is_partial_fill = long_actual_filled < order_qty
@@ -405,6 +408,9 @@ class ExecutionController:
                     OrderSide.SELL, long_fill, order_qty,
                 )
                 return
+
+            # Update cached taker_fee from actual fill (real account rate)
+            short_adapter.update_taker_fee_from_fill(opp.symbol, short_fill)
 
             short_actual_filled = Decimal(str(short_fill.get("filled", 0) or short_order_qty))
             

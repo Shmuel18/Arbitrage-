@@ -724,6 +724,56 @@ class ExchangeAdapter:
         self._instrument_cache[symbol] = spec
         return spec
 
+    def update_taker_fee_from_fill(self, symbol: str, fill: dict) -> None:
+        """Update cached taker_fee for symbol using the actual fee rate from a fill.
+
+        The fill returned by the exchange contains:
+          fill["fee"]["rate"]  — the actual rate charged (e.g. 0.00048)
+        If present and non-zero, replace the cached spec so all future
+        spread calculations use the real fee for this account.
+        """
+        fee = fill.get("fee") if isinstance(fill, dict) else None
+        if not isinstance(fee, dict):
+            return
+        rate = fee.get("rate")
+        if rate is None:
+            # some exchanges put it in fees list
+            for f in (fill.get("fees") or []):
+                if isinstance(f, dict) and f.get("rate") is not None:
+                    rate = f["rate"]
+                    break
+        if rate is None:
+            return
+        try:
+            new_rate = Decimal(str(rate))
+        except Exception:
+            return
+        if new_rate <= 0:
+            return
+        existing = self._instrument_cache.get(symbol)
+        if existing is None:
+            return
+        if new_rate == existing.taker_fee:
+            return  # no change
+        updated = InstrumentSpec(
+            exchange=existing.exchange,
+            symbol=existing.symbol,
+            base=existing.base,
+            quote=existing.quote,
+            contract_size=existing.contract_size,
+            tick_size=existing.tick_size,
+            lot_size=existing.lot_size,
+            min_notional=existing.min_notional,
+            maker_fee=existing.maker_fee,
+            taker_fee=new_rate,
+        )
+        self._instrument_cache[symbol] = updated
+        logger.info(
+            f"[{self.exchange_id}] {symbol} taker_fee updated from fill: "
+            f"{float(existing.taker_fee)*100:.4f}% → {float(new_rate)*100:.4f}%",
+            extra={"exchange": self.exchange_id, "symbol": symbol, "action": "fee_updated"},
+        )
+
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:
         return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
 
