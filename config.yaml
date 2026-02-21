@@ -21,7 +21,7 @@ trading_params:
   cooldown_after_orphan_hours: 2
   max_sane_funding_rate: 0.10 # max absolute funding rate before filtering (10%)
   entry_offset_seconds: 900
-  exit_offset_seconds: 900
+  exit_offset_seconds: 180
   max_entry_window_minutes: 15 # Enter ~15 min before funding, collect, exit
   quick_cycle: true # Exit after first funding payment (zero dead time)
   hold_min_spread: 0.5 # Min spread % to hold position after funding collection

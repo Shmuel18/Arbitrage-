@@ -820,22 +820,17 @@ class ExecutionController:
         """
         now = datetime.now(timezone.utc)
 
-        # ── CHERRY_PICK: time-based exit ─────────────────────────
+        # ── CHERRY_PICK: hard stop before costly payment ─────────
         if trade.mode == "cherry_pick" and trade.exit_before:
             if now >= trade.exit_before:
                 logger.info(
-                    f"Cherry-pick exit for {trade.trade_id}: "
+                    f"Cherry-pick hard exit for {trade.trade_id}: "
                     f"exiting before costly payment at {trade.exit_before.strftime('%H:%M UTC')}",
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
                 )
                 await self._close_trade(trade)
                 return
-            else:
-                remaining = (trade.exit_before - now).total_seconds() / 60
-                logger.debug(
-                    f"Trade {trade.trade_id}: cherry-pick — {remaining:.0f} min until exit"
-                )
-                return
+            # Don't return — fall through to spread check below (same as HOLD)
 
         # ── HOLD: use cached rates (no REST call) ─────────────────
         long_adapter = self._exchanges.get(trade.long_exchange)
@@ -1019,6 +1014,32 @@ class ExecutionController:
                             )
                             await self._close_trade(trade)
                             return
+
+                # Cherry-pick: if the costly payment (exit_before) is within
+                # hold_max_wait, there is no room for another profitable cycle —
+                # exit now instead of holding toward the costly payment.
+                if trade.mode == "cherry_pick" and trade.exit_before:
+                    secs_until_cost = (trade.exit_before - now).total_seconds()
+                    if secs_until_cost <= hold_max_wait:
+                        cost_min = int(secs_until_cost / 60)
+                        logger.info(
+                            f"🍒 Trade {trade.trade_id}: EXIT — cherry_pick costly payment in "
+                            f"{cost_min}min ≤ max_wait {hold_max_wait // 60}min — "
+                            f"no room for next cycle (held {hold_min}min)",
+                            extra={
+                                "trade_id": trade.trade_id,
+                                "symbol": trade.symbol,
+                                "action": "cherry_pick_cost_exit",
+                            },
+                        )
+                        trade._exit_reason = f'cherry_pick_cost_in_{cost_min}min'
+                        self._journal.exit_decision(
+                            trade.trade_id, trade.symbol,
+                            reason=f'cherry_pick costly payment in {cost_min}min ≤ {hold_max_wait // 60}min wait',
+                            immediate_spread=immediate_spread, hold_min=hold_min,
+                        )
+                        await self._close_trade(trade)
+                        return
 
                 # Still within acceptable wait time — keep holding.
                 # Log HOLD decision periodically (every 5 min) to avoid spam.
