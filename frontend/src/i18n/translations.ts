@@ -69,6 +69,7 @@ export interface Translations {
   fundingSpread: string;
   immediateSpreadOpp: string;
   hourlyRate: string;
+  nextPayment: string;
   countdown: string;
   belowThreshold: string;
 
@@ -189,6 +190,7 @@ const en: Translations = {
   fundingSpread: 'SPREAD %',
   immediateSpreadOpp: 'IMMED %',
   hourlyRate: '/HOUR %',
+  nextPayment: 'NEXT CYC',
   countdown: 'PAYOUT',
   belowThreshold: 'Below threshold (0.5%)',
 
@@ -305,6 +307,7 @@ const he: Translations = {
   fundingSpread: '% ספרד',
   immediateSpreadOpp: '% מיידי',
   hourlyRate: '% לשעה',
+  nextPayment: 'פעימה הבאה',
   countdown: 'פעימה',
   belowThreshold: 'מתחת לסף (0.5%)',
 

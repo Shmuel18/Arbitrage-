@@ -53,8 +53,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return `${hrs}h${remainMins > 0 ? remainMins + 'm' : ''}`;
   };
 
-  const MIN_SPREAD_THRESHOLD = 0.5; // must match backend min_immediate_spread
-
   const getRateStyle = (rate: number): React.CSSProperties => {
     if (rate > 0) return { color: 'var(--green)' };
     if (rate < 0) return { color: 'var(--red)' };
@@ -66,8 +64,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
 
   const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
     const immediateSpread = opp.immediate_spread_pct ?? 0;
-    const hourlyRate = opp.hourly_rate_pct ?? 0;
-    const interval = opp.min_interval_hours ?? 8;
     const countdown = formatCountdown(opp.next_funding_ms);
     const isUrgent = opp.next_funding_ms && (opp.next_funding_ms - Date.now()) < 900000; // < 15 min
     const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
@@ -91,9 +87,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
         </td>
         <td className="text-end mono" style={getRateStyle(opp.immediate_net_pct ?? 0)}>
           {opp.immediate_net_pct != null ? formatSpread(opp.immediate_net_pct) : '--'}
-        </td>
-        <td className="text-end mono font-semibold" style={getRateStyle(hourlyRate)}>
-          {formatSpread(hourlyRate)}
         </td>
         <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
           {opp.mode === 'cherry_pick'
@@ -135,7 +128,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
                 <th className="text-end">{t.netImmed}</th>
-                <th className="text-end">{t.hourlyRate}</th>
                 <th className="text-end">MODE</th>
                 <th className="text-end">{t.countdown}</th>
               </tr>
@@ -144,7 +136,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
               {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                 <tr>
-                  <td colSpan={10} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                  <td colSpan={9} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                     ── {t.belowThreshold} ──
                   </td>
                 </tr>
