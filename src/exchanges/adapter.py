@@ -31,6 +31,7 @@ class ExchangeAdapter:
         self._instrument_cache: Dict[str, InstrumentSpec] = {}
         self._settings_applied: set = set()
         self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
+        self._price_cache: Dict[str, float] = {}  # symbol → last/mark price (fallback when funding data lacks markPrice)
         # Symbol mapping: normalized (USDT) → original exchange symbol (e.g. USD for Kraken)
         self._symbol_map: Dict[str, str] = {}
         self._ws_tasks: List = []  # Track running WebSocket tasks
@@ -299,6 +300,11 @@ class ExchangeAdapter:
             task = asyncio.create_task(self._sequential_funding_poll_loop(eligible))
             self._ws_tasks.append(task)
 
+        # Always start price poll loop — provides markPrice fallback for exchanges
+        # that don't include markPrice in their funding rate API response (e.g. KuCoin)
+        price_task = asyncio.create_task(self._price_poll_loop(eligible))
+        self._ws_tasks.append(price_task)
+
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket.
 
@@ -435,6 +441,8 @@ class ExchangeAdapter:
             "datetime": data.get("datetime"),
             "next_timestamp": next_ts,
             "interval_hours": interval_hours,
+            "markPrice": data.get("markPrice"),  # stored for price basis checks
+            "indexPrice": data.get("indexPrice"),
         }
         
         # Cached funding — DEBUG level to avoid log spam
@@ -450,8 +458,20 @@ class ExchangeAdapter:
             },
         )
 
+    def get_mark_price(self, symbol: str) -> Optional[float]:
+        """Return best available mark price for symbol (no API call).
+        
+        Cascade: markPrice from funding cache → indexPrice → price cache (from ticker poll).
+        Returns None if no price is available yet.
+        """
+        cached = self._funding_rate_cache.get(symbol) or {}
+        mp = cached.get("markPrice") or cached.get("indexPrice")
+        if mp is not None:
+            return float(mp)
+        return self._price_cache.get(symbol)
+
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get latest cached funding rate (low-latency, no network call)."""
+        """Get latest cached funding rate (low-latency, no network call)."""  
         cached = self._funding_rate_cache.get(symbol)
         if cached:
             # [DEBUG] Log cache retrieval
@@ -628,6 +648,41 @@ class ExchangeAdapter:
                                "retry": consecutive_full_failures},
                     )
             await asyncio.sleep(30)  # wait between full cycles
+
+    async def _price_poll_loop(self, symbols: List[str]) -> None:
+        """Periodically batch-fetch ticker prices as markPrice fallback.
+        
+        Runs every 30 seconds. Provides real prices for exchanges that don't
+        include markPrice in their funding rate response (e.g. KuCoin).
+        Stores: markPrice from ticker → last traded price → skips if nothing available.
+        """
+        poll_interval = 30
+        while True:
+            try:
+                resolved = [self._resolve_symbol(s) for s in symbols]
+                tickers = await self._exchange.fetch_tickers(resolved)
+                updated = 0
+                for sym_raw, ticker in tickers.items():
+                    sym = self._normalize_symbol(sym_raw)
+                    if sym not in symbols:
+                        continue
+                    # Prefer markPrice, fall back to last traded price
+                    price = ticker.get("markPrice") or ticker.get("last")
+                    if price:
+                        self._price_cache[sym] = float(price)
+                        updated += 1
+                logger.debug(
+                    f"[{self.exchange_id}] Price poll: updated {updated}/{len(symbols)} symbols",
+                    extra={"exchange": self.exchange_id, "action": "price_poll"},
+                )
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                logger.debug(
+                    f"[{self.exchange_id}] Price poll error (non-critical): {e}",
+                    extra={"exchange": self.exchange_id, "action": "price_poll_error"},
+                )
+            await asyncio.sleep(poll_interval)
 
     async def disconnect(self) -> None:
         if self._exchange:

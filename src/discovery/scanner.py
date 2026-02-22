@@ -422,12 +422,13 @@ class Scanner:
 
         # ── Live price basis check (from cache — no extra API calls) ──
         # If long exchange price > short exchange price, adverse basis → extra cost.
+        # Uses get_mark_price(): markPrice from funding cache → indexPrice → ticker price cache.
         price_basis_pct = Decimal("0")
         try:
-            long_cached = adapters[long_eid].get_funding_rate_cached(symbol)
-            short_cached = adapters[short_eid].get_funding_rate_cached(symbol)
-            long_price = Decimal(str(long_cached.get("markPrice") or 0)) if long_cached else Decimal("0")
-            short_price = Decimal(str(short_cached.get("markPrice") or 0)) if short_cached else Decimal("0")
+            long_price_raw = adapters[long_eid].get_mark_price(symbol)
+            short_price_raw = adapters[short_eid].get_mark_price(symbol)
+            long_price = Decimal(str(long_price_raw)) if long_price_raw else Decimal("0")
+            short_price = Decimal(str(short_price_raw)) if short_price_raw else Decimal("0")
             if long_price > 0 and short_price > 0:
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
                 price_basis_pct = max(raw_basis, Decimal("0"))

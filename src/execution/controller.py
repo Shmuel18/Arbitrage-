@@ -1041,7 +1041,7 @@ class ExecutionController:
             _l_price = Decimal("0")
             _s_price = Decimal("0")
             _adverse_exit_basis = Decimal("0")
-            _basis_favorable = True  # default: assume OK if prices unavailable
+            _basis_favorable = None  # None = unknown (prices unavailable)
             try:
                 _l_ticker = await long_adapter.get_ticker(trade.symbol)
                 _s_ticker = await short_adapter.get_ticker(trade.symbol)
@@ -1199,7 +1199,7 @@ class ExecutionController:
                 _wait_start = getattr(trade, '_exit_wait_start', None)
                 _waited_sec = (now - _wait_start).total_seconds() if _wait_start else 0
 
-                if _basis_favorable or _waited_sec >= _wait_max_sec:
+                if _basis_favorable is True or _basis_favorable is None or _waited_sec >= _wait_max_sec:
                     # Exit now: basis is favorable OR 20-min timeout reached
                     if not _basis_favorable and _waited_sec >= _wait_max_sec:
                         _reason = f'spread_low_basis_timeout_{int(_waited_sec / 60)}min'
