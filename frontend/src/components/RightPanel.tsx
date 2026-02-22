@@ -57,9 +57,23 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     return `${hrs}h${remainMins > 0 ? remainMins + 'm' : ''}`;
   };
 
-  const getRateStyle = (rate: number): React.CSSProperties => {
+  // Long side: negative rate → we earn (green), positive → we pay (red)
+  const getLongRateStyle = (rate: number): React.CSSProperties => {
+    if (rate < 0) return { color: 'var(--green)' };
+    if (rate > 0) return { color: 'var(--red)' };
+    return { color: 'var(--text-muted)' };
+  };
+
+  // Short side: positive rate → we earn (green), negative → we pay (red)
+  const getShortRateStyle = (rate: number): React.CSSProperties => {
     if (rate > 0) return { color: 'var(--green)' };
     if (rate < 0) return { color: 'var(--red)' };
+    return { color: 'var(--text-muted)' };
+  };
+
+  const getSpreadStyle = (pct: number): React.CSSProperties => {
+    if (pct > 0) return { color: 'var(--green)' };
+    if (pct < 0) return { color: 'var(--red)' };
     return { color: 'var(--text-muted)' };
   };
 
@@ -97,8 +111,26 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
 
   const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
     const immediateSpread = opp.immediate_spread_pct ?? 0;
+    const longRate  = opp.long_rate  ?? 0;
+    const shortRate = opp.short_rate ?? 0;
+    const longIsIncome  = longRate  < 0;   // long on negative rate → we get paid
+    const shortIsIncome = shortRate > 0;   // short on positive rate → we get paid
     const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
     const rowClass = dimmed ? '' : 'opp-row--qualified bridge-flow-active';
+
+    const earnBadge = (isIncome: boolean) => (
+      <span style={{
+        fontSize: 9,
+        fontWeight: 700,
+        letterSpacing: '0.05em',
+        color: isIncome ? 'var(--green)' : 'var(--text-muted)',
+        opacity: isIncome ? 1 : 0.55,
+        marginInlineStart: 3,
+      }}>
+        {isIncome ? '▲' : '▼'}
+      </span>
+    );
+
     return (
       <tr key={i} style={rowStyle} className={rowClass}>
         <td>
@@ -108,25 +140,35 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
         </td>
         <td>
           <span className="bridge-connector">
-            <span style={{ color: '#60a5fa', fontWeight: 700, fontSize: 11 }}>
+            <span style={{
+              color: longIsIncome ? 'var(--green)' : '#94a3b8',
+              fontWeight: 700,
+              fontSize: 11,
+            }}>
               {opp.long_exchange?.toUpperCase().slice(0, 3)}
+              {earnBadge(longIsIncome)}
             </span>
             <span className="bridge-connector-line" />
-            <span style={{ color: '#06b6d4', fontWeight: 700, fontSize: 11 }}>
+            <span style={{
+              color: shortIsIncome ? 'var(--green)' : '#94a3b8',
+              fontWeight: 700,
+              fontSize: 11,
+            }}>
               {opp.short_exchange?.toUpperCase().slice(0, 3)}
+              {earnBadge(shortIsIncome)}
             </span>
           </span>
         </td>
-        <td className="text-end mono" style={getRateStyle(opp.long_rate ?? 0)}>
-          {formatFunding(opp.long_rate ?? 0)}
+        <td className="text-end mono" style={getLongRateStyle(longRate)}>
+          {formatFunding(longRate)}
         </td>
-        <td className="text-end mono" style={getRateStyle(opp.short_rate ?? 0)}>
-          {formatFunding(opp.short_rate ?? 0)}
+        <td className="text-end mono" style={getShortRateStyle(shortRate)}>
+          {formatFunding(shortRate)}
         </td>
-        <td className="text-end mono font-semibold" style={getRateStyle(immediateSpread)}>
+        <td className="text-end mono font-semibold" style={getSpreadStyle(immediateSpread)}>
           {formatSpread(immediateSpread)}
         </td>
-        <td className="text-end mono" style={getRateStyle(opp.immediate_net_pct ?? 0)}>
+        <td className="text-end mono" style={getSpreadStyle(opp.immediate_net_pct ?? 0)}>
           {opp.immediate_net_pct != null ? formatSpread(opp.immediate_net_pct) : '--'}
         </td>
         <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
