@@ -39,14 +39,16 @@ async def get_performance(hours: int = Query(24, ge=1, le=168)):
         
         # Parse data points
         data_points = []
-        for i in range(0, len(perf_data), 2):
-            if i + 1 < len(perf_data):
-                value = json.loads(perf_data[i])
-                timestamp = perf_data[i + 1]
+        for item in perf_data:
+            try:
+                value_json, timestamp = item
+                value = json.loads(value_json)
                 data_points.append({
                     **value,
-                    "timestamp": timestamp
+                    "timestamp": float(timestamp)
                 })
+            except Exception:
+                pass
         
         return {
             "data_points": data_points,
@@ -84,32 +86,31 @@ async def get_pnl(hours: int = Query(24, ge=1, le=168)):
         cumulative = 0.0
         
         if trades_data:
-            # trades_data = [trade_json, timestamp, trade_json, timestamp, ...]
-            for i in range(0, len(trades_data), 2):
-                if i + 1 < len(trades_data):
-                    try:
-                        trade_json = trades_data[i]
-                        timestamp = float(trades_data[i + 1])
-                        trade = json.loads(trade_json)
-                        
-                        # Extract PnL from trade record
-                        trade_pnl = 0.0
-                        if 'total_pnl' in trade:
-                            trade_pnl = float(trade.get('total_pnl', 0))
-                        elif 'net_profit' in trade:
-                            trade_pnl = float(trade.get('net_profit', 0))
-                        
-                        cumulative += trade_pnl
-                        total_pnl += trade_pnl
-                        
-                        data_points.append({
-                            "pnl": trade_pnl,
-                            "cumulative_pnl": cumulative,
-                            "timestamp": timestamp,
-                            "symbol": trade.get('symbol', '?'),
-                        })
-                    except Exception as parse_err:
-                        pass
+            # trades_data = [(trade_json, timestamp), ...] — list of tuples from withscores=True
+            for item in trades_data:
+                try:
+                    trade_json, timestamp = item
+                    timestamp = float(timestamp)
+                    trade = json.loads(trade_json)
+                    
+                    # Extract PnL from trade record
+                    trade_pnl = 0.0
+                    if 'total_pnl' in trade:
+                        trade_pnl = float(trade.get('total_pnl', 0))
+                    elif 'net_profit' in trade:
+                        trade_pnl = float(trade.get('net_profit', 0))
+                    
+                    cumulative += trade_pnl
+                    total_pnl += trade_pnl
+                    
+                    data_points.append({
+                        "pnl": trade_pnl,
+                        "cumulative_pnl": cumulative,
+                        "timestamp": timestamp,
+                        "symbol": trade.get('symbol', '?'),
+                    })
+                except Exception:
+                    pass
         
         # ── Add unrealized PnL from running snapshots (if bot is active) ──
         latest = await redis_client._client.get("trinity:pnl:latest")
