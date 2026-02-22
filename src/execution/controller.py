@@ -1592,21 +1592,43 @@ class ExecutionController:
 
     @staticmethod
     def _extract_fee(order: dict) -> Decimal:
+        """Extract fee cost in USDT from a CCXT order dict.
+
+        Some exchanges return fees in the base currency (e.g. CYBER) rather than USDT.
+        When that happens we convert using the order's average fill price so the
+        total_fees figure is always denominated in USDT.
+        """
+        avg_price = Decimal("0")
+        try:
+            p = order.get("average") or order.get("price") or order.get("avgPrice") or 0
+            if p:
+                avg_price = Decimal(str(p))
+        except Exception:
+            pass
+
+        def _cost_to_usdt(f: dict) -> Decimal:
+            try:
+                cost = Decimal(str(f.get("cost", 0) or 0))
+                currency = (f.get("currency") or "").upper()
+                # If fee currency is quote (USDT / BUSD / USDC) or unknown, use as-is
+                if not currency or currency in ("USDT", "BUSD", "USDC", "USD"):
+                    return cost
+                # Fee is in base asset — convert to USDT using fill price
+                if avg_price > 0:
+                    return cost * avg_price
+                return cost  # fallback: can't convert, treat as-is
+            except Exception:
+                return Decimal("0")
+
         total = Decimal("0")
         fee = order.get("fee")
         if isinstance(fee, dict) and fee.get("cost") is not None:
-            try:
-                total += Decimal(str(fee.get("cost")))
-            except Exception:
-                pass
+            total += _cost_to_usdt(fee)
         fees = order.get("fees")
         if isinstance(fees, list):
             for f in fees:
                 if isinstance(f, dict) and f.get("cost") is not None:
-                    try:
-                        total += Decimal(str(f.get("cost")))
-                    except Exception:
-                        continue
+                    total += _cost_to_usdt(f)
         return total
 
     @staticmethod
