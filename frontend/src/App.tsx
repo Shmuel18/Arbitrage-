@@ -47,7 +47,9 @@ function App() {
         positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         lastFetchedAt: Date.now(),
-        trades: tradesRes.status === 'fulfilled' ? (tradesRes.value.trades || []) : prev.trades,
+        trades: (tradesRes.status === 'fulfilled' && Array.isArray(tradesRes.value.trades) && tradesRes.value.trades.length > 0)
+          ? tradesRes.value.trades
+          : prev.trades,
       }));
     } catch (error) {
       console.error('Error fetching data:', error);

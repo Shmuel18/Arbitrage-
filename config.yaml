@@ -47,7 +47,7 @@ exchanges:
     - bybit
     - okx
     - kucoin
-    - kraken
+    # - kraken
     - gateio
 
   binance:
