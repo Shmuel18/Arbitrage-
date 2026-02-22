@@ -203,9 +203,9 @@ class ExecutionController:
                 )
                 return
         else:
-            if opp.funding_spread_pct < tp.min_funding_spread:
+            if opp.gross_edge_pct < tp.min_funding_spread:
                 logger.info(
-                    f"📉 Skipping {opp.symbol}: spread {opp.funding_spread_pct:.4f}% "
+                    f"📉 Skipping {opp.symbol}: spread {opp.gross_edge_pct:.4f}% "
                     f"< min_funding_spread {tp.min_funding_spread}%"
                 )
                 return
