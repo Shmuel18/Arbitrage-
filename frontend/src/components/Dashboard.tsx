@@ -4,7 +4,6 @@ import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
-import ControlPanel from './ControlPanel';
 import AnalyticsPanel from './AnalyticsPanel';
 import ExchangeBalances from './ExchangeBalances';
 import RecentTradesPanel from './RecentTradesPanel';
@@ -18,7 +17,6 @@ export const SECTION_IDS = {
   trades: 'section-trades',
   balances: 'section-balances',
   logs: 'section-logs',
-  control: 'section-control',
 } as const;
 
 export type SectionId = typeof SECTION_IDS[keyof typeof SECTION_IDS];
@@ -93,13 +91,8 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
               <div className="lg:col-span-2" id={SECTION_IDS.positions}>
                 <PositionsTable positions={data.positions || []} />
               </div>
-              <div className="space-y-5">
-                <div id={SECTION_IDS.control}>
-                  <ControlPanel />
-                </div>
-                <div id={SECTION_IDS.balances}>
-                  <ExchangeBalances balances={data.balances} />
-                </div>
+              <div id={SECTION_IDS.balances}>
+                <ExchangeBalances balances={data.balances} />
               </div>
             </div>
 

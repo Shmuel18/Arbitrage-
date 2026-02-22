@@ -40,15 +40,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
         ))}
       </nav>
 
-      <div className="sidebar-footer">
-        <button
-          className={`sidebar-nav-item${activeSection === SECTION_IDS.control ? ' active' : ''}`}
-          onClick={() => onNavigate(SECTION_IDS.control)}
-        >
-          <span className="nav-icon">⚙️</span>
-          <span>{t.controlPanel}</span>
-        </button>
-      </div>
+      <div className="sidebar-footer" />
     </aside>
   );
 };
