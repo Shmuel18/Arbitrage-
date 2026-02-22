@@ -73,6 +73,7 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
         <Header botStatus={data.status} lastFetchedAt={data.lastFetchedAt} />
 
         <div className="content-area" ref={contentRef}>
+          <div className="logo-watermark" />
           <div className="space-y-5">
             <div id={SECTION_IDS.dashboard}>
               <StatsCards

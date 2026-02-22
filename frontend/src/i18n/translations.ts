@@ -129,7 +129,7 @@ export interface Translations {
 
 const en: Translations = {
   dashboard: 'Dashboard',
-  trinityTitle: 'TRINITY',
+  trinityTitle: 'RATEBRIDGE',
   arbitrageEngine: 'ARBITRAGE ENGINE',
   running: 'RUNNING',
   stopped: 'STOPPED',
@@ -246,7 +246,7 @@ const en: Translations = {
 
 const he: Translations = {
   dashboard: 'לוח מחוונים',
-  trinityTitle: 'TRINITY',
+  trinityTitle: 'RATEBRIDGE',
   arbitrageEngine: 'מנוע ארביטראז׳',
   running: 'פועל',
   stopped: 'מופסק',

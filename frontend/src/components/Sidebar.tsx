@@ -22,8 +22,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
-        <img src="/logo.png" alt="Trinity" className="sidebar-logo-img" />
-        <h1>TRINITY</h1>
+        <img src="/logo.png" alt="RateBridge" className="sidebar-logo-img" />
+        <h1>RATEBRIDGE</h1>
         <span>{t.arbitrageEngine}</span>
       </div>
 

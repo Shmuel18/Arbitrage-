@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { BotStatus } from '../types';
-import { emergencyStop } from '../services/api';
 import { useSettings } from '../context/SettingsContext';
 
 interface HeaderProps {
@@ -25,18 +24,6 @@ const Header: React.FC<HeaderProps> = React.memo(({ botStatus, lastFetchedAt }) 
     }, 1000);
     return () => clearInterval(id);
   }, []);
-
-  const handleEmergencyStop = async () => {
-    if (window.confirm(t.emergencyStopConfirm)) {
-      try {
-        await emergencyStop();
-        alert(t.emergencyStopSent);
-      } catch (error) {
-        console.error('Error:', error);
-        alert(t.emergencyStopFailed);
-      }
-    }
-  };
 
   const toggleLang = () => setLang(lang === 'en' ? 'he' : 'en');
   const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -73,10 +60,6 @@ const Header: React.FC<HeaderProps> = React.memo(({ botStatus, lastFetchedAt }) 
 
         <button onClick={toggleTheme} className="topbar-btn" title={t.theme}>
           {theme === 'dark' ? '☀️' : '🌙'}
-        </button>
-
-        <button onClick={handleEmergencyStop} className="topbar-btn topbar-btn--danger">
-          {t.emergencyStop}
         </button>
       </div>
     </header>
