@@ -47,9 +47,14 @@ function App() {
         positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         lastFetchedAt: Date.now(),
-        trades: (tradesRes.status === 'fulfilled' && Array.isArray(tradesRes.value.trades) && tradesRes.value.trades.length > 0)
-          ? tradesRes.value.trades
-          : prev.trades,
+        trades: (() => {
+          if (tradesRes.status !== 'fulfilled') return prev.trades;
+          const newT = tradesRes.value.trades || [];
+          if (newT.length === 0) return prev.trades;
+          const prevIds = prev.trades.map((t: any) => t.id).join(',');
+          const newIds = newT.map((t: any) => t.id).join(',');
+          return prevIds === newIds ? prev.trades : newT;
+        })(),
       }));
     } catch (error) {
       console.error('Error fetching data:', error);
