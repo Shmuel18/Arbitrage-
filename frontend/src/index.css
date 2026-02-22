@@ -1298,7 +1298,9 @@ code, .mono {
   bottom: 0;
   left: var(--sidebar-width);
   right: 0;
-  background: url('/logo.png') center center / 380px auto no-repeat;
+  background-size: 380px auto;
+  background-position: center center;
+  background-repeat: no-repeat;
   pointer-events: none;
   z-index: 0;
   opacity: 0.03;
