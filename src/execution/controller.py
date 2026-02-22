@@ -1355,6 +1355,7 @@ class ExecutionController:
                 )
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
+                await self._record_manual_close(trade)
                 await self._redis.delete_trade_state(trade.trade_id)
                 del self._active_trades[trade.trade_id]
 
@@ -1378,6 +1379,7 @@ class ExecutionController:
                     )
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
+                await self._record_manual_close(trade)
                 await self._redis.delete_trade_state(trade.trade_id)
                 del self._active_trades[trade.trade_id]
 
@@ -1401,6 +1403,7 @@ class ExecutionController:
                     )
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
+                await self._record_manual_close(trade)
                 await self._redis.delete_trade_state(trade.trade_id)
                 del self._active_trades[trade.trade_id]
 
@@ -1448,9 +1451,15 @@ class ExecutionController:
             total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
             trade.fees_paid_total = total_fees
             if trade.funding_paid_total is None and trade.funding_received_total is None:
-                paid, received = self._estimate_funding_totals(trade)
-                trade.funding_paid_total = paid
-                trade.funding_received_total = received
+                if trade.funding_collected_usd and trade.funding_collected_usd > 0:
+                    # Use actual accumulated collection total — multi-payment aware
+                    trade.funding_received_total = trade.funding_collected_usd
+                    trade.funding_paid_total = Decimal("0")
+                else:
+                    # Fallback: estimate from entry rates (single-payment approximation)
+                    paid, received = self._estimate_funding_totals(trade)
+                    trade.funding_paid_total = paid
+                    trade.funding_received_total = received
             await self._redis.delete_trade_state(trade.trade_id)
             del self._active_trades[trade.trade_id]
 
@@ -1730,6 +1739,92 @@ class ExecutionController:
         return paid, received
 
     # ── Close all (shutdown) ─────────────────────────────────────
+
+    async def _record_manual_close(self, trade: TradeRecord) -> None:
+        """Save a manually-closed trade to Redis history with best-effort PnL."""
+        try:
+            now = datetime.now(timezone.utc)
+            trade.closed_at = trade.closed_at or now
+
+            # Try to get exit prices from current mark prices (best-effort, no await)
+            long_adapter = self._exchanges.get(trade.long_exchange)
+            short_adapter = self._exchanges.get(trade.short_exchange)
+            if trade.exit_price_long is None and long_adapter:
+                mp = long_adapter.get_mark_price(trade.symbol)
+                if mp:
+                    trade.exit_price_long = Decimal(str(mp))
+            if trade.exit_price_short is None and short_adapter:
+                mp = short_adapter.get_mark_price(trade.symbol)
+                if mp:
+                    trade.exit_price_short = Decimal(str(mp))
+
+            # Fallback: use entry prices (PnL reported as 0 price movement)
+            exit_long = trade.exit_price_long or trade.entry_price_long or Decimal("0")
+            exit_short = trade.exit_price_short or trade.entry_price_short or Decimal("0")
+
+            entry_notional_long = (trade.entry_price_long or Decimal("0")) * trade.long_qty
+            entry_notional_short = (trade.entry_price_short or Decimal("0")) * trade.short_qty
+            exit_notional_long = exit_long * trade.long_qty
+            exit_notional_short = exit_short * trade.short_qty
+            long_pnl = exit_notional_long - entry_notional_long
+            short_pnl = entry_notional_short - exit_notional_short
+            price_pnl = long_pnl + short_pnl
+
+            if trade.funding_collected_usd and trade.funding_collected_usd > 0:
+                funding_net = trade.funding_collected_usd
+            else:
+                paid, received = self._estimate_funding_totals(trade)
+                funding_net = received - paid
+
+            total_fees = trade.fees_paid_total or Decimal("0")
+            total_pnl = price_pnl + funding_net - total_fees
+            invested = max(entry_notional_long, entry_notional_short)
+            profit_pct = (total_pnl / invested * Decimal("100")) if invested > 0 else Decimal("0")
+            hold_minutes = Decimal("0")
+            if trade.opened_at and trade.closed_at:
+                hold_minutes = Decimal(str((trade.closed_at - trade.opened_at).total_seconds() / 60))
+
+            trade_data = {
+                "id": trade.trade_id,
+                "symbol": trade.symbol,
+                "mode": trade.mode,
+                "long_exchange": trade.long_exchange,
+                "short_exchange": trade.short_exchange,
+                "long_qty": str(trade.long_qty),
+                "short_qty": str(trade.short_qty),
+                "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
+                "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
+                "exit_price_long": str(exit_long),
+                "exit_price_short": str(exit_short),
+                "fees_paid_total": str(total_fees),
+                "funding_received_total": str(max(funding_net, Decimal("0"))),
+                "funding_paid_total": str(max(-funding_net, Decimal("0"))),
+                "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
+                "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
+                "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
+                "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
+                "status": "CLOSED",
+                "entry_edge_pct": str(trade.entry_edge_pct) if trade.entry_edge_pct is not None else None,
+                "total_pnl": float(total_pnl),
+                "price_pnl": float(price_pnl),
+                "funding_net": float(funding_net),
+                "invested": float(invested),
+                "hold_minutes": float(hold_minutes),
+                "exit_reason": "manual_close",
+                "funding_collections": trade.funding_collections,
+                "funding_collected_usd": str(trade.funding_collected_usd),
+            }
+            await self._redis.zadd(
+                "trinity:trades:history",
+                {json.dumps(trade_data): datetime.utcnow().timestamp()},
+            )
+            logger.info(
+                f"📋 Manual close recorded: {trade.trade_id} ({trade.symbol}) "
+                f"PnL=${float(total_pnl):.4f} (held {float(hold_minutes):.0f}min)",
+                extra={"trade_id": trade.trade_id, "action": "manual_close_recorded"},
+            )
+        except Exception as e:
+            logger.error(f"Failed to record manual close for {trade.trade_id}: {e}")
 
     async def close_all_positions(self) -> None:
         """Close every active trade — called during graceful shutdown."""
