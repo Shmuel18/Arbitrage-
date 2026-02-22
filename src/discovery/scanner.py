@@ -420,21 +420,17 @@ class Scanner:
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
 
-        # ── Live price basis check ───────────────────────────────
-        # If long exchange price > short exchange price, we are buying
-        # the expensive leg and shorting the cheap leg.  That adverse
-        # basis must converge before we profit on price — treat it as
-        # an additional cost.  Favorable basis (long cheaper) is neutral.
+        # ── Live price basis check (from cache — no extra API calls) ──
+        # If long exchange price > short exchange price, adverse basis → extra cost.
         price_basis_pct = Decimal("0")
         try:
-            long_ticker = await adapters[long_eid].get_ticker(symbol)
-            short_ticker = await adapters[short_eid].get_ticker(symbol)
-            long_price = Decimal(str(long_ticker.get("last") or long_ticker.get("close") or 0))
-            short_price = Decimal(str(short_ticker.get("last") or short_ticker.get("close") or 0))
+            long_cached = adapters[long_eid].get_funding_rate_cached(symbol)
+            short_cached = adapters[short_eid].get_funding_rate_cached(symbol)
+            long_price = Decimal(str(long_cached.get("markPrice") or 0)) if long_cached else Decimal("0")
+            short_price = Decimal(str(short_cached.get("markPrice") or 0)) if short_cached else Decimal("0")
             if long_price > 0 and short_price > 0:
-                # basis_pct > 0 means long exchange is more expensive → adverse
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
-                price_basis_pct = max(raw_basis, Decimal("0"))  # only penalise adverse basis
+                price_basis_pct = max(raw_basis, Decimal("0"))
                 if price_basis_pct > Decimal("0"):
                     total_cost_pct += price_basis_pct
                     logger.debug(
