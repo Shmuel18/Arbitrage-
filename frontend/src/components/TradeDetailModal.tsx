@@ -130,7 +130,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         boxShadow: '0 0 0 1px rgba(59,130,246,0.08), 0 16px 60px rgba(0,0,0,0.7), 0 0 40px rgba(59,130,246,0.06)',
         padding: '22px 26px',
         backdropFilter: 'blur(20px)',
-        position: 'relative',
         overflow: 'hidden',
       }}>
         {/* Top accent line */}
