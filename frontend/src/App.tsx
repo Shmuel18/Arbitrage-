@@ -70,7 +70,7 @@ function App() {
           pnl: (d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0) ? d.pnl : prev.pnl,
           logs: d.logs || prev.logs,
           positions: d.positions || prev.positions,
-          trades: prev.trades,
+          trades: Array.isArray(d.trades) && d.trades.length > 0 ? d.trades : prev.trades,
           lastFetchedAt: Date.now(),
         }));
       } else if (msg.type === 'status_update') {
