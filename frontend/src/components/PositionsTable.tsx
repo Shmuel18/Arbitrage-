@@ -46,24 +46,49 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   const formatCountdown = (ms?: number | null): string => {
     if (!ms) return '--';
     const diff = ms - Date.now();
-    if (diff <= 0) return '⚡NOW';
+    if (diff <= 0) return '⚡ NOW';
     const mins = Math.floor(diff / 60000);
     if (mins < 60) return `${mins}m`;
     return `${Math.floor(mins / 60)}h${mins % 60 > 0 ? (mins % 60) + 'm' : ''}`;
   };
 
+  const countdownStyle = (ms?: number | null): React.CSSProperties => {
+    if (!ms) return {};
+    const diff = ms - Date.now();
+    if (diff <= 0) return { color: '#10b981', fontWeight: 700 };
+    const mins = diff / 60000;
+    if (mins < 2) return { color: '#ef4444', fontWeight: 700, animation: 'funding-blink 0.8s ease-in-out infinite' };
+    if (mins < 5) return { color: '#f97316', fontWeight: 600 };
+    if (mins < 15) return { color: '#eab308', fontWeight: 500 };
+    return { color: '#10b981' };
+  };
+
   const modeLabel = (mode?: string) => {
     if (!mode) return null;
     const m = mode.toLowerCase();
-    if (m === 'cherry_pick') return <span style={{ color: '#f97316', fontSize: '0.65rem', fontWeight: 700 }}>🍒CHERRY</span>;
-    if (m === 'hold_mixed') return <span style={{ color: '#eab308', fontSize: '0.65rem', fontWeight: 700 }}>MIXED</span>;
-    return <span style={{ color: '#22c55e', fontSize: '0.65rem', fontWeight: 700 }}>HOLD</span>;
+    if (m === 'cherry_pick') return (
+      <span className="pos-mode-badge pos-mode-badge--cherry">🍒 CHERRY</span>
+    );
+    if (m === 'hold_mixed') return (
+      <span className="pos-mode-badge pos-mode-badge--mixed">MIXED</span>
+    );
+    return <span className="pos-mode-badge pos-mode-badge--hold">HOLD</span>;
   };
 
   return (
     <div className="card">
-      <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)' }}>
+      <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{t.activePositions}</div>
+        {positions.length > 0 && (
+          <span className="xcard-live" style={{ marginLeft: 2 }}>
+            <span className="xcard-live-dot" />LIVE
+          </span>
+        )}
+        {positions.length > 0 && (
+          <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+            {positions.length} position{positions.length !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
       <div className="overflow-x-auto scrollbar-thin">
         <table className="corp-table" style={{ fontSize: '0.85rem' }}>
@@ -108,7 +133,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                   : 'text-yellow-400';
                   
                 return (
-                  <tr key={p.id} style={{ lineHeight: '1.2' }}>
+                  <tr key={p.id} className="pos-row--active" style={{ lineHeight: '1.2' }}>
                     <td style={{ padding: '5px 8px', fontWeight: 500 }} className="text-accent">
                       <div>{p.symbol}</div>
                       <div style={{ marginTop: 1 }}>{modeLabel(p.mode)}</div>
@@ -136,7 +161,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatFunding(p.current_long_rate)}/{formatFunding(p.current_short_rate)}
                     </td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem', color: p.next_funding_ms && (p.next_funding_ms - Date.now()) < 900000 ? 'var(--green)' : undefined }} className="mono">
+                    <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem', ...countdownStyle(p.next_funding_ms) }} className="mono">
                       {formatCountdown(p.next_funding_ms)}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'center', fontSize: '0.8rem' }} className="text-secondary">

@@ -109,8 +109,14 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
 
   return (
     <div className="card flex flex-col">
-      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
-        {t.liveOpportunities} <span className="card-header-muted">({count})</span>
+      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span>{t.liveOpportunities}</span>
+        <span className="card-header-muted">({count})</span>
+        {count > 0 && (
+          <span className="xcard-live" style={{ marginLeft: 2 }}>
+            <span className="xcard-live-dot" />LIVE
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-auto scrollbar-thin">

@@ -796,3 +796,207 @@ code, .mono {
   .corp-table tbody td { padding: 8px 10px; font-size: 12px; }
   .btn { padding: 6px 12px; font-size: 12px; }
 }
+
+/* ══════════════════════════════════════════
+   EXCHANGE-GRADE STAT CARDS (xcards)
+   ══════════════════════════════════════════ */
+.xcards-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.xcard {
+  position: relative;
+  background: rgba(10, 16, 28, 0.75);
+  border: 1px solid rgba(255,255,255,0.065);
+  border-radius: 14px;
+  padding: 18px 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  cursor: default;
+}
+
+/* Accent top border */
+.xcard::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--xcard-accent, #3b82f6) 40%, transparent 100%);
+  border-radius: 14px 14px 0 0;
+  opacity: 0.9;
+}
+
+/* Subtle inner glow from accent */
+.xcard::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 60px;
+  background: radial-gradient(ellipse at 50% -20%, color-mix(in srgb, var(--xcard-accent, #3b82f6) 18%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
+.xcard:hover {
+  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 40%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--xcard-accent, #3b82f6) 20%, transparent),
+              0 8px 32px color-mix(in srgb, var(--xcard-accent, #3b82f6) 12%, transparent);
+  transform: translateY(-1px);
+}
+
+.xcard-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.xcard-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 12%, transparent);
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--xcard-accent, #3b82f6) 20%, transparent);
+  opacity: 0.95;
+}
+
+.xcard-live {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--green);
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.xcard-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: live-dot-pulse 2s ease-in-out infinite;
+}
+
+@keyframes live-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.75); }
+}
+
+.xcard-trend {
+  display: flex;
+  align-items: center;
+  opacity: 0.75;
+  transition: opacity 0.2s;
+}
+
+.xcard-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.xcard-value {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xcard-sub {
+  font-size: 11px;
+  font-weight: 400;
+  margin-top: 2px;
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.xcard-sparkline {
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
+  opacity: 0.6;
+}
+
+/* ── Responsive xcards ── */
+@media (max-width: 1280px) {
+  .xcard-value { font-size: 20px; }
+}
+
+@media (max-width: 1024px) {
+  .xcards-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .xcards-grid { grid-template-columns: 1fr; }
+  .xcard-value { font-size: 22px; }
+}
+
+/* ══════════════════════════════════════════
+   POSITIONS TABLE LIVE EFFECTS
+   ══════════════════════════════════════════ */
+.pos-row--active {
+  transition: background 0.25s ease;
+}
+
+[data-theme="dark"] .pos-row--active:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.pos-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  padding: 1px 5px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  border: 1px solid;
+}
+
+.pos-mode-badge--cherry {
+  color: #f97316;
+  border-color: rgba(249, 115, 22, 0.35);
+  background: rgba(249, 115, 22, 0.1);
+}
+
+.pos-mode-badge--mixed {
+  color: #eab308;
+  border-color: rgba(234, 179, 8, 0.35);
+  background: rgba(234, 179, 8, 0.08);
+}
+
+.pos-mode-badge--hold {
+  color: #22c55e;
+  border-color: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+@keyframes funding-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
