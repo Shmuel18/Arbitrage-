@@ -56,9 +56,23 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
 
   return (
   <>
-    <div className="card">
-      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
+    <div className="card" style={{ position: 'relative' }}>
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: 'linear-gradient(90deg, transparent, rgba(34,197,94,0.45), transparent)',
+        borderRadius: '14px 14px 0 0',
+        zIndex: 1, pointerEvents: 'none',
+      }} />
+      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+          <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+        </svg>
         {t.last10Trades}
+        {trades.length > 0 && (
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+            Click row for details
+          </span>
+        )}
       </div>
       <div className="overflow-auto scrollbar-thin">
         <table className="corp-table">

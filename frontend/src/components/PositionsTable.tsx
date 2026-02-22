@@ -76,9 +76,18 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   };
 
   return (
-    <div className="card">
+    <div className="card" style={{ position: 'relative' }}>
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: 'linear-gradient(90deg, transparent, rgba(6,182,212,0.5), transparent)',
+        borderRadius: '14px 14px 0 0',
+        zIndex: 1, pointerEvents: 'none',
+      }} />
       <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{t.activePositions}</div>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        {t.activePositions}
         {positions.length > 0 && (
           <span className="xcard-live" style={{ marginLeft: 2 }}>
             <span className="xcard-live-dot" />LIVE

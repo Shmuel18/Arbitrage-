@@ -108,8 +108,17 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
   };
 
   return (
-    <div className="card flex flex-col">
+    <div className="card flex flex-col" style={{ position: 'relative' }}>
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+        background: 'linear-gradient(90deg, transparent, rgba(16,185,129,0.5), transparent)',
+        borderRadius: '14px 14px 0 0',
+        zIndex: 1, pointerEvents: 'none',
+      }} />
       <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+        </svg>
         <span>{t.liveOpportunities}</span>
         <span className="card-header-muted">({count})</span>
         {count > 0 && (

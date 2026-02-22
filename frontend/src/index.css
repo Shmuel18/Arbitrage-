@@ -99,8 +99,23 @@
 [data-theme="dark"] .card,
 [data-theme="dark"] .stat-card,
 [data-theme="dark"] .logs-container {
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  background: rgba(10, 16, 28, 0.75) !important;
+  border-color: rgba(255, 255, 255, 0.065) !important;
+}
+
+/* ── Dark theme: card accent top border ── */
+[data-theme="dark"] .card::before,
+[data-theme="dark"] .logs-container::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(59, 130, 246, 0.35) 50%, transparent 100%);
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 1;
 }
 
 /* ── Dark theme: stat card neon glow ── */
@@ -112,12 +127,6 @@
 [data-theme="dark"] .stat-card--green:hover { box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.4), 0 8px 32px rgba(16, 185, 129, 0.18); }
 [data-theme="dark"] .stat-card--teal:hover  { box-shadow: 0 0 0 1px rgba(14, 165, 165, 0.4), 0 8px 32px rgba(14, 165, 165, 0.18); }
 [data-theme="dark"] .stat-card--purple:hover{ box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.4), 0 8px 32px rgba(139, 92, 246, 0.18); }
-
-/* ── Dark theme: subtle dot-grid background ── */
-[data-theme="dark"] .content-area {
-  background-image: radial-gradient(rgba(42, 106, 242, 0.06) 1px, transparent 1px);
-  background-size: 28px 28px;
-}
 
 /* ══════════════════════════════════════════
    BASE
@@ -474,30 +483,34 @@ code, .mono {
 }
 
 /* ══════════════════════════════════════════
-   CARDS (Tipalti-style white panels)
+   CARDS — exchange-grade
    ══════════════════════════════════════════ */
 .card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: var(--card-radius);
+  border-radius: 14px;
   box-shadow: var(--card-shadow);
-  transition: box-shadow 0.2s ease;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
-.card:hover {
-  box-shadow: var(--card-shadow-hover);
+[data-theme="dark"] .card:hover {
+  border-color: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
 }
 
 .card-header {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: 0.01em;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .card-header-muted {
-  font-size: 12px;
-  color: var(--text-secondary);
+  font-size: 11px;
+  color: var(--text-muted);
   font-weight: 500;
 }
 
@@ -559,7 +572,7 @@ code, .mono {
 }
 
 /* ══════════════════════════════════════════
-   TABLES (clean corporate)
+   TABLES — exchange-grade
    ══════════════════════════════════════════ */
 .table-wrapper {
   overflow-x: auto;
@@ -575,15 +588,20 @@ code, .mono {
 
 .corp-table thead th {
   background: var(--table-header-bg);
-  color: var(--text-secondary);
-  font-weight: 600;
-  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.09em;
   padding: 10px 14px;
   border-bottom: 1px solid var(--card-border);
   text-align: start;
   white-space: nowrap;
+}
+
+[data-theme="dark"] .corp-table thead th {
+  background: rgba(6, 11, 18, 0.6);
+  color: #4b5e7a;
 }
 
 .corp-table tbody td {
@@ -591,6 +609,9 @@ code, .mono {
   border-bottom: 1px solid var(--table-border);
   color: var(--text-primary);
   white-space: nowrap;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .corp-table tbody tr:last-child td {
@@ -598,41 +619,43 @@ code, .mono {
 }
 
 .corp-table tbody tr {
-  transition: background 0.15s ease;
+  transition: background 0.12s ease;
+}
+
+[data-theme="dark"] .corp-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+[data-theme="dark"] .corp-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
 }
 
 .corp-table tbody tr:hover {
   background: var(--table-hover);
 }
 
-.corp-table tbody tr:nth-child(even) {
-  background: var(--table-stripe);
-}
-
-.corp-table tbody tr:nth-child(even):hover {
-  background: var(--table-hover);
-}
-
 /* ══════════════════════════════════════════
-   BUTTONS (Tipalti-style)
+   BUTTONS — exchange-grade
    ══════════════════════════════════════════ */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 13px;
-  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
   font-family: 'Inter', system-ui, sans-serif;
   cursor: pointer;
   transition: all 0.15s ease;
   border: 1px solid transparent;
   line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.btn:active { transform: scale(0.97); }
+.btn:active { transform: scale(0.96); }
 
 .btn-primary {
   background: var(--accent);
@@ -640,9 +663,14 @@ code, .mono {
   border-color: var(--accent);
 }
 
-.btn-primary:hover {
-  background: #2259d6;
-  border-color: #2259d6;
+[data-theme="dark"] .btn-primary {
+  background: linear-gradient(135deg, #2a6af2, #3b82f6);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+[data-theme="dark"] .btn-primary:hover {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+  transform: translateY(-1px);
 }
 
 .btn-success {
@@ -651,8 +679,15 @@ code, .mono {
   border: 1px solid var(--green-border);
 }
 
-.btn-success:hover {
-  background: rgba(16, 185, 129, 0.15);
+[data-theme="dark"] .btn-success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
+}
+
+[data-theme="dark"] .btn-success:hover {
+  background: rgba(16, 185, 129, 0.18);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.3);
 }
 
 .btn-danger {
@@ -661,14 +696,31 @@ code, .mono {
   border: 1px solid var(--red-border);
 }
 
-.btn-danger:hover {
-  background: rgba(239, 68, 68, 0.15);
+[data-theme="dark"] .btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+[data-theme="dark"] .btn-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.3);
 }
 
 .btn-outline {
   background: transparent;
   color: var(--text-secondary);
   border: 1px solid var(--card-border);
+}
+
+[data-theme="dark"] .btn-outline {
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #64748b;
+}
+
+[data-theme="dark"] .btn-outline:hover {
+  background: rgba(59, 130, 246, 0.08);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
 }
 
 .btn-outline:hover {
@@ -678,13 +730,13 @@ code, .mono {
 }
 
 /* ══════════════════════════════════════════
-   INPUTS
+   INPUTS — exchange-grade
    ══════════════════════════════════════════ */
 .input {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
-  border-radius: 6px;
-  padding: 8px 12px;
+  border-radius: 8px;
+  padding: 9px 12px;
   font-size: 13px;
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   color: var(--text-primary);
@@ -692,42 +744,60 @@ code, .mono {
   outline: none;
 }
 
+[data-theme="dark"] .input {
+  background: rgba(6, 11, 18, 0.7);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
 .input:focus {
   border-color: var(--input-focus-border);
   box-shadow: 0 0 0 3px var(--accent-light);
 }
 
+[data-theme="dark"] .input:focus {
+  border-color: rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 0 12px rgba(59, 130, 246, 0.15);
+}
+
 /* ══════════════════════════════════════════
-   LOGS
+   LOGS — exchange-grade
    ══════════════════════════════════════════ */
 .logs-container {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
-  border-radius: var(--card-radius);
+  border-radius: 14px;
   box-shadow: var(--card-shadow);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .log-entry {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 12px;
-  line-height: 1.6;
+  font-size: 11.5px;
+  line-height: 1.65;
 }
 
-.log-timestamp { color: var(--text-muted); }
-.log-info { color: var(--accent); }
+.log-timestamp { color: #2d3f56; font-size: 10.5px; }
+[data-theme="dark"] .log-timestamp { color: #2d4060; }
+.log-info { color: #60a5fa; }
 .log-success { color: var(--green); }
 .log-warning { color: var(--yellow); }
 .log-error { color: var(--red); }
 
 /* ══════════════════════════════════════════
-   CHART
+   CHART — exchange-grade
    ══════════════════════════════════════════ */
 .chart-area {
   background: var(--chart-bg);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 12px;
+  position: relative;
+}
+
+[data-theme="dark"] .chart-area {
+  background: rgba(4, 8, 16, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 /* ══════════════════════════════════════════
@@ -752,11 +822,12 @@ code, .mono {
 }
 
 [data-theme="dark"] .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(59, 130, 246, 0.18);
+  border-radius: 10px;
 }
 
 [data-theme="dark"] .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(59, 130, 246, 0.35);
 }
 
 /* ══════════════════════════════════════════
@@ -999,4 +1070,39 @@ code, .mono {
 @keyframes funding-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+/* ══════════════════════════════════════════
+   SECTION LABELS & DIVIDERS
+   ══════════════════════════════════════════ */
+.section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+[data-theme="dark"] .section-label {
+  color: #2d4060;
+}
+
+.section-divider {
+  border-top: 1px solid var(--divider);
+}
+
+[data-theme="dark"] .section-divider {
+  border-top-color: rgba(59, 130, 246, 0.1);
+}
+
+/* ══════════════════════════════════════════
+   CONTENT AREA — exchange depth
+   ══════════════════════════════════════════ */
+[data-theme="dark"] .content-area {
+  background: #060c16;
+  background-image:
+    radial-gradient(rgba(59, 130, 246, 0.04) 1px, transparent 1px),
+    radial-gradient(ellipse at 20% 50%, rgba(59, 130, 246, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.03) 0%, transparent 50%);
+  background-size: 28px 28px, 100% 100%, 100% 100%;
 }

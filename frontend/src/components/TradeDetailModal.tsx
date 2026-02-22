@@ -79,26 +79,30 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
 
   // ── Section styles ──────────────────────────────────────────────
   const sectionTitle: React.CSSProperties = {
-    fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase',
-    color: 'var(--text-muted)', marginBottom: 10, marginTop: 0,
+    fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase',
+    color: '#2d4060', marginBottom: 10, marginTop: 0,
+    paddingBottom: 6, borderBottom: '1px solid rgba(59,130,246,0.12)',
   };
 
   const rowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '6px 0', borderBottom: '1px solid var(--card-border)',
+    padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
   };
 
   const labelStyle: React.CSSProperties = {
-    color: 'var(--text-muted)', fontSize: 13,
+    color: '#3d5068', fontSize: 12,
   };
 
   const valueStyle: React.CSSProperties = {
-    fontSize: 13, fontWeight: 600, fontFamily: 'var(--font-mono, monospace)',
+    fontSize: 13, fontWeight: 600,
+    fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+    fontVariantNumeric: 'tabular-nums',
+    color: 'var(--text-primary)',
   };
 
   const totalRowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 0 2px', borderTop: '1px solid var(--card-border)', marginTop: 4,
+    padding: '8px 0 2px', borderTop: '1px solid rgba(59,130,246,0.2)', marginTop: 4,
   };
 
   return (
@@ -107,8 +111,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
       <div
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)',
-          zIndex: 1000, backdropFilter: 'blur(3px)',
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+          zIndex: 1000, backdropFilter: 'blur(8px)',
         }}
       />
 
@@ -117,17 +121,27 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         position: 'fixed', top: '50%', left: '50%',
         transform: 'translate(-50%, -50%)',
         zIndex: 1001,
-        width: 'min(520px, 95vw)',
+        width: 'min(540px, 95vw)',
         maxHeight: '90vh',
         overflowY: 'auto',
-        background: 'var(--card-bg)',
-        border: '1px solid var(--card-border)',
-        borderRadius: 10,
-        boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
-        padding: '20px 24px',
+        background: 'rgba(8, 14, 26, 0.95)',
+        border: '1px solid rgba(59, 130, 246, 0.2)',
+        borderRadius: 16,
+        boxShadow: '0 0 0 1px rgba(59,130,246,0.08), 0 16px 60px rgba(0,0,0,0.7), 0 0 40px rgba(59,130,246,0.06)',
+        padding: '22px 26px',
+        backdropFilter: 'blur(20px)',
+        position: 'relative',
+        overflow: 'hidden',
       }}>
+        {/* Top accent line */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: 2,
+          background: 'linear-gradient(90deg, transparent, #3b82f6, #8b5cf6, transparent)',
+          borderRadius: '16px 16px 0 0',
+        }} />
+
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, marginTop: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: '0.04em', color: 'var(--accent)' }}>
               {trade.symbol}
