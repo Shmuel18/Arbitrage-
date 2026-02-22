@@ -139,6 +139,7 @@ class Scanner:
                                 "gross_pct": float(o.gross_edge_pct),
                                 "funding_spread_pct": float(o.funding_spread_pct),
                                 "immediate_spread_pct": float(o.immediate_spread_pct),
+                                "immediate_net_pct": float(o.immediate_net_pct),
                                 "hourly_rate_pct": float(o.hourly_rate_pct),
                                 "min_interval_hours": o.min_interval_hours,
                                 "next_funding_ms": o.next_funding_ms,
