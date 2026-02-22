@@ -132,6 +132,7 @@ class ExecutionController:
 
     async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
         """Validate and execute a new funding-arb trade."""
+        _t0_mono = _time.monotonic()  # execution latency tracking
         logger.info(
             f"🔍 [{opp.symbol}] Evaluating opportunity: mode={opp.mode} "
             f"spread={opp.funding_spread_pct:.4f}% net={opp.net_edge_pct:.4f}% "
@@ -604,6 +605,9 @@ class ExecutionController:
 
             entry_notional = float(entry_price_long * long_filled_qty) if entry_price_long else 0
 
+            # ── Execution latency ──
+            _exec_latency_ms = int((_time.monotonic() - _t0_mono) * 1000)
+
             entry_msg = (
                 f"\n{'='*60}\n"
                 f"  🟢 TRADE ENTRY — {trade_id}\n"
@@ -618,6 +622,7 @@ class ExecutionController:
                 f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
                 f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"
                 f"  Fees:      ${float(entry_fees):.4f}\n"
+                f"  Latency:   {_exec_latency_ms}ms (discovery → filled)\n"
                 f"{'='*60}"
             )
             logger.info(entry_msg, extra={"trade_id": trade_id, "symbol": opp.symbol, "action": "trade_entry"})
@@ -635,6 +640,7 @@ class ExecutionController:
                 exit_before=opp.exit_before, n_collections=opp.n_collections,
                 notional=entry_notional,
                 entry_reason=entry_reason,
+                exec_latency_ms=_exec_latency_ms,
             )
 
             # Log balances after trade opened (if enabled)
