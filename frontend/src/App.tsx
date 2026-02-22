@@ -28,7 +28,7 @@ function App() {
   const fetchAll = useCallback(async () => {
     try {
       const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, tradesRes] = await Promise.allSettled([
-        fetch('http://localhost:8000/api/status').then(r => r.json()),
+        fetch('/api/status').then(r => r.json()),
         getBalances(),
         getOpportunities(),
         getLogs(50),

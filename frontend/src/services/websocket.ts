@@ -13,7 +13,10 @@ export const connectWebSocket = (onMessage: (data: any) => void) => {
     reconnectTimer = null;
   }
 
-  ws = new WebSocket('ws://localhost:8000/ws');
+  // Dynamic WebSocket URL — works on localhost AND via ngrok/any host
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     console.log('✅ WebSocket connected');

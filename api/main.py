@@ -5,7 +5,9 @@ Trinity Bot API - Main FastAPI Application
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
+import os
 import asyncio
 import json
 from datetime import datetime
@@ -117,7 +119,10 @@ async def get_logs(limit: int = 50):
 
 @app.get("/")
 async def root():
-    """API health check"""
+    """Serve React app or API health check"""
+    index = os.path.join("frontend", "build", "index.html")
+    if os.path.exists(index):
+        return FileResponse(index)
     return {
         "status": "online",
         "service": "Trinity Bot API",
@@ -253,6 +258,21 @@ async def broadcast_updates():
         except Exception as e:
             print(f"Error in broadcast_updates: {e}")
             await asyncio.sleep(5)
+
+
+# ── Serve React build (must be LAST — after all API routes) ──────
+_build_dir = os.path.join("frontend", "build")
+if os.path.exists(_build_dir):
+    # Serve /static/... assets
+    app.mount("/static", StaticFiles(directory=os.path.join(_build_dir, "static")), name="static")
+
+    @app.get("/{full_path:path}")
+    async def serve_react(full_path: str):
+        """Catch-all: serve React app for client-side routing"""
+        file_path = os.path.join(_build_dir, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(_build_dir, "index.html"))
 
 
 if __name__ == "__main__":
