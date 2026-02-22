@@ -66,8 +66,8 @@ function App() {
           balances: d.balances || prev.balances,
           opportunities: d.opportunities || prev.opportunities,
           summary: wsSummary || prev.summary,
-          // Only accept pnl from WS if it has the full structure (data_points array)
-          pnl: (d.pnl && Array.isArray(d.pnl.data_points)) ? d.pnl : prev.pnl,
+          // Only accept pnl from WS if it has the full structure with actual data points
+          pnl: (d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0) ? d.pnl : prev.pnl,
           logs: d.logs || prev.logs,
           positions: d.positions || prev.positions,
           trades: prev.trades,
