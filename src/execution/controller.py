@@ -196,17 +196,17 @@ class ExecutionController:
         # For CHERRY_PICK: gross_edge_pct (total collections) must meet threshold
         tp = self._cfg.trading_params
         if opp.mode == "cherry_pick":
-            if opp.gross_edge_pct < tp.min_funding_spread:
+            if opp.immediate_net_pct < tp.min_funding_spread:
                 logger.info(
-                    f"📉 Skipping {opp.symbol}: cherry-pick gross {opp.gross_edge_pct:.4f}% "
-                    f"< min_funding_spread {tp.min_funding_spread}%"
+                    f"📉 Skipping {opp.symbol}: cherry-pick net {opp.immediate_net_pct:.4f}% "
+                    f"< min_funding_spread {tp.min_funding_spread}% (gross={opp.gross_edge_pct:.4f}%)"
                 )
                 return
         else:
-            if opp.gross_edge_pct < tp.min_funding_spread:
+            if opp.immediate_net_pct < tp.min_funding_spread:
                 logger.info(
-                    f"📉 Skipping {opp.symbol}: spread {opp.gross_edge_pct:.4f}% "
-                    f"< min_funding_spread {tp.min_funding_spread}%"
+                    f"📉 Skipping {opp.symbol}: net {opp.immediate_net_pct:.4f}% "
+                    f"< min_funding_spread {tp.min_funding_spread}% (gross={opp.gross_edge_pct:.4f}%)"
                 )
                 return
 
@@ -1024,8 +1024,45 @@ class ExecutionController:
                 self._cfg.trading_params, 'hold_min_spread', Decimal("0.5")
             )
 
-            if immediate_spread >= hold_min_spread:
-                # Spread is still good — but check if next funding is too far away.
+            # Deduct exit fees (close 2 legs) to get net hold value
+            _long_adp = self._exchanges.get(trade.long_exchange)
+            _short_adp = self._exchanges.get(trade.short_exchange)
+            _lf = _long_adp._instrument_cache.get(trade.symbol) if _long_adp else None
+            _sf = _short_adp._instrument_cache.get(trade.symbol) if _short_adp else None
+            _exit_fee_pct = (
+                ((_lf.taker_fee if _lf else Decimal("0.0006")) +
+                 (_sf.taker_fee if _sf else Decimal("0.0006"))) * 2 * Decimal("100")
+            )
+            immediate_spread_net = immediate_spread - _exit_fee_pct
+
+            # ── Live price basis at hold/exit decision ────────────
+            # At exit: selling long, buying back short.
+            # Favorable basis = long_price >= short_price (sell expensive, buy back cheap).
+            _l_price = Decimal("0")
+            _s_price = Decimal("0")
+            _adverse_exit_basis = Decimal("0")
+            _basis_favorable = True  # default: assume OK if prices unavailable
+            try:
+                _l_ticker = await long_adapter.get_ticker(trade.symbol)
+                _s_ticker = await short_adapter.get_ticker(trade.symbol)
+                _l_price = Decimal(str(_l_ticker.get("last") or _l_ticker.get("close") or 0))
+                _s_price = Decimal(str(_s_ticker.get("last") or _s_ticker.get("close") or 0))
+                if _l_price > 0 and _s_price > 0:
+                    raw_exit_basis = (_s_price - _l_price) / _l_price * Decimal("100")
+                    _adverse_exit_basis = max(raw_exit_basis, Decimal("0"))
+                    _basis_favorable = _l_price >= _s_price
+                    if _adverse_exit_basis > Decimal("0"):
+                        immediate_spread_net -= _adverse_exit_basis
+                        logger.debug(
+                            f"[{trade.symbol}] Adverse exit basis: "
+                            f"long({trade.long_exchange})={_l_price} < short({trade.short_exchange})={_s_price} "
+                            f"→ −{float(_adverse_exit_basis):.4f}% from hold spread"
+                        )
+            except Exception as _eb:
+                logger.debug(f"[{trade.symbol}] Exit basis check failed: {_eb}")
+
+            if immediate_spread_net >= hold_min_spread:
+                # Net spread still good — but check if next funding is too far away.
                 # No point holding capital for hours when we could redeploy it.
                 hold_max_wait = getattr(
                     self._cfg.trading_params, 'hold_max_wait_seconds', 3600
@@ -1156,24 +1193,57 @@ class ExecutionController:
                         logger.debug(f"Snapshot fetch failed for {trade.symbol}: {_snap_err}")
                 return
             else:
-                # Spread dropped below threshold → EXIT
-                logger.info(
-                    f"🔄 Trade {trade.trade_id}: EXIT — immediate spread {float(immediate_spread):.4f}% "
-                    f"< {float(hold_min_spread):.2f}% threshold (held {hold_min}min) — "
-                    f"freeing capital for re-scan",
-                    extra={
-                        "trade_id": trade.trade_id,
-                        "symbol": trade.symbol,
-                        "action": "quick_cycle_exit",
-                    },
-                )
-                trade._exit_reason = f'spread_low_{float(immediate_spread):.4f}pct'
-                self._journal.exit_decision(
-                    trade.trade_id, trade.symbol,
-                    reason=f'spread {float(immediate_spread):.4f}% < {float(hold_min_spread):.2f}% threshold',
-                    immediate_spread=immediate_spread, hold_min=hold_min,
-                )
-                await self._close_trade(trade)
+                # Spread dropped below threshold.
+                # Wait for favorable price basis before exiting (max 20 min).
+                _wait_max_sec = 20 * 60
+                _wait_start = getattr(trade, '_exit_wait_start', None)
+                _waited_sec = (now - _wait_start).total_seconds() if _wait_start else 0
+
+                if _basis_favorable or _waited_sec >= _wait_max_sec:
+                    # Exit now: basis is favorable OR 20-min timeout reached
+                    if not _basis_favorable and _waited_sec >= _wait_max_sec:
+                        _reason = f'spread_low_basis_timeout_{int(_waited_sec / 60)}min'
+                        logger.info(
+                            f"⏱ Trade {trade.trade_id}: EXIT (forced — {int(_waited_sec / 60)}min wait, basis still adverse "
+                            f"{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}) "
+                            f"| spread {float(immediate_spread):.4f}% (held {hold_min}min)",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_timeout_exit"},
+                        )
+                    else:
+                        _reason = f'spread_low_{float(immediate_spread):.4f}pct_basis_ok'
+                        logger.info(
+                            f"🔄 Trade {trade.trade_id}: EXIT — spread {float(immediate_spread):.4f}% "
+                            f"< {float(hold_min_spread):.2f}% threshold, basis favorable "
+                            f"({trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}) "
+                            f"(held {hold_min}min)",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "quick_cycle_exit"},
+                        )
+                    trade._exit_reason = _reason
+                    trade._exit_wait_start = None
+                    self._journal.exit_decision(
+                        trade.trade_id, trade.symbol,
+                        reason=_reason,
+                        immediate_spread=immediate_spread, hold_min=hold_min,
+                    )
+                    await self._close_trade(trade)
+                else:
+                    # Basis adverse — start or continue waiting
+                    if _wait_start is None:
+                        trade._exit_wait_start = now
+                        logger.info(
+                            f"⏳ Trade {trade.trade_id}: WAITING FOR FAVORABLE BASIS (max 20min) — "
+                            f"spread {float(immediate_spread):.4f}% below threshold but "
+                            f"adverse basis {float(_adverse_exit_basis):.4f}% "
+                            f"({trade.long_exchange}={_l_price} < {trade.short_exchange}={_s_price})",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_start"},
+                        )
+                    else:
+                        logger.debug(
+                            f"⏳ Trade {trade.trade_id}: still waiting for favorable basis "
+                            f"({int(_waited_sec / 60)}min / 20min) — "
+                            f"adverse {float(_adverse_exit_basis):.4f}%"
+                        )
+                    return  # check again next cycle
                 return
 
         long_spec = await long_adapter.get_instrument_spec(trade.symbol)

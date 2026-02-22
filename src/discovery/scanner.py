@@ -419,7 +419,31 @@ class Scanner:
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
-        
+
+        # ── Live price basis check ───────────────────────────────
+        # If long exchange price > short exchange price, we are buying
+        # the expensive leg and shorting the cheap leg.  That adverse
+        # basis must converge before we profit on price — treat it as
+        # an additional cost.  Favorable basis (long cheaper) is neutral.
+        price_basis_pct = Decimal("0")
+        try:
+            long_ticker = await adapters[long_eid].get_ticker(symbol)
+            short_ticker = await adapters[short_eid].get_ticker(symbol)
+            long_price = Decimal(str(long_ticker.get("last") or long_ticker.get("close") or 0))
+            short_price = Decimal(str(short_ticker.get("last") or short_ticker.get("close") or 0))
+            if long_price > 0 and short_price > 0:
+                # basis_pct > 0 means long exchange is more expensive → adverse
+                raw_basis = (long_price - short_price) / short_price * Decimal("100")
+                price_basis_pct = max(raw_basis, Decimal("0"))  # only penalise adverse basis
+                if price_basis_pct > Decimal("0"):
+                    total_cost_pct += price_basis_pct
+                    logger.debug(
+                        f"[{symbol}] Adverse price basis: {long_eid}={long_price} vs "
+                        f"{short_eid}={short_price} → +{float(price_basis_pct):.4f}% cost"
+                    )
+        except Exception as _basis_err:
+            logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
+
         # Debug: show NEV breakdown
         logger.debug(
             f"[{symbol}] NEV Calculation: "
@@ -427,7 +451,8 @@ class Scanner:
             f"Fees={fees_pct:.4f}% (L:{long_spec.taker_fee*100:.4f}% + S:{short_spec.taker_fee*100:.4f}% × 2) - "
             f"Slippage={tp.slippage_buffer_pct:.4f}% - "
             f"Safety={tp.safety_buffer_pct:.4f}% - "
-            f"Basis={tp.basis_buffer_pct:.4f}%"
+            f"Basis={tp.basis_buffer_pct:.4f}% - "
+            f"PriceBasis={float(price_basis_pct):.4f}%"
         )
 
         # ── Qualification tracking (soft gates for display) ──────
@@ -494,8 +519,8 @@ class Scanner:
         elif not (long_imminent or short_imminent):
             # No income side has funding within the entry window
             hold_qualified = False
-        elif imminent_spread_pct < tp.min_funding_spread:
-            # Imminent gross spread below 0.5%
+        elif (imminent_spread_pct - total_cost_pct) < tp.min_funding_spread:
+            # Imminent net spread (after fees) below threshold
             hold_qualified = False
 
         # ── Determine mode & net (based on imminent payments) ────
@@ -589,7 +614,7 @@ class Scanner:
                             # alone yields ≥ min_funding_spread net, enter.
                             cp_gross = calculate_cherry_pick_edge(income_pnl, 1)
                             cp_net = cp_gross - total_cost_pct
-                            if cp_gross >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
+                            if cp_net >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
                                 cherry_ok = True
                                 qualified = True
                                 mode = "cherry_pick"
