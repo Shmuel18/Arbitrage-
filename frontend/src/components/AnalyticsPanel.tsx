@@ -23,7 +23,12 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl }) => {
   const width = 600;
   const height = 160;
 
-  const values = points.map((p) => p.cumulative_pnl);
+  // Always prepend a zero-baseline point so even a single closed trade renders a line
+  const chartPoints: PnlPoint[] = points.length > 0
+    ? [{ pnl: 0, cumulative_pnl: 0, timestamp: points[0].timestamp - 60 }, ...points]
+    : points;
+
+  const values = chartPoints.map((p) => p.cumulative_pnl);
   const min = values.length ? Math.min(...values) : 0;
   const max = values.length ? Math.max(...values) : 1;
 
