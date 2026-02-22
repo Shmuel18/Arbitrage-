@@ -646,7 +646,8 @@ code, .mono {
   border-bottom: none;
 }
 
-.corp-table tbody tr {5s ease, box-shadow 0.15s ease;
+.corp-table tbody tr {
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 [data-theme="dark"] .corp-table tbody tr:hover {
@@ -655,7 +656,6 @@ code, .mono {
 }
 
 [data-theme="dark"] .corp-table tbody tr:nth-child(even) {
-  background: rgba(255, 255, 255, 0.012r:nth-child(even) {
   background: rgba(255, 255, 255, 0.015);
 }
 
