@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import TradeDetailModal from './TradeDetailModal';
@@ -156,4 +156,4 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
   );
 };
 
-export default RecentTradesPanel;
+export default memo(RecentTradesPanel);

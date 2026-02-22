@@ -63,18 +63,28 @@ function App() {
         // Only accept summary from WS if it has computed fields (all_time_pnl)
         // to avoid overwriting accurate HTTP data with raw Redis defaults
         const wsSummary = d.summary && d.summary.all_time_pnl !== undefined ? d.summary : null;
-        setData(prev => ({
-          status: d.status || prev.status,
-          balances: d.balances || prev.balances,
-          opportunities: d.opportunities || prev.opportunities,
-          summary: wsSummary || prev.summary,
-          // Only accept pnl from WS if it has the full structure with actual data points
-          pnl: (d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0) ? d.pnl : prev.pnl,
-          logs: d.logs || prev.logs,
-          positions: d.positions || prev.positions,
-          trades: Array.isArray(d.trades) && d.trades.length > 0 ? d.trades : prev.trades,
-          lastFetchedAt: Date.now(),
-        }));
+        setData(prev => {
+          const newTrades = Array.isArray(d.trades) && d.trades.length > 0 ? d.trades : null;
+          // Only swap trades reference when IDs actually changed (prevents flicker on every WS tick)
+          const stableTrades = (() => {
+            if (!newTrades) return prev.trades;
+            const prevIds = prev.trades.map((t: any) => t.id).join(',');
+            const newIds = newTrades.map((t: any) => t.id).join(',');
+            return prevIds === newIds ? prev.trades : newTrades;
+          })();
+          return {
+            status: d.status || prev.status,
+            balances: d.balances || prev.balances,
+            opportunities: d.opportunities || prev.opportunities,
+            summary: wsSummary || prev.summary,
+            // Only accept pnl from WS if it has the full structure with actual data points
+            pnl: (d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0) ? d.pnl : prev.pnl,
+            logs: d.logs || prev.logs,
+            positions: d.positions || prev.positions,
+            trades: stableTrades,
+            lastFetchedAt: Date.now(),
+          };
+        });
       } else if (msg.type === 'status_update') {
         setData(prev => ({ ...prev, status: msg.data }));
       }
