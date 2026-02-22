@@ -803,6 +803,13 @@ class ExecutionController:
                     "upgrade_pair": f"{cand_long}_{cand_short}",
                 },
             )
+            # Re-arm grace period BEFORE closing to prevent risk guard
+            # from seeing transient unhedged positions during the switch
+            if self._risk_guard:
+                self._risk_guard.mark_trade_opened(trade.symbol)
+                if cand_symbol != trade.symbol:
+                    self._risk_guard.mark_trade_opened(cand_symbol)
+                logger.info(f"✅ Grace period re-armed for {upgrade_type} on {trade.symbol}")
             await self._close_trade(trade)
             # Set upgrade cooldown so the closed symbol doesn't immediately re-enter
             cooldown_sec = getattr(

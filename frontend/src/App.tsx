@@ -88,6 +88,8 @@ function App() {
 
   return (
     <div className="App min-h-screen bg-slate-900">
+      {/* RateBridge status beam — stretches full width at very top */}
+      <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
       <Dashboard data={data} />
     </div>
   );

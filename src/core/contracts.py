@@ -88,8 +88,14 @@ class OpportunityCandidate:
     # Ranking: return per hour (immediate_net / min_interval)
     min_interval_hours: int = 8            # fastest funding interval in this pair
     hourly_rate_pct: Decimal = Decimal("0") # immediate_net_pct / min_interval_hours
-    # Closest funding payout timestamp (ms since epoch)
+    # Closest funding payout timestamp (ms since epoch) — always the income side
     next_funding_ms: Optional[float] = None
+    # Per-side next funding timestamps (ms since epoch) — from live exchange data
+    long_next_funding_ms: Optional[float] = None
+    short_next_funding_ms: Optional[float] = None
+    # Per-side intervals (actual from exchange, not hardcoded)
+    long_interval_hours: int = 8
+    short_interval_hours: int = 8
     # Qualification flag (False = display-only, doesn't pass all trading gates)
     qualified: bool = True
     # Cherry-pick fields

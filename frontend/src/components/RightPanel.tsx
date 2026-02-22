@@ -14,6 +14,10 @@ interface Opportunity {
   hourly_rate_pct?: number;
   min_interval_hours?: number;
   next_funding_ms?: number | null;
+  long_next_funding_ms?: number | null;
+  short_next_funding_ms?: number | null;
+  long_interval_hours?: number;
+  short_interval_hours?: number;
   qualified?: boolean;
   price: number;
   mode: string;
@@ -62,12 +66,39 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
   const aboveThreshold = opps.filter(o => o.qualified !== false);
   const belowThreshold = opps.filter(o => o.qualified === false);
 
+  const renderFundingCell = (
+    exchange: string,
+    nextMs: number | null | undefined,
+    intervalHours: number,
+  ) => {
+    const now = Date.now();
+    const diff = nextMs ? nextMs - now : null;
+    const isUrgent = diff !== null && diff < 900000; // < 15 min
+    const countdown = formatCountdown(nextMs);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}>
+            {exchange.toUpperCase().slice(0, 3)}
+          </span>
+          <span style={{ fontSize: 10, color: '#4b6080' }}>({intervalHours}h)</span>
+        </div>
+        <div style={{
+          fontSize: 11,
+          fontWeight: isUrgent ? 700 : 400,
+          color: isUrgent ? 'var(--green)' : diff !== null && diff < 3600000 ? '#f59e0b' : 'var(--text-muted)',
+          fontFamily: 'var(--font-mono)',
+        }}>
+          ⏱ {countdown}
+        </div>
+      </div>
+    );
+  };
+
   const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
     const immediateSpread = opp.immediate_spread_pct ?? 0;
-    const countdown = formatCountdown(opp.next_funding_ms);
-    const isUrgent = opp.next_funding_ms && (opp.next_funding_ms - Date.now()) < 900000; // < 15 min
     const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
-    const rowClass = dimmed ? '' : 'opp-row--qualified';
+    const rowClass = dimmed ? '' : 'opp-row--qualified bridge-flow-active';
     return (
       <tr key={i} style={rowStyle} className={rowClass}>
         <td>
@@ -75,8 +106,17 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
           {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
           <span className="font-semibold text-accent">{opp.symbol}</span>
         </td>
-        <td>{opp.long_exchange?.toUpperCase().slice(0, 3)}</td>
-        <td>{opp.short_exchange?.toUpperCase().slice(0, 3)}</td>
+        <td>
+          <span className="bridge-connector">
+            <span style={{ color: '#60a5fa', fontWeight: 700, fontSize: 11 }}>
+              {opp.long_exchange?.toUpperCase().slice(0, 3)}
+            </span>
+            <span className="bridge-connector-line" />
+            <span style={{ color: '#06b6d4', fontWeight: 700, fontSize: 11 }}>
+              {opp.short_exchange?.toUpperCase().slice(0, 3)}
+            </span>
+          </span>
+        </td>
         <td className="text-end mono" style={getRateStyle(opp.long_rate ?? 0)}>
           {formatFunding(opp.long_rate ?? 0)}
         </td>
@@ -96,12 +136,20 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
             ? <span style={{ color: '#eab308' }}>MIXED</span>
             : <span style={{ color: '#22c55e' }}>HOLD</span>}
         </td>
-        <td className="text-end mono" style={{
-          color: isUrgent ? 'var(--green)' : 'var(--text-muted)',
-          fontWeight: isUrgent ? 600 : 400,
-          fontSize: 12
-        }}>
-          ⏱ {countdown}
+        <td style={{ padding: '4px 12px' }}>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            {renderFundingCell(
+              opp.long_exchange ?? '',
+              opp.long_next_funding_ms,
+              opp.long_interval_hours ?? 8,
+            )}
+            <div style={{ width: 1, background: 'var(--card-border)', alignSelf: 'stretch' }} />
+            {renderFundingCell(
+              opp.short_exchange ?? '',
+              opp.short_next_funding_ms,
+              opp.short_interval_hours ?? 8,
+            )}
+          </div>
         </td>
       </tr>
     );
@@ -138,21 +186,20 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
             <thead>
               <tr>
                 <th>{t.pair}</th>
-                <th>{t.long}</th>
-                <th>{t.short}</th>
+                <th>BRIDGE</th>
                 <th className="text-end">{t.fundingL}</th>
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
                 <th className="text-end">{t.netImmed}</th>
                 <th className="text-end">MODE</th>
-                <th className="text-end">{t.countdown}</th>
+                <th className="text-end">NEXT FUNDING</th>
               </tr>
             </thead>
             <tbody>
               {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                 <tr>
-                  <td colSpan={9} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                  <td colSpan={8} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                     ── {t.belowThreshold} ──
                   </td>
                 </tr>

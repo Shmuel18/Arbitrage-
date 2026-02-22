@@ -143,11 +143,15 @@ class Scanner:
                                 "hourly_rate_pct": float(o.hourly_rate_pct),
                                 "min_interval_hours": o.min_interval_hours,
                                 "next_funding_ms": o.next_funding_ms,
+                                "long_next_funding_ms": o.long_next_funding_ms,
+                                "short_next_funding_ms": o.short_next_funding_ms,
                                 "long_rate": float(o.long_funding_rate),
                                 "short_rate": float(o.short_funding_rate),
                                 "price": float(o.reference_price),
                                 "mode": o.mode,
                                 "qualified": o.qualified,
+                                "long_interval_hours": o.long_interval_hours,
+                                "short_interval_hours": o.short_interval_hours,
                             }
                             for o in display_top
                         ]
@@ -618,6 +622,8 @@ class Scanner:
                 long_interval_hours=long_interval,
                 short_interval_hours=short_interval,
                 next_funding_ms=closest_ms,
+                long_next_funding_ms=long_next,
+                short_next_funding_ms=short_next,
                 exit_before=exit_before,
                 n_collections=n_collections,
             )
@@ -645,6 +651,10 @@ class Scanner:
                 min_interval_hours=min_interval,
                 hourly_rate_pct=hourly_rate,
                 next_funding_ms=closest_ms,
+                long_next_funding_ms=long_next,
+                short_next_funding_ms=short_next,
+                long_interval_hours=long_interval,
+                short_interval_hours=short_interval,
                 qualified=False,
                 mode=mode,
                 exit_before=exit_before,
@@ -664,6 +674,8 @@ class Scanner:
         long_interval_hours: int = 8,
         short_interval_hours: int = 8,
         next_funding_ms: Optional[float] = None,
+        long_next_funding_ms: Optional[float] = None,
+        short_next_funding_ms: Optional[float] = None,
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
         long_bal = await adapters[long_eid].get_balance()
@@ -714,6 +726,10 @@ class Scanner:
             min_interval_hours=min_interval,
             hourly_rate_pct=hourly_rate,
             next_funding_ms=next_funding_ms,
+            long_next_funding_ms=long_next_funding_ms,
+            short_next_funding_ms=short_next_funding_ms,
+            long_interval_hours=long_interval_hours,
+            short_interval_hours=short_interval_hours,
             mode=mode,
             exit_before=exit_before,
             n_collections=n_collections,
