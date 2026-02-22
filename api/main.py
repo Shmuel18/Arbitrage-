@@ -212,7 +212,27 @@ async def broadcast_updates():
                 opportunities_data = await redis_client._client.get("trinity:opportunities")
                 summary = await _compute_summary(redis_client._client)
                 logs_data = await redis_client._client.lrange("trinity:logs", 0, 19)
-                pnl_data = await redis_client._client.get("trinity:pnl:latest")
+                pnl_latest = await redis_client._client.get("trinity:pnl:latest")
+                # Build proper pnl structure from closed trades (last 24h)
+                pnl_struct = None
+                try:
+                    import time as _time
+                    cutoff = _time.time() - 86400
+                    trades_raw = await redis_client._client.zrangebyscore(
+                        "trinity:trades:history", cutoff, float('inf'), withscores=True
+                    )
+                    dp = []
+                    cumulative = 0.0
+                    for item in trades_raw:
+                        tj, ts = item
+                        t = json.loads(tj)
+                        pnl_val = float(t.get('total_pnl') or t.get('net_profit') or 0)
+                        cumulative += pnl_val
+                        dp.append({"pnl": pnl_val, "cumulative_pnl": cumulative, "timestamp": float(ts), "symbol": t.get('symbol', '?')})
+                    unrealized = float(json.loads(pnl_latest).get('unrealized_pnl', 0)) if pnl_latest else 0.0
+                    pnl_struct = {"data_points": dp, "total_pnl": cumulative + unrealized, "realized_pnl": cumulative, "unrealized_pnl": unrealized}
+                except Exception:
+                    pass
                 
                 update = {
                     "type": "full_update",
@@ -222,7 +242,7 @@ async def broadcast_updates():
                         "balances": json.loads(balances_data) if balances_data else None,
                         "opportunities": json.loads(opportunities_data) if opportunities_data else None,
                         "summary": summary,
-                        "pnl": json.loads(pnl_data) if pnl_data else None,
+                        "pnl": pnl_struct,
                         "logs": [json.loads(l) for l in logs_data] if logs_data else [],
                     },
                     "timestamp": datetime.utcnow().isoformat()
