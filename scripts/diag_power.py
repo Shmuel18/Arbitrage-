@@ -88,7 +88,12 @@ async def main():
             next_str = f"{next_dt.strftime('%H:%M UTC')} (in {mins:.0f}min)"
         else:
             next_str = "unknown"
-        print(f"  {eid:12s}: rate={float(rate)*100:.6f}%  next={next_str}")
+        try:
+            rate_pct = float(rate) * 100
+            rate_str = f"{rate_pct:.6f}%"
+        except (ValueError, TypeError):
+            rate_str = str(rate)
+        print(f"  {eid:12s}: rate={rate_str}  next={next_str}")
 
     # Analyze each pair
     print(f"\n{'='*70}")
