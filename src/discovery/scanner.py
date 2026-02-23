@@ -371,11 +371,10 @@ class Scanner:
         """Evaluate one direction (long on A, short on B).
 
         Entry logic — PURE FUNDING ARBITRAGE:
-          1. Compute funding spread: (-long_rate) + short_rate   (normalized to 8h)
-          2. Per-payment analysis → HOLD or CHERRY_PICK
-          3. HOLD:        spread ≥ min_funding_spread AND net > min_net_pct
-          4. CHERRY_PICK: total income from N collections > min_funding_spread
-             (e.g. income every 1h, cost every 8h → collect 7× before paying once)
+          1. Compute immediate funding spread: (-long_rate) + short_rate (actual next payment, no 8h normalization)
+          2. Per-payment analysis → HOLD (both sides income) or CHERRY_PICK (one income, one cost)
+          3. HOLD:        both sides income, spread ≥ min_funding_spread AND net > min_net_pct
+          4. CHERRY_PICK: income side fires first, collect BEFORE the cost side fires
         """
         tp = self._cfg.trading_params
 
@@ -557,29 +556,9 @@ class Scanner:
                         "min_to_funding": min_to_funding,
                     },
                 )
-        elif hold_qualified and not pnl["both_cost"]:
-            # ── One side income, one side cost — imminent window met ──
-            if (imminent_spread_pct - total_cost_pct) >= tp.min_net_pct:
-                # Plain HOLD is net-positive from imminent payments
-                min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
-                funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
-                logger.info(
-                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD, mixed): "
-                    f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
-                    f"IMMINENT={imminent_spread_pct:.4f}% (gross) | "
-                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
-                    extra={
-                        "action": "opportunity_found",
-                        "symbol": symbol,
-                        "mode": "hold_mixed",
-                        "long_rate": str(long_rate),
-                        "short_rate": str(short_rate),
-                        "min_to_funding": min_to_funding,
-                    },
-                )
-            else:
-                qualified = False
         else:
+            # ── One side income, one side cost OR hold not qualified ──
+            # Always attempt cherry_pick — enter to collect income, exit before cost fires.
             # ── HOLD didn't qualify — try CHERRY_PICK ────────────
             # Cherry-pick works independently of the 15-min window:
             # Enter now, collect income payments over time, exit

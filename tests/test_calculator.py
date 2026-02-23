@@ -51,18 +51,19 @@ class TestCalculateFundingSpread:
         # -(-0.0002) + 0.0003 = 0.0005 → 0.05%
         assert result["funding_spread_pct"] == Decimal("0.05")
 
-    def test_different_intervals_normalized(self):
-        """Bybit 1h vs Binance 8h: same rate should produce zero spread."""
+    def test_different_intervals_ignored(self):
+        """Without 8h normalization, interval args are ignored — raw rates used directly."""
         result = calculate_funding_spread(
             long_rate=Decimal("0.004"),
             short_rate=Decimal("0.0005"),
             long_interval_hours=8,
             short_interval_hours=1,
         )
-        assert result["funding_spread_pct"] == 0
+        # (-0.004 + 0.0005) * 100 = -0.35%
+        assert result["funding_spread_pct"] == Decimal("-0.35")
 
-    def test_1h_short_makes_spread_bigger(self):
-        """Short on 1h exchange: normalized rate is 8x, so we receive more."""
+    def test_interval_does_not_affect_spread(self):
+        """funding_spread_pct equals immediate_spread_pct — no 8h normalization."""
         result_8h = calculate_funding_spread(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
@@ -75,14 +76,14 @@ class TestCalculateFundingSpread:
             long_interval_hours=8,
             short_interval_hours=1,
         )
-        assert result_1h["funding_spread_pct"] > result_8h["funding_spread_pct"]
+        assert result_1h["funding_spread_pct"] == result_8h["funding_spread_pct"]
 
-    def test_annualized_is_1095x(self):
+    def test_annualized_is_zero(self):
         result = calculate_funding_spread(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
         )
-        assert result["annualized_pct"] == result["funding_spread_pct"] * 1095
+        assert result["annualized_pct"] == Decimal("0")
 
     def test_pnl_breakdown(self):
         """Verify long_pnl_pct and short_pnl_pct are correct."""
@@ -127,21 +128,22 @@ class TestCalculateFundingEdgeBackwardCompat:
         spread = calculate_funding_spread(*args)
         assert edge["edge_pct"] == spread["funding_spread_pct"]
 
-    def test_different_intervals_normalized(self):
+    def test_different_intervals_ignored(self):
         result = calculate_funding_edge(
             long_rate=Decimal("0.004"),
             short_rate=Decimal("0.0005"),
             long_interval_hours=8,
             short_interval_hours=1,
         )
-        assert result["edge_pct"] == 0
+        # No normalization — raw rates: (-0.004 + 0.0005) * 100 = -0.35%
+        assert result["edge_pct"] == Decimal("-0.35")
 
-    def test_annualized_is_1095x_daily(self):
+    def test_annualized_is_zero(self):
         result = calculate_funding_edge(
             long_rate=Decimal("0.0001"),
             short_rate=Decimal("0.0005"),
         )
-        assert result["annualized_pct"] == result["edge_pct"] * 1095
+        assert result["annualized_pct"] == Decimal("0")
 
     def test_negative_rates(self):
         result = calculate_funding_edge(

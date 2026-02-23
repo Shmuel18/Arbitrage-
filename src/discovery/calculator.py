@@ -26,8 +26,8 @@ def calculate_funding_spread(
       • Long side PnL  = −funding_rate  (positive rate → we pay, negative → we receive)
       • Short side PnL  = +funding_rate  (positive rate → we receive, negative → we pay)
 
-    The spread is normalized to an 8-hour settlement period and returned in
-    PERCENT (e.g. 0.05 means 0.05 %).
+    The spread is returned in PERCENT (e.g. 0.05 means 0.05 %).
+    No 8-hour normalization — evaluated on the actual NEXT payment only.
 
     You profit when the spread > 0, i.e.:
       • Long funding is negative  (you receive as long holder), AND/OR
@@ -38,26 +38,15 @@ def calculate_funding_spread(
     immediate_short_pnl = short_rate   # positive rate → income
     immediate_spread_pct = (immediate_long_pnl + immediate_short_pnl) * Decimal("100")
 
-    # Normalise to 8 h
-    norm_long = long_rate * Decimal(8) / Decimal(long_interval_hours)
-    norm_short = short_rate * Decimal(8) / Decimal(short_interval_hours)
-
-    # Per-payment PnL (as raw rate, not percent)
-    long_pnl = -norm_long   # negative rate → income
-    short_pnl = norm_short  # positive rate → income
-
-    # Spread in percent
-    spread_pct = (long_pnl + short_pnl) * Decimal("100")
-    annual_pct = spread_pct * 3 * 365   # 3 settlements/day × 365
-
+    # No 8h normalization — evaluate the actual next payment only
     return {
         "immediate_spread_pct": immediate_spread_pct,
-        "funding_spread_pct": spread_pct,
-        "annualized_pct": annual_pct,
-        "long_pnl_pct": long_pnl * Decimal("100"),
-        "short_pnl_pct": short_pnl * Decimal("100"),
-        "long_rate_norm": norm_long,
-        "short_rate_norm": norm_short,
+        "funding_spread_pct": immediate_spread_pct,
+        "annualized_pct": Decimal("0"),
+        "long_pnl_pct": immediate_long_pnl * Decimal("100"),
+        "short_pnl_pct": immediate_short_pnl * Decimal("100"),
+        "long_rate_norm": long_rate,
+        "short_rate_norm": short_rate,
     }
 
 
