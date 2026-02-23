@@ -49,6 +49,7 @@ exchanges:
     - kucoin
     # - kraken
     - gateio
+    - bitget
 
   binance:
     name: "Binance Futures"
@@ -103,6 +104,16 @@ exchanges:
   gateio:
     name: "Gate.io Futures"
     ccxt_id: "gateio"
+    default_type: "swap"
+    rate_limit_ms: 100
+    max_leverage: 20
+    leverage: 5
+    margin_mode: "cross"
+    position_mode: "oneway"
+
+  bitget:
+    name: "Bitget Futures"
+    ccxt_id: "bitget"
     default_type: "swap"
     rate_limit_ms: 100
     max_leverage: 20

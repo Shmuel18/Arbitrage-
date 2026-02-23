@@ -187,6 +187,7 @@ class Config(BaseSettings):
             "okx":      ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE", "OKX_TESTNET"),
             "gateio":   ("GATEIO_API_KEY", "GATEIO_API_SECRET", None, "GATEIO_TESTNET"),
             "kucoin":   ("KUCOIN_API_KEY", "KUCOIN_API_SECRET", "KUCOIN_PASSPHRASE", "KUCOIN_TESTNET"),
+            "bitget":   ("BITGET_API_KEY", "BITGET_API_SECRET", "BITGET_PASSPHRASE", "BITGET_TESTNET"),
             "kraken":   ("KRAKEN_API_KEY", "KRAKEN_API_SECRET", None, "KRAKEN_TESTNET"),
         }
         for eid, (key_env, secret_env, pass_env, test_env) in env_map.items():
