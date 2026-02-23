@@ -112,8 +112,14 @@ async def main():
 
         long_price = prices[long_eid]
         short_price = prices[short_eid]
-        long_rate = float(funding.get(long_eid, {}).get("fundingRate", funding.get(long_eid, {}).get("funding_rate", 0)))
-        short_rate = float(funding.get(short_eid, {}).get("fundingRate", funding.get(short_eid, {}).get("funding_rate", 0)))
+        def _safe_rate(fr_dict):
+            v = fr_dict.get("fundingRate", fr_dict.get("funding_rate", 0))
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return 0.0
+        long_rate = _safe_rate(funding.get(long_eid, {}))
+        short_rate = _safe_rate(funding.get(short_eid, {}))
 
         spread = (-long_rate + short_rate) * 100
         price_basis = (long_price - short_price) / short_price * 100
