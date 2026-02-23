@@ -5,9 +5,10 @@ import TradeDetailModal from './TradeDetailModal';
 
 interface RecentTradesPanelProps {
   trades: Trade[];
+  tradesLoaded?: boolean;
 }
 
-const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
+const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoaded = true }) => {
   const { t } = useSettings();
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
@@ -105,7 +106,9 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={11} className="text-center text-secondary py-8">{t.noTradesYet}</td>
+                <td colSpan={11} className="text-center text-secondary py-8">
+                    {tradesLoaded ? t.noTradesYet : '...'}
+                  </td>
               </tr>
             ) : (
               trades.map((tr) => (

@@ -104,7 +104,7 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
             <AnalyticsPanel pnl={data.pnl} />
 
             <div id={SECTION_IDS.trades}>
-              <RecentTradesPanel trades={data.trades || []} />
+              <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />
             </div>
 
             <div id={SECTION_IDS.logs}>

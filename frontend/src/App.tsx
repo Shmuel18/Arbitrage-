@@ -14,6 +14,7 @@ export interface FullData {
   logs: { timestamp: string; message: string; level: string }[];
   positions: any[];
   trades: any[];
+  tradesLoaded: boolean;
   lastFetchedAt: number;
 }
 
@@ -21,7 +22,7 @@ function App() {
   const [data, setData] = useState<FullData>({
     status: { bot_running: false, connected_exchanges: [], active_positions: 0, uptime: 0 },
     balances: null, opportunities: null, summary: null, pnl: null,
-    logs: [], positions: [], trades: [],
+    logs: [], positions: [], trades: [], tradesLoaded: false,
     lastFetchedAt: Date.now(),
   });
 
@@ -47,6 +48,7 @@ function App() {
         positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         lastFetchedAt: Date.now(),
+        tradesLoaded: true,
         trades: (() => {
           if (tradesRes.status !== 'fulfilled') return prev.trades;
           const newT = tradesRes.value.trades || [];
