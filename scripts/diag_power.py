@@ -78,8 +78,8 @@ async def main():
     # Print funding rates
     print("\n💰 FUNDING RATES:")
     for eid, fr in funding.items():
-        rate = fr.get("fundingRate", fr.get("funding_rate", "N/A"))
-        next_ts = fr.get("nextFundingTime", fr.get("next_timestamp"))
+        rate = fr.get("rate", "N/A")
+        next_ts = fr.get("next_timestamp")
         if next_ts:
             import datetime
             next_dt = datetime.datetime.fromtimestamp(next_ts/1000, tz=datetime.timezone.utc)
@@ -113,7 +113,7 @@ async def main():
         long_price = prices[long_eid]
         short_price = prices[short_eid]
         def _safe_rate(fr_dict):
-            v = fr_dict.get("fundingRate", fr_dict.get("funding_rate", 0))
+            v = fr_dict.get("rate", 0)
             try:
                 return float(v)
             except (ValueError, TypeError):
@@ -148,7 +148,7 @@ async def main():
     print(f"  min_net_pct:          {cfg.trading_params.min_net_pct}%")
     print(f"{'='*70}\n")
 
-    await mgr.close_all()
+    await mgr.disconnect_all()
 
 if __name__ == "__main__":
     asyncio.run(main())
