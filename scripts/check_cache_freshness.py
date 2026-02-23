@@ -7,7 +7,6 @@ import json
 import redis
 import time
 from datetime import datetime
-from src.core.config import Config
 import logging
 
 logging.basicConfig(
