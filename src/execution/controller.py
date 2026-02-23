@@ -31,7 +31,7 @@ from src.core.contracts import (
 )
 from src.core.logging import get_logger
 from src.core.journal import get_journal
-from src.discovery.calculator import calculate_fees, calculate_funding_spread
+from src.discovery.calculator import calculate_fees
 
 if TYPE_CHECKING:
     from src.core.config import Config
@@ -85,7 +85,19 @@ class ExecutionController:
         # Log balances on startup (if enabled in config)
         if hasattr(self._cfg.logging, 'log_balances_on_startup') and self._cfg.logging.log_balances_on_startup:
             await self._log_exchange_balances()
-        
+
+        # ── Sanity check: hold_min_spread should not exceed min_funding_spread ──
+        # If it does, trades near the entry threshold exit after one payment rather
+        # than holding, which is likely unintentional.
+        _min_entry = self._cfg.trading_params.min_funding_spread
+        _min_hold = getattr(self._cfg.trading_params, 'hold_min_spread', _min_entry)
+        if _min_hold > _min_entry:
+            logger.warning(
+                f"[CONFIG WARNING] hold_min_spread ({_min_hold}%) > min_funding_spread ({_min_entry}%). "
+                f"Trades that enter near the threshold will always exit after one payment. "
+                f"Set hold_min_spread <= min_funding_spread to allow multi-cycle holding."
+            )
+
         logger.info("Execution controller started")
 
     async def stop(self) -> None:
@@ -135,7 +147,7 @@ class ExecutionController:
         _t0_mono = _time.monotonic()  # execution latency tracking
         logger.info(
             f"🔍 [{opp.symbol}] Evaluating opportunity: mode={opp.mode} "
-            f"spread={opp.funding_spread_pct:.4f}% net={opp.net_edge_pct:.4f}% "
+            f"spread={opp.immediate_spread_pct:.4f}% net={opp.net_edge_pct:.4f}% "
             f"L={opp.long_exchange} S={opp.short_exchange}"
         )
 
@@ -192,20 +204,20 @@ class ExecutionController:
                 return
 
         # ── Funding spread gate (safety check) ──
-        # For HOLD mode: raw funding_spread_pct must meet threshold
-        # For CHERRY_PICK: gross_edge_pct (total collections) must meet threshold
+        # net_edge_pct = imminent payment spread minus ALL costs (fees + buffers).
+        # This is the scanner's authoritative signal — no 8h normalization.
         tp = self._cfg.trading_params
         if opp.mode == "cherry_pick":
-            if opp.immediate_net_pct < tp.min_funding_spread:
+            if opp.net_edge_pct < tp.min_funding_spread:
                 logger.info(
-                    f"📉 Skipping {opp.symbol}: cherry-pick net {opp.immediate_net_pct:.4f}% "
+                    f"📉 Skipping {opp.symbol}: cherry-pick net {opp.net_edge_pct:.4f}% "
                     f"< min_funding_spread {tp.min_funding_spread}% (gross={opp.gross_edge_pct:.4f}%)"
                 )
                 return
         else:
-            if opp.immediate_net_pct < tp.min_funding_spread:
+            if opp.net_edge_pct < tp.min_funding_spread:
                 logger.info(
-                    f"📉 Skipping {opp.symbol}: net {opp.immediate_net_pct:.4f}% "
+                    f"📉 Skipping {opp.symbol}: net {opp.net_edge_pct:.4f}% "
                     f"< min_funding_spread {tp.min_funding_spread}% (gross={opp.gross_edge_pct:.4f}%)"
                 )
                 return
@@ -444,6 +456,15 @@ class ExecutionController:
 
             entry_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
 
+            # Entry price basis: (long_price − short_price) / short_price × 100
+            # Positive = long was more expensive than short at entry.
+            # This becomes the break-even threshold for exit: exiting at the same
+            # spread means zero price loss.
+            if entry_price_long and entry_price_short and entry_price_short > 0:
+                entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * Decimal("100")
+            else:
+                entry_basis_pct = Decimal("0")
+
             # Log any partial fills and mismatches
             short_partial = short_filled_qty < short_order_qty
             qty_mismatch = long_filled_qty != short_filled_qty
@@ -541,11 +562,12 @@ class ExecutionController:
                 short_exchange=opp.short_exchange,
                 long_qty=long_filled_qty,
                 short_qty=short_filled_qty,
-                entry_edge_pct=opp.immediate_net_pct,
+                entry_edge_pct=opp.net_edge_pct,
                 long_funding_rate=opp.long_funding_rate,
                 short_funding_rate=opp.short_funding_rate,
                 entry_price_long=entry_price_long,
                 entry_price_short=entry_price_short,
+                entry_basis_pct=entry_basis_pct,
                 fees_paid_total=entry_fees,
                 opened_at=datetime.now(timezone.utc),
                 mode=opp.mode,
@@ -564,7 +586,7 @@ class ExecutionController:
                 f"Trade opened: {trade_id} {opp.symbol} "
                 f"L={opp.long_exchange}({long_filled_qty}) "
                 f"S={opp.short_exchange}({short_filled_qty}) "
-                f"spread={opp.funding_spread_pct:.4f}% net={opp.net_edge_pct:.4f}%{mode_str}",
+                f"spread={opp.immediate_spread_pct:.4f}% net={opp.net_edge_pct:.4f}%{mode_str}",
                 extra={
                     "trade_id": trade_id,
                     "symbol": opp.symbol,
@@ -636,7 +658,7 @@ class ExecutionController:
                 long_qty=long_filled_qty, short_qty=short_filled_qty,
                 entry_price_long=entry_price_long, entry_price_short=entry_price_short,
                 long_funding_rate=opp.long_funding_rate, short_funding_rate=opp.short_funding_rate,
-                spread_pct=opp.funding_spread_pct, net_pct=opp.net_edge_pct,
+                spread_pct=opp.immediate_spread_pct, net_pct=opp.net_edge_pct,
                 exit_before=opp.exit_before, n_collections=opp.n_collections,
                 notional=entry_notional,
                 entry_reason=entry_reason,
@@ -724,15 +746,52 @@ class ExecutionController:
         except Exception:
             return False
 
-        long_interval = long_funding.get("interval_hours", 8)
-        short_interval = short_funding.get("interval_hours", 8)
-        spread_info = calculate_funding_spread(
-            long_funding["rate"], short_funding["rate"],
-            long_interval_hours=long_interval,
-            short_interval_hours=short_interval,
+        # ── Funding-proximity lock ────────────────────────────────────────────
+        # Block upgrade if the CURRENT trade's next funding is within the lock
+        # window (default 3 min). This prevents exiting a position right before
+        # collecting the funding payment we opened the trade to capture.
+        upgrade_funding_lock_secs = getattr(
+            self._cfg.trading_params, 'upgrade_funding_lock_secs', 180
         )
-        current_spread = spread_info["funding_spread_pct"]
-        current_immediate = spread_info["immediate_spread_pct"]
+        if upgrade_funding_lock_secs > 0:
+            now_ms = _time.time() * 1000
+            # Prefer live cache timestamps; fall back to TradeRecord fields
+            long_next_ts = long_funding.get("next_timestamp")
+            short_next_ts = short_funding.get("next_timestamp")
+            current_next_ts: Optional[float] = None
+            if long_next_ts is not None and short_next_ts is not None:
+                current_next_ts = min(long_next_ts, short_next_ts)
+            elif long_next_ts is not None:
+                current_next_ts = long_next_ts
+            elif short_next_ts is not None:
+                current_next_ts = short_next_ts
+            # Fall back to TradeRecord datetime fields if cache has no timestamp
+            if current_next_ts is None:
+                if trade.next_funding_long:
+                    current_next_ts = trade.next_funding_long.timestamp() * 1000
+                if trade.next_funding_short:
+                    short_ms = trade.next_funding_short.timestamp() * 1000
+                    if current_next_ts is None or short_ms < current_next_ts:
+                        current_next_ts = short_ms
+            if current_next_ts is not None:
+                secs_to_funding = (current_next_ts - now_ms) / 1000
+                if 0 < secs_to_funding <= upgrade_funding_lock_secs:
+                    logger.info(
+                        f"🔒 Upgrade blocked for {trade.symbol}: "
+                        f"funding in {int(secs_to_funding)}s "
+                        f"(lock={upgrade_funding_lock_secs}s)",
+                        extra={
+                            "trade_id": trade.trade_id,
+                            "symbol": trade.symbol,
+                            "action": "upgrade_blocked_funding_lock",
+                            "secs_to_funding": int(secs_to_funding),
+                        },
+                    )
+                    return False
+        # ─────────────────────────────────────────────────────────────────────
+
+        # Immediate spread: (-long_rate + short_rate) * 100 — next payment only, no 8h norm
+        current_immediate = (-long_funding["rate"] + short_funding["rate"]) * Decimal("100")
 
         # Read latest opportunities from Redis
         try:
@@ -747,8 +806,7 @@ class ExecutionController:
 
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         now_ms = _time.time() * 1000
-        threshold_cross = current_spread + upgrade_delta       # cross-symbol (8h-norm)
-        threshold_same = current_immediate + upgrade_delta     # same-symbol pair switch
+        threshold = current_immediate + upgrade_delta  # upgrade threshold (next payment only)
 
         for cand in candidates:
             if not cand.get("qualified", False):
@@ -773,10 +831,10 @@ class ExecutionController:
                 if cand_long in other_busy or cand_short in other_busy:
                     continue
                 # Compare immediate spreads (same symbol = same time horizon)
-                if cand_spread < threshold_same:
+                if cand_spread < threshold:
                     continue
             else:
-                if cand_spread < threshold_cross:
+                if cand_spread < threshold:
                     continue
 
             # Must be in the entry window
@@ -794,12 +852,11 @@ class ExecutionController:
                     (datetime.now(timezone.utc) - trade.opened_at).total_seconds() / 60
                 )
             upgrade_type = "PAIR SWITCH" if same_symbol else "UPGRADE"
-            cur_display = float(current_immediate) if same_symbol else float(current_spread)
             logger.info(
                 f"⬆️  {upgrade_type}: closing {trade.symbol} on "
-                f"{trade.long_exchange}↔{trade.short_exchange} (spread {cur_display:.4f}%) "
+                f"{trade.long_exchange}↔{trade.short_exchange} (spread {float(current_immediate):.4f}%) "
                 f"→ {cand_symbol} on {cand_long}↔{cand_short} (spread {float(cand_spread):.4f}%) — "
-                f"delta {float(cand_spread - (current_immediate if same_symbol else current_spread)):.4f}% "
+                f"delta {float(cand_spread - current_immediate):.4f}% "
                 f"≥ {float(upgrade_delta):.2f}% (held {hold_min}min)",
                 extra={
                     "trade_id": trade.trade_id,
@@ -897,15 +954,8 @@ class ExecutionController:
                             f"{trade.next_funding_short.strftime('%H:%M UTC')} (every {si}h)")
 
         # ── Display current spread & time until next payment ──────
-        long_interval = long_funding.get("interval_hours", 8)
-        short_interval = short_funding.get("interval_hours", 8)
-        spread_info = calculate_funding_spread(
-            long_funding["rate"], short_funding["rate"],
-            long_interval_hours=long_interval,
-            short_interval_hours=short_interval,
-        )
-        current_spread = spread_info["funding_spread_pct"]
-        immediate_spread = spread_info["immediate_spread_pct"]
+        # Immediate spread: next payment only — no 8h normalization
+        immediate_spread = (-long_funding["rate"] + short_funding["rate"]) * Decimal("100")
         
         long_until = None
         short_until = None
@@ -927,8 +977,7 @@ class ExecutionController:
             short_str = f"PAID (next {api_short_min}min)"
         
         logger.info(
-            f"🔔 {trade.symbol}: Immediate Spread = {float(immediate_spread):.4f}% "
-            f"(norm={float(current_spread):.4f}%) | "
+            f"🔔 {trade.symbol}: Immediate Spread = {float(immediate_spread):.4f}% | "
             f"{trade.long_exchange} in {long_str} | {trade.short_exchange} in {short_str}",
             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "spread_update"},
         )
@@ -1040,6 +1089,7 @@ class ExecutionController:
             # Favorable basis = long_price >= short_price (sell expensive, buy back cheap).
             _l_price = Decimal("0")
             _s_price = Decimal("0")
+            exit_basis = Decimal("0")
             _adverse_exit_basis = Decimal("0")
             _basis_favorable = None  # None = unknown (prices unavailable)
             try:
@@ -1048,14 +1098,18 @@ class ExecutionController:
                 _l_price = Decimal(str(_l_ticker.get("last") or _l_ticker.get("close") or 0))
                 _s_price = Decimal(str(_s_ticker.get("last") or _s_ticker.get("close") or 0))
                 if _l_price > 0 and _s_price > 0:
-                    raw_exit_basis = (_s_price - _l_price) / _l_price * Decimal("100")
-                    _adverse_exit_basis = max(raw_exit_basis, Decimal("0"))
-                    _basis_favorable = _l_price >= _s_price
+                    # Exit basis: same formula as entry — (long − short) / short × 100
+                    exit_basis = (_l_price - _s_price) / _s_price * Decimal("100")
+                    # Break-even threshold: the spread we already paid at entry.
+                    # Adverse only if exit spread is WORSE (higher) than entry spread.
+                    _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
+                    _adverse_exit_basis = max(exit_basis - _entry_basis, Decimal("0"))
+                    _basis_favorable = exit_basis <= _entry_basis
                     if _adverse_exit_basis > Decimal("0"):
                         immediate_spread_net -= _adverse_exit_basis
                         logger.debug(
-                            f"[{trade.symbol}] Adverse exit basis: "
-                            f"long({trade.long_exchange})={_l_price} < short({trade.short_exchange})={_s_price} "
+                            f"[{trade.symbol}] Adverse exit basis vs entry: "
+                            f"exit={float(exit_basis):.4f}% > entry={float(_entry_basis):.4f}% "
                             f"→ −{float(_adverse_exit_basis):.4f}% from hold spread"
                         )
             except Exception as _eb:
@@ -1203,18 +1257,22 @@ class ExecutionController:
                     # Exit now: basis is favorable OR 20-min timeout reached
                     if not _basis_favorable and _waited_sec >= _wait_max_sec:
                         _reason = f'spread_low_basis_timeout_{int(_waited_sec / 60)}min'
+                        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
                         logger.info(
-                            f"⏱ Trade {trade.trade_id}: EXIT (forced — {int(_waited_sec / 60)}min wait, basis still adverse "
-                            f"{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}) "
+                            f"⏱ Trade {trade.trade_id}: EXIT (forced — {int(_waited_sec / 60)}min wait, basis still adverse: "
+                            f"exit={float(exit_basis):.4f}% > entry={float(_entry_basis):.4f}% "
+                            f"[{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}]) "
                             f"| spread {float(immediate_spread):.4f}% (held {hold_min}min)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_timeout_exit"},
                         )
                     else:
                         _reason = f'spread_low_{float(immediate_spread):.4f}pct_basis_ok'
+                        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
                         logger.info(
                             f"🔄 Trade {trade.trade_id}: EXIT — spread {float(immediate_spread):.4f}% "
-                            f"< {float(hold_min_spread):.2f}% threshold, basis favorable "
-                            f"({trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}) "
+                            f"< {float(hold_min_spread):.2f}% threshold, basis at/better than entry "
+                            f"(exit={float(exit_basis):.4f}% ≤ entry={float(_entry_basis):.4f}% "
+                            f"[{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}]) "
                             f"(held {hold_min}min)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "quick_cycle_exit"},
                         )
@@ -1230,11 +1288,12 @@ class ExecutionController:
                     # Basis adverse — start or continue waiting
                     if _wait_start is None:
                         trade._exit_wait_start = now
+                        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
                         logger.info(
-                            f"⏳ Trade {trade.trade_id}: WAITING FOR FAVORABLE BASIS (max 20min) — "
+                            f"⏳ Trade {trade.trade_id}: WAITING FOR ENTRY-LEVEL BASIS (max 20min) — "
                             f"spread {float(immediate_spread):.4f}% below threshold but "
-                            f"adverse basis {float(_adverse_exit_basis):.4f}% "
-                            f"({trade.long_exchange}={_l_price} < {trade.short_exchange}={_s_price})",
+                            f"exit basis {float(exit_basis):.4f}% > entry basis {float(_entry_basis):.4f}% "
+                            f"(adverse extra: {float(_adverse_exit_basis):.4f}%)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_start"},
                         )
                     else:
@@ -1252,11 +1311,16 @@ class ExecutionController:
             return
 
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net = spread_info["funding_spread_pct"] - fees_pct
+        # Use immediate (next-payment) spread — no 8h normalization
+        net = immediate_spread - fees_pct
+        hold_min_spread = getattr(
+            self._cfg.trading_params, 'hold_min_spread', Decimal("0.5")
+        )
 
-        if net <= 0 or net < trade.entry_edge_pct * Decimal("0.1"):
+        if net <= 0 or net < hold_min_spread:
             logger.info(
-                f"Exit signal for {trade.trade_id}: net={net:.4f}% — closing",
+                f"Exit signal for {trade.trade_id}: net={net:.4f}% "
+                f"< hold_min_spread {float(hold_min_spread):.2f}% — closing",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
             )
             await self._close_trade(trade)
@@ -1509,6 +1573,19 @@ class ExecutionController:
             else:
                 funding_rates_str += f"  At exit:   (rates unavailable)"
 
+            # Entry vs exit price basis: (long_price − short_price) / short_price × 100
+            _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
+            _exit_basis = Decimal("0")
+            _basis_pnl_str = "(prices unavailable)"
+            if trade.exit_price_long and trade.exit_price_short and trade.exit_price_short > 0:
+                _exit_basis = (trade.exit_price_long - trade.exit_price_short) / trade.exit_price_short * Decimal("100")
+                _basis_delta = _exit_basis - _entry_basis
+                _basis_pnl_str = (
+                    f"entry={float(_entry_basis):+.4f}% → exit={float(_exit_basis):+.4f}% "
+                    f"(Δ{float(_basis_delta):+.4f}% — "
+                    f"{'favorable ✔' if _basis_delta <= 0 else 'adverse ✘'})"
+                )
+
             logger.info(
                 f"\n{'='*60}\n"
                 f"  📊 TRADE CLOSED — {trade.trade_id}\n"
@@ -1525,6 +1602,8 @@ class ExecutionController:
                 f"    PnL: ${float(short_pnl):.4f}  (notional {float(entry_notional_short):.2f} → {float(exit_notional_short):.2f})\n"
                 f"  ────────── FUNDING RATES ──────────\n"
                 f"{funding_rates_str}\n"
+                f"  ────────── PRICE BASIS ──────────\n"
+                f"  Basis:      {_basis_pnl_str}\n"
                 f"  ────────── TOTALS ──────────\n"
                 f"  Price PnL:  ${float(price_pnl):.4f}  (long=${float(long_pnl):.4f} + short=${float(short_pnl):.4f})\n"
                 f"  Funding:    +${float(funding_income):.4f} income  -${float(funding_cost):.4f} cost  = ${float(funding_net):.4f} net\n"
@@ -1746,20 +1825,42 @@ class ExecutionController:
             now = datetime.now(timezone.utc)
             trade.closed_at = trade.closed_at or now
 
-            # Try to get exit prices from current mark prices (best-effort, no await)
+            # Try to get live exit prices (same approach as _close_trade auto-exit)
             long_adapter = self._exchanges.get(trade.long_exchange)
             short_adapter = self._exchanges.get(trade.short_exchange)
-            if trade.exit_price_long is None and long_adapter:
-                mp = long_adapter.get_mark_price(trade.symbol)
-                if mp:
-                    trade.exit_price_long = Decimal(str(mp))
-            if trade.exit_price_short is None and short_adapter:
-                mp = short_adapter.get_mark_price(trade.symbol)
-                if mp:
-                    trade.exit_price_short = Decimal(str(mp))
 
-            # Fallback: use entry prices (PnL reported as 0 price movement)
-            exit_long = trade.exit_price_long or trade.entry_price_long or Decimal("0")
+            if trade.exit_price_long is None and long_adapter:
+                try:
+                    ticker = await long_adapter.get_ticker(trade.symbol)
+                    p = ticker.get("last") or ticker.get("close")
+                    if p:
+                        trade.exit_price_long = Decimal(str(p))
+                        logger.info(f"[{trade.symbol}] Manual-close long exit price from ticker: {trade.exit_price_long}")
+                except Exception:
+                    pass
+                if trade.exit_price_long is None:
+                    mp = long_adapter.get_mark_price(trade.symbol)
+                    if mp:
+                        trade.exit_price_long = Decimal(str(mp))
+                        logger.info(f"[{trade.symbol}] Manual-close long exit price from mark cache: {trade.exit_price_long}")
+
+            if trade.exit_price_short is None and short_adapter:
+                try:
+                    ticker = await short_adapter.get_ticker(trade.symbol)
+                    p = ticker.get("last") or ticker.get("close")
+                    if p:
+                        trade.exit_price_short = Decimal(str(p))
+                        logger.info(f"[{trade.symbol}] Manual-close short exit price from ticker: {trade.exit_price_short}")
+                except Exception:
+                    pass
+                if trade.exit_price_short is None:
+                    mp = short_adapter.get_mark_price(trade.symbol)
+                    if mp:
+                        trade.exit_price_short = Decimal(str(mp))
+                        logger.info(f"[{trade.symbol}] Manual-close short exit price from mark cache: {trade.exit_price_short}")
+
+            # Last resort: use entry price (zero price movement — PnL from funding only)
+            exit_long  = trade.exit_price_long  or trade.entry_price_long  or Decimal("0")
             exit_short = trade.exit_price_short or trade.entry_price_short or Decimal("0")
 
             entry_notional_long = (trade.entry_price_long or Decimal("0")) * trade.long_qty
@@ -1934,6 +2035,7 @@ class ExecutionController:
             "long_qty": str(trade.long_qty),
             "short_qty": str(trade.short_qty),
             "entry_edge_pct": str(trade.entry_edge_pct),
+            "entry_basis_pct": str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None,
             "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
             "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
             "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
@@ -1962,6 +2064,7 @@ class ExecutionController:
                 long_qty=Decimal(data["long_qty"]),
                 short_qty=Decimal(data["short_qty"]),
                 entry_edge_pct=Decimal(data.get("entry_edge_pct", data.get("entry_edge_bps", "0"))),
+                entry_basis_pct=Decimal(data["entry_basis_pct"]) if data.get("entry_basis_pct") else None,
                 long_funding_rate=Decimal(data["long_funding_rate"]) if data.get("long_funding_rate") else None,
                 short_funding_rate=Decimal(data["short_funding_rate"]) if data.get("short_funding_rate") else None,
                 entry_price_long=Decimal(data["entry_price_long"]) if data.get("entry_price_long") else None,

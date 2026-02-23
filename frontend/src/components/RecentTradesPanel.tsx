@@ -18,6 +18,13 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n);
   };
 
+  const formatPrice = (value?: string | null) => {
+    if (!value) return '--';
+    const n = Number(value);
+    if (Number.isNaN(n)) return '--';
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(n);
+  };
+
   const formatFunding = (value?: string | null) => {
     if (!value) return '--';
     const n = Number(value);
@@ -36,7 +43,11 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
   const formatDate = (value?: string | null) => {
     if (!value) return '--';
     try {
-      return new Date(value).toLocaleString();
+      return new Intl.DateTimeFormat('default', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).format(new Date(value));
     } catch {
       return '--';
     }
@@ -109,10 +120,10 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades }) => {
                     {tr.long_exchange?.toUpperCase()} / {tr.short_exchange?.toUpperCase()}
                   </td>
                   <td className="text-end mono">
-                    {formatCurrency(tr.entry_price_long)} / {formatCurrency(tr.entry_price_short)}
+                    {formatPrice(tr.entry_price_long)} / {formatPrice(tr.entry_price_short)}
                   </td>
                   <td className="text-end mono">
-                    {formatCurrency(tr.exit_price_long)} / {formatCurrency(tr.exit_price_short)}
+                    {formatPrice(tr.exit_price_long)} / {formatPrice(tr.exit_price_short)}
                   </td>
                   <td className="text-end mono">
                     {formatRate(tr.long_funding_rate)} / {formatRate(tr.short_funding_rate)}

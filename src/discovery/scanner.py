@@ -257,7 +257,7 @@ class Scanner:
 
         elapsed = time.monotonic() - t0
         if results:
-            results.sort(key=lambda o: o.funding_spread_pct, reverse=True)
+            results.sort(key=lambda o: o.immediate_net_pct, reverse=True)
             logger.info(
                 f"✅ Scan completed: {len(results)} opportunities from {len(common_symbols)} symbols in {elapsed:.1f}s",
                 extra={"action": "scan_complete", "data": {"count": len(results), "elapsed": round(elapsed, 1)}},
@@ -354,8 +354,8 @@ class Scanner:
                 best = opp
             elif opp.qualified and not best.qualified:
                 best = opp  # prefer qualified
-            elif opp.qualified == best.qualified and opp.funding_spread_pct > best.funding_spread_pct:
-                best = opp  # same qualification level, pick better spread
+            elif opp.qualified == best.qualified and opp.net_edge_pct > best.net_edge_pct:
+                best = opp  # same qualification level, pick better next-payment net
 
         return best
 
@@ -417,19 +417,24 @@ class Scanner:
         if not long_spec or not short_spec:
             return None
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct + tp.basis_buffer_pct
+        # slippage + safety buffers (fixed costs paid at entry/exit regardless)
+        # basis_buffer_pct is NOT added here — we measure the live price basis below
+        # and use the static basis_buffer_pct only as a fallback when prices unavailable.
+        buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
 
         # ── Live price basis check (from cache — no extra API calls) ──
         # If long exchange price > short exchange price, adverse basis → extra cost.
         # Uses get_mark_price(): markPrice from funding cache → indexPrice → ticker price cache.
         price_basis_pct = Decimal("0")
+        _live_basis_available = False
         try:
             long_price_raw = adapters[long_eid].get_mark_price(symbol)
             short_price_raw = adapters[short_eid].get_mark_price(symbol)
             long_price = Decimal(str(long_price_raw)) if long_price_raw else Decimal("0")
             short_price = Decimal(str(short_price_raw)) if short_price_raw else Decimal("0")
             if long_price > 0 and short_price > 0:
+                _live_basis_available = True
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
                 price_basis_pct = max(raw_basis, Decimal("0"))
                 if price_basis_pct > Decimal("0"):
@@ -440,6 +445,10 @@ class Scanner:
                     )
         except Exception as _basis_err:
             logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
+
+        # Fallback: when live prices unavailable, add the static basis_buffer_pct reserve
+        if not _live_basis_available:
+            total_cost_pct += tp.basis_buffer_pct
 
         # Debug: show NEV breakdown
         logger.debug(

@@ -35,7 +35,14 @@ const TradesHistory: React.FC = () => {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString();
+    if (!dateString) return '--';
+    try {
+      return new Intl.DateTimeFormat('default', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).format(new Date(dateString));
+    } catch { return '--'; }
   };
 
   if (loading) {

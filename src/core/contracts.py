@@ -134,3 +134,7 @@ class TradeRecord:
     # Funding collection tracking
     funding_collections: int = 0           # how many payments collected so far
     funding_collected_usd: Decimal = Decimal("0")  # cumulative USD received
+    # Price basis at entry: (entry_long_price − entry_short_price) / entry_short_price × 100
+    # Positive = long was more expensive at entry. Used as the exit break-even threshold:
+    # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≤ entry_basis_pct
+    entry_basis_pct: Optional[Decimal] = None

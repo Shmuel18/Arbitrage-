@@ -40,7 +40,13 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
 
   const formatDate = (value?: string | null) => {
     if (!value) return '--';
-    try { return new Date(value).toLocaleString(); } catch { return '--'; }
+    try {
+      return new Intl.DateTimeFormat('default', {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).format(new Date(value));
+    } catch { return '--'; }
   };
 
   const formatDuration = (mins?: number | null) => {
@@ -178,21 +184,21 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             <div>
               <div style={rowStyle}>
                 <span style={labelStyle}>{t.entryPriceLong}</span>
-                <span style={valueStyle}>{usd(trade.entry_price_long)}</span>
+                <span style={valueStyle}>{usd(trade.entry_price_long, 4)}</span>
               </div>
               <div style={rowStyle}>
                 <span style={labelStyle}>{t.exitPriceLong}</span>
-                <span style={valueStyle}>{usd(trade.exit_price_long)}</span>
+                <span style={valueStyle}>{usd(trade.exit_price_long, 4)}</span>
               </div>
             </div>
             <div>
               <div style={rowStyle}>
                 <span style={labelStyle}>{t.entryPriceShort}</span>
-                <span style={valueStyle}>{usd(trade.entry_price_short)}</span>
+                <span style={valueStyle}>{usd(trade.entry_price_short, 4)}</span>
               </div>
               <div style={rowStyle}>
                 <span style={labelStyle}>{t.exitPriceShort}</span>
-                <span style={valueStyle}>{usd(trade.exit_price_short)}</span>
+                <span style={valueStyle}>{usd(trade.exit_price_short, 4)}</span>
               </div>
             </div>
           </div>

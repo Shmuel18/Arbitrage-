@@ -29,7 +29,7 @@ interface RightPanelProps {
   opportunities: { opportunities: Opportunity[]; count: number } | null;
 }
 
-const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
+const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => {
   const { t } = useSettings();
   const opps = opportunities?.opportunities ?? [];
   const count = opportunities?.count ?? 0;
@@ -109,7 +109,7 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
     );
   };
 
-  const renderRow = (opp: Opportunity, i: number, dimmed: boolean) => {
+  const renderRow = (opp: Opportunity, _i: number, dimmed: boolean) => {
     const immediateSpread = opp.immediate_spread_pct ?? 0;
     const longRate  = opp.long_rate  ?? 0;
     const shortRate = opp.short_rate ?? 0;
@@ -131,8 +131,9 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
       </span>
     );
 
+    const stableKey = `${opp.symbol}_${opp.long_exchange}_${opp.short_exchange}`;
     return (
-      <tr key={i} style={rowStyle} className={rowClass}>
+      <tr key={stableKey} style={rowStyle} className={rowClass}>
         <td>
           {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
           {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
@@ -253,6 +254,6 @@ const RightPanel: React.FC<RightPanelProps> = ({ opportunities }) => {
       </div>
     </div>
   );
-};
+});
 
 export default RightPanel;

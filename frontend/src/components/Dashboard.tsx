@@ -117,4 +117,4 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
   );
 };
 
-export default Dashboard;
+export default React.memo(Dashboard);
