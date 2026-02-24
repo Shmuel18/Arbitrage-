@@ -169,15 +169,17 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => 
         <td className="text-end mono font-semibold" style={getSpreadStyle(immediateSpread)}>
           {formatSpread(immediateSpread)}
         </td>
-        <td className="text-end mono" style={getSpreadStyle(opp.immediate_net_pct ?? 0)}>
-          {opp.immediate_net_pct != null ? formatSpread(opp.immediate_net_pct) : '--'}
+        <td className="text-end mono" style={getSpreadStyle(opp.net_edge_pct ?? 0)}>
+          {opp.net_edge_pct != null ? formatSpread(opp.net_edge_pct) : '--'}
         </td>
         <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
           {opp.mode === 'cherry_pick'
-            ? <span style={{ color: '#f97316' }}>🍒CHERRY</span>
-            : opp.mode === 'hold_mixed'
-            ? <span style={{ color: '#eab308' }}>MIXED</span>
-            : <span style={{ color: '#22c55e' }}>HOLD</span>}
+            ? <span style={{ color: '#f97316' }}>🍒 CHERRY</span>
+            : opp.mode === 'nutcracker'
+            ? <span style={{ color: '#eab308' }}>🔨 NUTCRACKER</span>
+            : opp.mode === 'pot'
+            ? <span style={{ color: '#22c55e' }}>🍯 POT</span>
+            : <span style={{ color: '#94a3b8' }}>HOLD</span>}
         </td>
         <td style={{ padding: '4px 12px' }}>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
@@ -233,7 +235,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => 
                 <th className="text-end">{t.fundingL}</th>
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
-                <th className="text-end">{t.netImmed}</th>
+                <th className="text-end">{t.netPct}</th>
                 <th className="text-end">MODE</th>
                 <th className="text-end">NEXT FUNDING</th>
               </tr>
