@@ -725,12 +725,9 @@ class ExecutionController:
         upgrade_funding_lock_secs = getattr(
             self._cfg.trading_params, 'upgrade_funding_lock_secs', 180
         )
-        # For nutcracker trades, use the full entry window as the lock period.
-        # We entered specifically to collect the imminent payment — any upgrade
-        # that exits before that payment fires is always a loss.
-        if trade.mode == "nutcracker":
-            entry_offset = self._cfg.trading_params.entry_offset_seconds
-            upgrade_funding_lock_secs = max(upgrade_funding_lock_secs, entry_offset)
+        # 3-minute hard lock before funding for ALL modes.
+        # Within 3min, exiting costs more than any realistic gain from switching.
+        # Outside 3min, the net_pct comparison + basis guard handle the decision.
         if upgrade_funding_lock_secs > 0:
             now_ms = _time.time() * 1000
             # Prefer live cache timestamps; fall back to TradeRecord fields
