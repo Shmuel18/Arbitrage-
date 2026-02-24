@@ -1117,12 +1117,6 @@ code, .mono {
   background: rgba(168, 85, 247, 0.08);
 }
 
-.pos-mode-badge--tzari {
-  color: #06b6d4;
-  border-color: rgba(6, 182, 212, 0.35);
-  background: rgba(6, 182, 212, 0.08);
-}
-
 .pos-mode-badge--mixed {
   color: #eab308;
   border-color: rgba(234, 179, 8, 0.35);

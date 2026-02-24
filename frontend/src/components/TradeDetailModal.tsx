@@ -69,8 +69,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     
     if (m === 'cherry_pick') { color = '#f97316'; emoji = '🍒 '; label = t.cherry_pick; }
     if (m === 'pot') { color = '#f59e0b'; emoji = '🍯 '; label = t.pot; }
-    if (m === 'nutcracker') { color = '#a855f7'; emoji = '🔨 '; label = t.nutcracker; }
-    if (m === 'tzari') { color = '#06b6d4'; emoji = '🔨🥜 '; label = t.tzari; }
+    if (m === 'nutcracker') { color = '#a855f7'; emoji = '🔨🥜 '; label = t.nutcracker; }
     if (m === 'hold' || m === 'hold_mixed') { color = '#22c55e'; emoji = '🤝 '; label = t.hold; }
 
     return (

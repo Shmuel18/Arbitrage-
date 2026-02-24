@@ -134,7 +134,6 @@ export interface Translations {
   cherry_pick: string;
   pot: string;
   nutcracker: string;
-  tzari: string;
   hold: string;
 }
 
@@ -260,7 +259,6 @@ const en: Translations = {
   cherry_pick: 'CHERRY PICK',
   pot: 'POT',
   nutcracker: 'NUTCRACKER',
-  tzari: 'TZARI',
   hold: 'HOLD',
 };
 
@@ -386,7 +384,6 @@ const he: Translations = {
   cherry_pick: 'צ׳רי פיק',
   pot: 'סיר דבש',
   nutcracker: 'מפצח אגוזים',
-  tzari: 'צרי',
   hold: 'החזקה',
 };
 

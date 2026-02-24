@@ -548,20 +548,21 @@ class Scanner:
                 label = "POT"
             elif pnl["long_is_income"] or pnl["short_is_income"]:
                 # Is the COST side also imminent (fires within the entry window)?
-                # Yes → NUTCRACKER: receive from one side AND pay the other in the same cycle.
-                # No  → TZARI:      only receive this cycle, cost fires much later (pure gain now).
+                # Yes → NUTCRACKER 🔨🥜: receive one side AND pay the other in same cycle.
+                # No  → CHERRY 🍒:    only receive this cycle, cost fires much later (silent).
+                #           No exit_before — NET over time is positive, just hold.
                 if pnl["long_is_income"]:
                     cost_imminent_now = short_mins is not None and short_mins <= max_window
                 else:
                     cost_imminent_now = long_mins is not None and long_mins <= max_window
                 if cost_imminent_now:
                     mode = "nutcracker"
-                    emoji = "🔨"
+                    emoji = "🔨🥜"
                     label = "NUTCRACKER"
                 else:
-                    mode = "tzari"
-                    emoji = "🔨🥜"
-                    label = "TZARI"
+                    mode = "cherry_pick"
+                    emoji = "🍒"
+                    label = "CHERRY"
             else:
                 mode = "hold"
                 emoji = "🤝"

@@ -176,9 +176,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => 
           {opp.mode === 'cherry_pick'
             ? <span style={{ color: '#f97316' }}>🍒 CHERRY</span>
             : opp.mode === 'nutcracker'
-            ? <span style={{ color: '#eab308' }}>🔨 NUTCRACKER</span>
-            : opp.mode === 'tzari'
-            ? <span style={{ color: '#06b6d4' }}>🔨🥜 TZARI</span>
+            ? <span style={{ color: '#eab308' }}>🔨🥜 NUTCRACKER</span>
             : opp.mode === 'pot'
             ? <span style={{ color: '#22c55e' }}>🍯 POT</span>
             : <span style={{ color: '#94a3b8' }}>HOLD</span>}
