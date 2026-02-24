@@ -892,14 +892,17 @@ class ExchangeAdapter:
 
         Priority:
           1) Raw API info dict — most reliable (exchange's own field, not computed)
-             • Gate.io:  info.funding_interval  (seconds, snake_case)
-             • Bybit:    info.fundingInterval   (minutes, camelCase)
-             • Binance:  info.fundingIntervalHours
+             • Gate.io:  info.funding_interval     (seconds, snake_case) e.g. 28800 → 8h
+             • Bybit:    info.fundingInterval      (minutes, camelCase)  e.g.  480 → 8h
+             • Binance:  info.fundingIntervalHours                       e.g.    8 → 8h
+             • KuCoin:   info.granularity          (milliseconds)        e.g. 28800000 → 8h
+             • Bitget:   info.fundingRateInterval  (hours, string)       e.g.   "8" → 8h
+                      or info.ratePeriod           (hours, string)       e.g.   "8" → 8h
           2) CCXT normalized 'interval' string (e.g. '1h', '8h') — used only when
-             raw info is absent.  CAUTION: CCXT may compute this as
-             (next_funding_ts - now) / 3600, giving a spuriously small value near
-             funding payment times (e.g. '1h' when exchange is actually 8h).
-          3) Market info (static, loaded at startup)
+             raw info is absent.  CAUTION: for some exchanges (e.g. Gate.io) CCXT
+             may compute this as (next_funding_ts - now) / 3600, giving a spuriously
+             small value near funding payment times (e.g. '1h' when exchange is 8h).
+          3) Market info (static, loaded at startup) — same field cascade as step 1
           4) Pre-fetched Binance fundingInfo table
           5) Default 8h
 
@@ -937,6 +940,24 @@ class ExchangeAdapter:
                         detected = int(fi_h)
                     except (ValueError, TypeError):
                         pass
+            # KuCoin Futures: granularity in milliseconds (e.g. 28800000 = 8h)
+            if detected is None:
+                fi_ms = info.get("granularity")
+                if fi_ms is not None:
+                    try:
+                        ms = int(fi_ms)
+                        if ms > 0:
+                            detected = max(1, ms // 3_600_000)
+                    except (ValueError, TypeError):
+                        pass
+            # Bitget: fundingRateInterval or ratePeriod in hours (string "8")
+            if detected is None:
+                fi_bitget = info.get("fundingRateInterval") or info.get("ratePeriod")
+                if fi_bitget is not None:
+                    try:
+                        detected = int(fi_bitget)
+                    except (ValueError, TypeError):
+                        pass
 
         # 2) CCXT normalized 'interval' string — fallback only
         #    (may be computed from timestamps, unreliable near payment time)
@@ -967,6 +988,24 @@ class ExchangeAdapter:
                     if fi_min:
                         try:
                             detected = max(1, int(fi_min) // 60)
+                        except (ValueError, TypeError):
+                            pass
+                # KuCoin market info: fundingFeeRate granularity in ms
+                if detected is None:
+                    fi_ms = mkt_info.get("granularity")
+                    if fi_ms is not None:
+                        try:
+                            ms = int(fi_ms)
+                            if ms > 0:
+                                detected = max(1, ms // 3_600_000)
+                        except (ValueError, TypeError):
+                            pass
+                # Bitget market info: fundingInterval or ratePeriod in hours
+                if detected is None:
+                    fi_bitget = mkt_info.get("fundingRateInterval") or mkt_info.get("ratePeriod") or mkt_info.get("fundInterval")
+                    if fi_bitget is not None:
+                        try:
+                            detected = int(fi_bitget)
                         except (ValueError, TypeError):
                             pass
 
