@@ -683,6 +683,14 @@ class Scanner:
             projected_net_pct = projected_income_pct - total_cost_pct
             # hourly rate based on projected net (no 8h normalization)
             hourly_rate = projected_net_pct / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
+            # Correct display mode based on which sides are income
+            # (mode may still be default "hold" if hold_qualified was False before mode-assignment)
+            if pnl["both_income"]:
+                mode = "pot"
+            elif pnl["long_is_income"] and not pnl["short_is_income"]:
+                mode = "cherry_pick"
+            elif pnl["short_is_income"] and not pnl["long_is_income"]:
+                mode = "cherry_pick"
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
