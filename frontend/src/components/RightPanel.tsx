@@ -27,9 +27,13 @@ interface Opportunity {
 
 interface RightPanelProps {
   opportunities: { opportunities: Opportunity[]; count: number } | null;
+  status?: { min_funding_spread?: number; [key: string]: any } | null;
 }
 
-const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => {
+const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, status }) => {
+  const thresholdPct = status?.min_funding_spread != null
+    ? `${status.min_funding_spread}%`
+    : '?%';
   const { t } = useSettings();
   const opps = opportunities?.opportunities ?? [];
   const count = opportunities?.count ?? 0;
@@ -245,7 +249,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => 
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                 <tr>
                   <td colSpan={8} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
-                    ── {t.belowThreshold} ──
+                    ── {t.belowThresholdLabel} ({thresholdPct}) ──
                   </td>
                 </tr>
               )}

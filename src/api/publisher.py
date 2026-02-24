@@ -18,13 +18,14 @@ class APIPublisher:
         self._total_trades = 0
         self._winning_trades = 0
     
-    async def publish_status(self, running: bool, exchanges: List[str], positions_count: int):
+    async def publish_status(self, running: bool, exchanges: List[str], positions_count: int, min_funding_spread: float = 0.5):
         """Publish bot status"""
         status = {
             "bot_running": running,
             "connected_exchanges": exchanges,
             "active_positions": positions_count,
-            "uptime": round((datetime.utcnow() - self.start_time).total_seconds() / 3600, 2)
+            "uptime": round((datetime.utcnow() - self.start_time).total_seconds() / 3600, 2),
+            "min_funding_spread": min_funding_spread,
         }
         await self.redis.set("trinity:status", json.dumps(status), ex=15)
     

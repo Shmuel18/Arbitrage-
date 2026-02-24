@@ -100,7 +100,7 @@ const Dashboard: React.FC<DashboardProps> = ({ data, pnlHours, onPnlHoursChange 
             </div>
 
             <div id={SECTION_IDS.opportunities}>
-              <RightPanel opportunities={data.opportunities} />
+              <RightPanel opportunities={data.opportunities} status={data.status} />
             </div>
 
             <AnalyticsPanel

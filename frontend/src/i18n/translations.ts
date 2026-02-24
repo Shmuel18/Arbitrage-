@@ -72,6 +72,7 @@ export interface Translations {
   nextPayment: string;
   countdown: string;
   belowThreshold: string;
+  belowThresholdLabel: string;
 
   // Analytics
   pnlChart: string;
@@ -203,6 +204,7 @@ const en: Translations = {
   nextPayment: 'NEXT CYC',
   countdown: 'PAYOUT',
   belowThreshold: 'Below threshold (0.5%)',
+  belowThresholdLabel: 'Below threshold',
 
   pnlChart: 'PnL Chart',
   pnlChartInterval: 'Interval',
@@ -328,6 +330,7 @@ const he: Translations = {
   nextPayment: 'פעימה הבאה',
   countdown: 'פעימה',
   belowThreshold: 'מתחת לסף (0.5%)',
+  belowThresholdLabel: 'מתחת לסף',
 
   pnlChart: 'גרף רווח והפסד',
   pnlChartInterval: 'טווח',

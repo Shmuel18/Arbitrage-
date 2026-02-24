@@ -185,6 +185,7 @@ async def main() -> None:
                     running=True,
                     exchanges=cfg.enabled_exchanges,
                     positions_count=active_count,
+                    min_funding_spread=float(cfg.trading_params.min_funding_spread),
                 )
                 
                 # Fetch and publish real balances
