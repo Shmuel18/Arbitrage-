@@ -8,4 +8,4 @@ Get-ChildItem -Path $logsDir -File | ForEach-Object {
     Write-Host "Cleared: $($_.Name)"
 }
 
-Write-Host "`nDone — all log files cleared."
+Write-Host "`nDone - all log files cleared."
