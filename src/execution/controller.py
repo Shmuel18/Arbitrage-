@@ -851,6 +851,25 @@ class ExecutionController:
             if not (0 < seconds_until <= entry_offset):
                 continue
 
+            # ── Basis Guard: only upgrade if exit basis is favorable/neutral ──
+            try:
+                _lt = await long_adapter.get_ticker(trade.symbol)
+                _st = await short_adapter.get_ticker(trade.symbol)
+                _lp = Decimal(str(_lt.get("last") or _lt.get("close") or 0))
+                _sp = Decimal(str(_st.get("last") or _st.get("close") or 0))
+                if _lp > 0 and _sp > 0:
+                    current_basis = (_lp - _sp) / _sp * Decimal("100")
+                    entry_basis = trade.entry_basis_pct or Decimal("0")
+                    if current_basis > entry_basis:
+                        logger.info(
+                            f"🔒 Upgrade blocked for {trade.symbol} by basis: "
+                            f"current={float(current_basis):+.4f}% > entry={float(entry_basis):+.4f}%",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "upgrade_blocked_basis"}
+                        )
+                        continue
+            except Exception as _e:
+                logger.debug(f"Upgrade basis check failed for {trade.symbol}: {_e}")
+
             # Found a significantly better opportunity — upgrade!
             hold_min = 0
             if trade.opened_at:
@@ -1022,12 +1041,16 @@ class ExecutionController:
                 f"Trade {trade.trade_id}: {which_paid} funding paid + {exit_offset}s elapsed — evaluating hold/exit",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
             )
-            # ── Per-payment tracking ──────────────────────────────
+            # ── Per-payment tracking (SIGNED logic) ──────────────
             _lr = long_funding.get('rate') if long_paid else None
             _sr = short_funding.get('rate') if short_paid else None
-            _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * abs(Decimal(str(_lr)))) if _lr else None
-            _short_usd = float((trade.entry_price_short or Decimal('0')) * trade.short_qty * abs(Decimal(str(_sr)))) if _sr else None
-            _net_usd = (_long_usd or 0) + (_short_usd or 0)
+            
+            # Long side: income if rate < 0, cost if rate > 0
+            _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else 0
+            # Short side: income if rate > 0, cost if rate < 0
+            _short_usd = float((trade.entry_price_short or Decimal('0')) * trade.short_qty * (Decimal(str(_sr or 0)))) if _sr else 0
+            
+            _net_usd = _long_usd + _short_usd
 
             trade.funding_collections += 1
             trade.funding_collected_usd += Decimal(str(_net_usd))
@@ -1127,17 +1150,58 @@ class ExecutionController:
                 hold_max_wait = getattr(
                     self._cfg.trading_params, 'hold_max_wait_seconds', 3600
                 )
+                
+                # ── Basis Check for Profitability Branch ──
+                # Even if spread is high, if quick_cycle is true, we want to try to exit.
+                # But we ONLY exit if basis is favorable.
+                if _basis_favorable is False:
+                    _wait_max_sec = 1800 # 30 min
+                    _wait_start = getattr(trade, '_exit_wait_start', None)
+                    if _wait_start is None:
+                        trade._exit_wait_start = now
+                        logger.info(
+                            f"⏳ Trade {trade.trade_id}: PROFITABLE BUT ADVERSE BASIS — waiting up to 30min "
+                            f"(spread {float(immediate_spread):.4f}% >= {float(hold_min_spread):.2f}% "
+                            f"but basis {float(exit_basis):.4f}% > entry)",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_profitable"}
+                        )
+                        return
+                    
+                    _waited_sec = (now - _wait_start).total_seconds()
+                    if _waited_sec < _wait_max_sec:
+                        logger.debug(f"⏳ Trade {trade.trade_id}: still waiting for basis ({int(_waited_sec/60)}min)")
+                        return
+                    
+                    # 30 minutes reached and basis still bad. 
+                    # Decision: Since spread is high (immediate_spread_net >= hold_min_spread),
+                    # we do NOT force exit. Instead, we reset and STAY for next cycle.
+                    logger.info(
+                        f"🔄 Trade {trade.trade_id}: BASIS STILL BAD AFTER 30m, BUT FUNDING IS HIGH. "
+                        f"Staying for next cycle to collect more funding instead of forcing exit.",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_high_funding"}
+                    )
+                    trade._exit_wait_start = None
+                    # Continue below to standard HOLD logic (1-hour check)
+                else:
+                    # Basis is favorable (or unknown) — we can exit or hold.
+                    # Since quick_cycle=true, if next funding is far (>1h), we exit.
+                    trade._exit_wait_start = None
+
                 if hold_max_wait > 0:
                     long_next = long_funding.get("next_timestamp")
                     short_next = short_funding.get("next_timestamp")
-                    # Find the NEAREST next funding across both sides
+                    # Find the NEAREST next funding across both sides (only look at the future)
                     next_funding_candidates = []
+                    now_ts = now.timestamp()
                     if long_next:
-                        next_funding_candidates.append(long_next / 1000)
+                        ts = long_next / 1000
+                        if ts > now_ts: next_funding_candidates.append(ts)
                     if short_next:
-                        next_funding_candidates.append(short_next / 1000)
+                        ts = short_next / 1000
+                        if ts > now_ts: next_funding_candidates.append(ts)
+                    
                     if next_funding_candidates:
-                        nearest_sec = min(next_funding_candidates) - now.timestamp()
+                        nearest_sec = min(next_funding_candidates) - now_ts
                         if nearest_sec > hold_max_wait:
                             nearest_min = int(nearest_sec / 60)
                             logger.info(
@@ -1158,6 +1222,12 @@ class ExecutionController:
                             )
                             await self._close_trade(trade)
                             return
+                    else:
+                        # No future funding timestamps found? 
+                        # This usually means the exchange hasn't rolled over yet 
+                        # OR we are at the end of a series. To be safe in quick_cycle, 
+                        # we wait a few cycles but if it persists, we exit.
+                        pass
 
                 # Cherry-pick: if the costly payment (exit_before) is within
                 # hold_max_wait, there is no room for another profitable cycle —
@@ -1254,13 +1324,13 @@ class ExecutionController:
                 return
             else:
                 # Spread dropped below threshold.
-                # Wait for favorable price basis before exiting (max 20 min).
-                _wait_max_sec = 20 * 60
+                # Wait for favorable price basis before exiting (max 30 min).
+                _wait_max_sec = 1800 # 30 min
                 _wait_start = getattr(trade, '_exit_wait_start', None)
                 _waited_sec = (now - _wait_start).total_seconds() if _wait_start else 0
 
                 if _basis_favorable is True or _basis_favorable is None or _waited_sec >= _wait_max_sec:
-                    # Exit now: basis is favorable OR 20-min timeout reached
+                    # Exit now: basis is favorable OR 30-min timeout reached
                     if not _basis_favorable and _waited_sec >= _wait_max_sec:
                         _reason = f'spread_low_basis_timeout_{int(_waited_sec / 60)}min'
                         _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
@@ -1296,7 +1366,7 @@ class ExecutionController:
                         trade._exit_wait_start = now
                         _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
                         logger.info(
-                            f"⏳ Trade {trade.trade_id}: WAITING FOR ENTRY-LEVEL BASIS (max 20min) — "
+                            f"⏳ Trade {trade.trade_id}: WAITING FOR ENTRY-LEVEL BASIS (max 30min) — "
                             f"spread {float(immediate_spread):.4f}% below threshold but "
                             f"exit basis {float(exit_basis):.4f}% > entry basis {float(_entry_basis):.4f}% "
                             f"(adverse extra: {float(_adverse_exit_basis):.4f}%)",
@@ -1305,7 +1375,7 @@ class ExecutionController:
                     else:
                         logger.debug(
                             f"⏳ Trade {trade.trade_id}: still waiting for favorable basis "
-                            f"({int(_waited_sec / 60)}min / 20min) — "
+                            f"({int(_waited_sec / 60)}min / 30min) — "
                             f"adverse {float(_adverse_exit_basis):.4f}%"
                         )
                     return  # check again next cycle
@@ -1534,10 +1604,15 @@ class ExecutionController:
             total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
             trade.fees_paid_total = total_fees
             if trade.funding_paid_total is None and trade.funding_received_total is None:
-                if trade.funding_collected_usd and trade.funding_collected_usd > 0:
-                    # Use actual accumulated collection total — multi-payment aware
-                    trade.funding_received_total = trade.funding_collected_usd
-                    trade.funding_paid_total = Decimal("0")
+                if trade.funding_collected_usd != 0:
+                    # Use actual accumulated collection total — multi-payment aware.
+                    # Correctly split net into received/paid for the breakdown display.
+                    if trade.funding_collected_usd > 0:
+                        trade.funding_received_total = trade.funding_collected_usd
+                        trade.funding_paid_total = Decimal("0")
+                    else:
+                        trade.funding_received_total = Decimal("0")
+                        trade.funding_paid_total = abs(trade.funding_collected_usd)
                 else:
                     # Fallback: estimate from entry rates (single-payment approximation)
                     paid, received = self._estimate_funding_totals(trade)
