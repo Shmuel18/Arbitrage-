@@ -659,8 +659,17 @@ class Scanner:
             # Lightweight display-only candidate (no API calls for balance/ticker)
             min_interval = min(long_interval, short_interval)
             immediate_net = immediate_spread - total_cost_pct
-            # hourly rate based on immediate net (no 8h normalization)
-            hourly_rate = immediate_net / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
+            # Projected net: income sides only (nutcracker assumption — exit before cost fires).
+            # This is what the trade WOULD earn over one funding cycle, regardless of the
+            # 15-min entry window. Keeps Net column meaningful all hour long.
+            projected_income_pct = Decimal("0")
+            if long_is_income:
+                projected_income_pct += abs(long_rate) * Decimal("100")
+            if short_is_income:
+                projected_income_pct += abs(short_rate) * Decimal("100")
+            projected_net_pct = projected_income_pct - total_cost_pct
+            # hourly rate based on projected net (no 8h normalization)
+            hourly_rate = projected_net_pct / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
@@ -672,7 +681,7 @@ class Scanner:
                 immediate_net_pct=immediate_net,
                 gross_edge_pct=gross_pct,
                 fees_pct=fees_pct,
-                net_edge_pct=net_pct,
+                net_edge_pct=projected_net_pct,
                 suggested_qty=Decimal("0"),
                 reference_price=Decimal("0"),
                 min_interval_hours=min_interval,
