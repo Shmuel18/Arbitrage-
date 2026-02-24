@@ -841,10 +841,12 @@ class ExecutionController:
                 if _lp > 0 and _sp > 0:
                     current_basis = (_lp - _sp) / _sp * Decimal("100")
                     entry_basis = trade.entry_basis_pct or Decimal("0")
-                    if current_basis > entry_basis:
+                    # Block upgrade if exit basis is BELOW entry — short rose more than long,
+                    # meaning we'd exit at a price loss. Wait for basis to recover.
+                    if current_basis < entry_basis:
                         logger.info(
                             f"🔒 Upgrade blocked for {trade.symbol} by basis: "
-                            f"current={float(current_basis):+.4f}% > entry={float(entry_basis):+.4f}%",
+                            f"current={float(current_basis):+.4f}% < entry={float(entry_basis):+.4f}% (adverse)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "upgrade_blocked_basis"}
                         )
                         continue
@@ -1110,16 +1112,18 @@ class ExecutionController:
                 if _l_price > 0 and _s_price > 0:
                     # Exit basis: same formula as entry — (long − short) / short × 100
                     exit_basis = (_l_price - _s_price) / _s_price * Decimal("100")
-                    # Break-even threshold: the spread we already paid at entry.
-                    # Adverse only if exit spread is WORSE (higher) than entry spread.
+                    # Break-even: exit_basis must be >= entry_basis.
+                    # P&L ≈ qty × (exit_basis − entry_basis):
+                    #   exit_basis > entry_basis → long rose more than short → profit
+                    #   exit_basis < entry_basis → short rose more than long → loss
                     _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
-                    _adverse_exit_basis = max(exit_basis - _entry_basis, Decimal("0"))
-                    _basis_favorable = exit_basis <= _entry_basis
+                    _adverse_exit_basis = max(_entry_basis - exit_basis, Decimal("0"))  # loss when exit < entry
+                    _basis_favorable = exit_basis >= _entry_basis
                     if _adverse_exit_basis > Decimal("0"):
                         immediate_spread_net -= _adverse_exit_basis
                         logger.debug(
                             f"[{trade.symbol}] Adverse exit basis vs entry: "
-                            f"exit={float(exit_basis):.4f}% > entry={float(_entry_basis):.4f}% "
+                            f"exit={float(exit_basis):.4f}% < entry={float(_entry_basis):.4f}% "
                             f"→ −{float(_adverse_exit_basis):.4f}% from hold spread"
                         )
             except Exception as _eb:
@@ -1143,7 +1147,7 @@ class ExecutionController:
                         logger.info(
                             f"⏳ Trade {trade.trade_id}: PROFITABLE BUT ADVERSE BASIS — waiting up to 30min "
                             f"(spread {float(immediate_spread):.4f}% >= {float(hold_min_spread):.2f}% "
-                            f"but basis {float(exit_basis):.4f}% > entry)",
+                            f"but basis {float(exit_basis):.4f}% < entry — short moved against us)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_profitable"}
                         )
                         return
@@ -1317,7 +1321,7 @@ class ExecutionController:
                         _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else Decimal("0")
                         logger.info(
                             f"⏱ Trade {trade.trade_id}: EXIT (forced — {int(_waited_sec / 60)}min wait, basis still adverse: "
-                            f"exit={float(exit_basis):.4f}% > entry={float(_entry_basis):.4f}% "
+                            f"exit={float(exit_basis):.4f}% < entry={float(_entry_basis):.4f}% "
                             f"[{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}]) "
                             f"| spread {float(immediate_spread):.4f}% (held {hold_min}min)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_timeout_exit"},
@@ -1328,7 +1332,7 @@ class ExecutionController:
                         logger.info(
                             f"🔄 Trade {trade.trade_id}: EXIT — spread {float(immediate_spread):.4f}% "
                             f"< {float(hold_min_spread):.2f}% threshold, basis at/better than entry "
-                            f"(exit={float(exit_basis):.4f}% ≤ entry={float(_entry_basis):.4f}% "
+                            f"(exit={float(exit_basis):.4f}% ≥ entry={float(_entry_basis):.4f}% "
                             f"[{trade.long_exchange}={_l_price}/{trade.short_exchange}={_s_price}]) "
                             f"(held {hold_min}min)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "quick_cycle_exit"},
@@ -1349,8 +1353,8 @@ class ExecutionController:
                         logger.info(
                             f"⏳ Trade {trade.trade_id}: WAITING FOR ENTRY-LEVEL BASIS (max 30min) — "
                             f"spread {float(immediate_spread):.4f}% below threshold but "
-                            f"exit basis {float(exit_basis):.4f}% > entry basis {float(_entry_basis):.4f}% "
-                            f"(adverse extra: {float(_adverse_exit_basis):.4f}%)",
+                            f"exit basis {float(exit_basis):.4f}% < entry basis {float(_entry_basis):.4f}% "
+                            f"(short moved against us: {float(_adverse_exit_basis):.4f}%)",
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_wait_start"},
                         )
                     else:
