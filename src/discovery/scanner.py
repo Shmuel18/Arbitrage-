@@ -683,14 +683,29 @@ class Scanner:
             projected_net_pct = projected_income_pct - total_cost_pct
             # hourly rate based on projected net (no 8h normalization)
             hourly_rate = projected_net_pct / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
-            # Correct display mode based on which sides are income
+            # Correct display mode based on which sides are income AND timing.
             # (mode may still be default "hold" if hold_qualified was False before mode-assignment)
+            # NUTCRACKER: one income, one cost, but cost fires within the income interval
+            # (receive AND pay in the same cycle → net earn, but not a pure cherry-pick).
+            # CHERRY: one income, cost fires AFTER the income interval completes.
             if pnl["both_income"]:
                 mode = "pot"
             elif pnl["long_is_income"] and not pnl["short_is_income"]:
-                mode = "cherry_pick"
+                # Cost = short side; income interval = long_interval
+                cost_mins_disp = short_mins
+                income_interval_mins = long_interval * 60
+                if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
+                    mode = "nutcracker"
+                else:
+                    mode = "cherry_pick"
             elif pnl["short_is_income"] and not pnl["long_is_income"]:
-                mode = "cherry_pick"
+                # Cost = long side; income interval = short_interval
+                cost_mins_disp = long_mins
+                income_interval_mins = short_interval * 60
+                if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
+                    mode = "nutcracker"
+                else:
+                    mode = "cherry_pick"
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
