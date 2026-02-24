@@ -128,6 +128,12 @@ export interface Translations {
   modeLabel: string;
   statusActive: string;
   statusClosed: string;
+
+  // Mode Labels
+  cherry_pick: string;
+  pot: string;
+  nutcracker: string;
+  hold: string;
 }
 
 const en: Translations = {
@@ -245,8 +251,14 @@ const en: Translations = {
   openedAt: 'Opened',
   closedAt: 'Closed',
   holdDuration: 'Duration',
-  modeLabel: 'Mode',  statusActive: 'ACTIVE',
-  statusClosed: 'CLOSED',};
+  modeLabel: 'Mode',
+  statusActive: 'ACTIVE',
+  statusClosed: 'CLOSED',
+  cherry_pick: 'CHERRY PICK',
+  pot: 'POT',
+  nutcracker: 'NUTCRACKER',
+  hold: 'HOLD',
+};
 
 const he: Translations = {
   dashboard: 'לוח מחוונים',
@@ -366,6 +378,10 @@ const he: Translations = {
   modeLabel: 'מצב',
   statusActive: 'פעילה',
   statusClosed: 'סגורה',
+  cherry_pick: 'צ׳רי פיק',
+  pot: 'סיר דבש',
+  nutcracker: 'מפצח אגוזים',
+  hold: 'החזקה',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

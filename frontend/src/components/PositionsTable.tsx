@@ -68,18 +68,18 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     const m = mode.toLowerCase();
     
     if (m === 'cherry_pick') return (
-      <span className="pos-mode-badge pos-mode-badge--cherry">🍒 CHERRY</span>
+      <span className="pos-mode-badge pos-mode-badge--cherry">🍒 {t.cherry_pick}</span>
     );
     if (m === 'pot') return (
-      <span className="pos-mode-badge pos-mode-badge--pot">🍯 POT</span>
+      <span className="pos-mode-badge pos-mode-badge--pot">🍯 {t.pot}</span>
     );
     if (m === 'nutcracker') return (
-      <span className="pos-mode-badge pos-mode-badge--nut">🔨 NUTCRACKER</span>
+      <span className="pos-mode-badge pos-mode-badge--nut">🔨 {t.nutcracker}</span>
     );
     if (m === 'hold' || m === 'hold_mixed') return (
-      <span className="pos-mode-badge pos-mode-badge--hold">🤝 HOLD</span>
+      <span className="pos-mode-badge pos-mode-badge--hold">🤝 {t.hold}</span>
     );
-    return <span className="pos-mode-badge pos-mode-badge--hold">HOLD</span>;
+    return <span className="pos-mode-badge pos-mode-badge--hold">{t.hold}</span>;
   };
 
   return (
