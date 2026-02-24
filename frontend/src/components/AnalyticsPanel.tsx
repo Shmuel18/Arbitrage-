@@ -11,9 +11,11 @@ interface PnlPoint {
 
 interface AnalyticsPanelProps {
   pnl: { data_points: PnlPoint[]; total_pnl: number; unrealized_pnl?: number; realized_pnl?: number } | null;
+  pnlHours: number;
+  onPnlHoursChange: (hours: number) => void;
 }
 
-const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl }) => {
+const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange }) => {
   const { t, theme } = useSettings();
   const points = pnl?.data_points ?? [];
   const total = pnl?.total_pnl ?? 0;
@@ -74,6 +76,33 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl }) => {
             {formatCurrency(total)}
           </div>
         </div>
+      </div>
+
+      <div className="flex justify-end gap-1 mb-4" style={{ fontSize: 10 }}>
+        {[
+          { label: '24h', value: 24 },
+          { label: '7d', value: 168 },
+          { label: '30d', value: 720 },
+          { label: '90d', value: 2160 },
+          { label: '180d', value: 4320 },
+        ].map((btn) => (
+          <button
+            key={btn.value}
+            onClick={() => onPnlHoursChange(btn.value)}
+            style={{
+              padding: '2px 8px',
+              borderRadius: 4,
+              border: '1px solid var(--card-border)',
+              background: pnlHours === btn.value ? 'var(--accent)' : 'transparent',
+              color: pnlHours === btn.value ? '#fff' : 'var(--text-muted)',
+              fontWeight: pnlHours === btn.value ? 700 : 400,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+            }}
+          >
+            {btn.label}
+          </button>
+        ))}
       </div>
 
       <div className="chart-area" style={{ position: 'relative', overflow: 'hidden' }}>

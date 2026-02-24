@@ -535,22 +535,34 @@ class Scanner:
         exit_before = None
         n_collections = 0
 
-        if hold_qualified and pnl["both_income"]:
-            # ── HOLD mode: both sides are income ────────────────
+        if hold_qualified:
+            # ── HOLD / POT / NUTCRACKER Block ─────────────────
+            if pnl["both_income"]:
+                mode = "pot"
+                emoji = "🍯"
+                label = "POT"
+            elif pnl["long_is_income"] or pnl["short_is_income"]:
+                mode = "nutcracker"
+                emoji = "🔨"
+                label = "NUTCRACKER"
+            else:
+                mode = "hold"
+                emoji = "🤝"
+                label = "HOLD"
+
             if (imminent_spread_pct - total_cost_pct) < tp.min_net_pct:
                 qualified = False
             else:
                 min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
                 funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
                 logger.info(
-                    f"🎯 [{symbol}] OPPORTUNITY FOUND (HOLD): "
-                    f"L({long_eid}) @ {long_rate:.8f} ({long_rate*100:.6f}%) | S({short_eid}) @ {short_rate:.8f} ({short_rate*100:.6f}%) | "
-                    f"IMMINENT={imminent_spread_pct:.4f}% (gross) | "
-                    f"FEES={total_cost_pct:.4f}% | NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
+                    f"🎯 [{symbol}] OPPORTUNITY FOUND ({label} {emoji}): "
+                    f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
+                    f"NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
                     extra={
                         "action": "opportunity_found",
                         "symbol": symbol,
-                        "mode": "hold",
+                        "mode": mode,
                         "long_rate": str(long_rate),
                         "short_rate": str(short_rate),
                         "min_to_funding": min_to_funding,
@@ -615,7 +627,7 @@ class Scanner:
                                     f"(gross={float(cp_gross):.4f}%, net={float(cp_net):.4f}%) — "
                                     f"enter {int(minutes_until_income)}min before payment, "
                                     f"exit before {exit_before.strftime('%H:%M UTC')}",
-                                    extra={"action": "cherry_pick_found", "symbol": symbol},
+                                    extra={"action": "cherry_pick_found", "symbol": symbol, "mode": "cherry_pick"},
                                 )
 
         # ── Skip truly uninteresting candidates (no positive spread) ──

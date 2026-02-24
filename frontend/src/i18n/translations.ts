@@ -75,6 +75,7 @@ export interface Translations {
 
   // Analytics
   pnlChart: string;
+  pnlChartInterval: string;
   waitingPnl: string;
 
   // Recent trades
@@ -194,7 +195,8 @@ const en: Translations = {
   countdown: 'PAYOUT',
   belowThreshold: 'Below threshold (0.5%)',
 
-  pnlChart: 'PnL Chart (24h)',
+  pnlChart: 'PnL Chart',
+  pnlChartInterval: 'Interval',
   waitingPnl: 'Waiting for PnL data...',
 
   last10Trades: 'Recent Trades',
@@ -311,7 +313,8 @@ const he: Translations = {
   countdown: 'פעימה',
   belowThreshold: 'מתחת לסף (0.5%)',
 
-  pnlChart: 'גרף רווח והפסד (24 שעות)',
+  pnlChart: 'גרף רווח והפסד',
+  pnlChartInterval: 'טווח',
   waitingPnl: 'ממתין לנתוני רווח והפסד...',
 
   last10Trades: 'עסקאות אחרונות',

@@ -66,10 +66,17 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   const modeLabel = (mode?: string) => {
     if (!mode) return null;
     const m = mode.toLowerCase();
+    
     if (m === 'cherry_pick') return (
       <span className="pos-mode-badge pos-mode-badge--cherry">🍒 CHERRY</span>
     );
-    if (m === 'hold_mixed') return (
+    if (m === 'pot') return (
+      <span className="pos-mode-badge pos-mode-badge--pot">🍯 POT</span>
+    );
+    if (m === 'nutcracker') return (
+      <span className="pos-mode-badge pos-mode-badge--nut">🔨 NUTCRACKER</span>
+    );
+    if (m === 'hold' || m === 'hold_mixed') return (
       <span className="pos-mode-badge pos-mode-badge--mixed">MIXED</span>
     );
     return <span className="pos-mode-badge pos-mode-badge--hold">HOLD</span>;

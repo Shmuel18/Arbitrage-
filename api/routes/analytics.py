@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("/performance")
-async def get_performance(hours: int = Query(24, ge=1, le=168)):
+async def get_performance(hours: int = Query(24, ge=1, le=4320)):
     """Get performance metrics"""
     try:
         if not redis_client:
@@ -60,7 +60,7 @@ async def get_performance(hours: int = Query(24, ge=1, le=168)):
 
 
 @router.get("/pnl")
-async def get_pnl(hours: int = Query(24, ge=1, le=168)):
+async def get_pnl(hours: int = Query(24, ge=1, le=4320)):
     """Get P&L over time - reads from closed trades history (persistent across bot restarts)"""
     try:
         if not redis_client:

@@ -23,9 +23,11 @@ export type SectionId = typeof SECTION_IDS[keyof typeof SECTION_IDS];
 
 interface DashboardProps {
   data: FullData;
+  pnlHours: number;
+  onPnlHoursChange: (hours: number) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ data }) => {
+const Dashboard: React.FC<DashboardProps> = ({ data, pnlHours, onPnlHoursChange }) => {
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -78,7 +80,7 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
             <div id={SECTION_IDS.dashboard}>
               <StatsCards
                 totalBalance={data.balances?.total ?? 0}
-                dailyPnl={data.pnl?.total_pnl ?? 0}
+                dailyPnl={data.dailyPnl}
                 activeTrades={data.status.active_positions}
                 systemRunning={data.status.bot_running}
                 winRate={data.summary?.win_rate ?? 0}
@@ -101,7 +103,11 @@ const Dashboard: React.FC<DashboardProps> = ({ data }) => {
               <RightPanel opportunities={data.opportunities} />
             </div>
 
-            <AnalyticsPanel pnl={data.pnl} />
+            <AnalyticsPanel
+              pnl={data.pnl}
+              pnlHours={pnlHours}
+              onPnlHoursChange={onPnlHoursChange}
+            />
 
             <div id={SECTION_IDS.trades}>
               <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />

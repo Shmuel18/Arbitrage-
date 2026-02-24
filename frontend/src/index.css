@@ -1105,6 +1105,18 @@ code, .mono {
   background: rgba(249, 115, 22, 0.1);
 }
 
+.pos-mode-badge--pot {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.pos-mode-badge--nut {
+  color: #a855f7;
+  border-color: rgba(168, 85, 247, 0.35);
+  background: rgba(168, 85, 247, 0.08);
+}
+
 .pos-mode-badge--mixed {
   color: #eab308;
   border-color: rgba(234, 179, 8, 0.35);

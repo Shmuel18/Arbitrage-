@@ -10,7 +10,8 @@ export interface FullData {
   balances: { balances: Record<string, number>; total: number } | null;
   opportunities: { opportunities: any[]; count: number } | null;
   summary: { total_pnl: number; total_trades: number; win_rate: number; active_positions: number; uptime_hours: number; all_time_pnl?: number; avg_pnl?: number } | null;
-  pnl: { data_points: any[]; total_pnl: number } | null;
+  pnl: { data_points: any[]; total_pnl: number; unrealized_pnl?: number; realized_pnl?: number } | null;
+  dailyPnl: number;
   logs: { timestamp: string; message: string; level: string }[];
   positions: any[];
   trades: any[];
@@ -19,23 +20,28 @@ export interface FullData {
 }
 
 function App() {
+  const [pnlHours, setPnlHours] = useState<number>(24);
   const [data, setData] = useState<FullData>({
     status: { bot_running: false, connected_exchanges: [], active_positions: 0, uptime: 0 },
-    balances: null, opportunities: null, summary: null, pnl: null,
+    balances: null, opportunities: null, summary: null, pnl: null, dailyPnl: 0,
     logs: [], positions: [], trades: [], tradesLoaded: false,
     lastFetchedAt: Date.now(),
   });
 
   const fetchAll = useCallback(async () => {
     try {
-      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, tradesRes] = await Promise.allSettled([
+      const pnlPromise = getPnL(pnlHours);
+      const dailyPnlPromise = pnlHours === 24 ? pnlPromise : getPnL(24);
+
+      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, dailyPnlRes, tradesRes] = await Promise.allSettled([
         fetch('/api/status').then(r => r.json()),
         getBalances(),
         getOpportunities(),
         getLogs(50),
         getSummary(),
         getPositions(),
-        getPnL(24),
+        pnlPromise,
+        dailyPnlPromise,
         getTrades(10),
       ]);
       setData(prev => ({
@@ -47,6 +53,7 @@ function App() {
         summary: summRes.status === 'fulfilled' && summRes.value?.total_trades != null ? summRes.value : prev.summary,
         positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
+        dailyPnl: dailyPnlRes.status === 'fulfilled' ? (dailyPnlRes.value.total_pnl || 0) : prev.dailyPnl,
         lastFetchedAt: Date.now(),
         tradesLoaded: true,
         trades: (() => {
@@ -61,7 +68,7 @@ function App() {
     } catch (error) {
       console.error('Error fetching data:', error);
     }
-  }, []);
+  }, [pnlHours]);
 
   useEffect(() => {
     connectWebSocket((msg) => {
@@ -178,7 +185,7 @@ function App() {
     <div className="App min-h-screen bg-slate-900">
       {/* RateBridge status beam — stretches full width at very top */}
       <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
-      <Dashboard data={data} />
+      <Dashboard data={data} pnlHours={pnlHours} onPnlHoursChange={setPnlHours} />
     </div>
   );
 }

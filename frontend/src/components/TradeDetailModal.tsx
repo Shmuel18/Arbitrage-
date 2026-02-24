@@ -65,7 +65,12 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const modeBadge = (m?: string | null) => {
     if (!m) return null;
     const label = m.replace('_', ' ').toUpperCase();
-    const color = m === 'cherry_pick' ? '#f59e0b' : m === 'hold_mixed' ? '#8b5cf6' : '#22d3ee';
+    let color = '#22d3ee'; // default Cyan
+    if (m === 'cherry_pick') color = '#f97316'; // Orange
+    if (m === 'pot') color = '#f59e0b'; // Amber
+    if (m === 'nutcracker') color = '#a855f7'; // Purple
+    if (m === 'hold' || m === 'hold_mixed') color = '#eab308'; // Yellow/Mixed
+
     return (
       <span style={{
         background: color + '22', color, border: `1px solid ${color}55`,
