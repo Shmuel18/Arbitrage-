@@ -67,10 +67,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     let color = '#22d3ee'; // default Cyan
     let emoji = '';
     
-    if (m === 'cherry_pick') { color = '#f97316'; emoji = '🍒 '; }
-    if (m === 'pot') { color = '#f59e0b'; emoji = '🍯 '; }
-    if (m === 'nutcracker') { color = '#a855f7'; emoji = '🔨 '; }
-    if (m === 'hold' || m === 'hold_mixed') { color = '#22c55e'; emoji = '🤝 '; label = 'HOLD'; }
+    if (m === 'cherry_pick') { color = '#f97316'; emoji = '🍒 '; label = t.cherry_pick; }
+    if (m === 'pot') { color = '#f59e0b'; emoji = '🍯 '; label = t.pot; }
+    if (m === 'nutcracker') { color = '#a855f7'; emoji = '🔨 '; label = t.nutcracker; }
+    if (m === 'hold' || m === 'hold_mixed') { color = '#22c55e'; emoji = '🤝 '; label = t.hold; }
 
     return (
       <span style={{
@@ -170,7 +170,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 800,
               textTransform: 'uppercase', letterSpacing: '0.05em',
             }}>
-              {trade.status}
+              {trade.status === 'closed' ? t.statusClosed : t.statusActive}
             </span>
             <button
               onClick={onClose}
@@ -187,34 +187,34 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
           {/* LONG SIDE */}
           <div>
-            <p style={sectionTitle}>{trade.long_exchange?.toUpperCase()} (LONG)</p>
+            <p style={sectionTitle}>{trade.long_exchange?.toUpperCase()} ({t.long})</p>
             <div style={rowStyle}>
-              <span style={labelStyle}>Entry Price</span>
+              <span style={labelStyle}>{t.entryPriceLong}</span>
               <span style={valueStyle}>{usd(trade.entry_price_long, 5)}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Exit Price</span>
+              <span style={labelStyle}>{t.exitPriceLong}</span>
               <span style={valueStyle}>{usd(trade.exit_price_long, 5)}</span>
             </div>
             <div style={{ ...rowStyle, borderBottom: 'none' }}>
-              <span style={labelStyle}>Opened</span>
+              <span style={labelStyle}>{t.openedAt}</span>
               <span style={{ ...valueStyle, fontWeight: 400 }}>{formatDate(trade.opened_at || trade.open_time)}</span>
             </div>
           </div>
 
           {/* SHORT SIDE */}
           <div>
-            <p style={sectionTitle}>{trade.short_exchange?.toUpperCase()} (SHORT)</p>
+            <p style={sectionTitle}>{trade.short_exchange?.toUpperCase()} ({t.short})</p>
             <div style={rowStyle}>
-              <span style={labelStyle}>Entry Price</span>
+              <span style={labelStyle}>{t.entryPriceShort}</span>
               <span style={valueStyle}>{usd(trade.entry_price_short, 5)}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Exit Price</span>
+              <span style={labelStyle}>{t.exitPriceShort}</span>
               <span style={valueStyle}>{usd(trade.exit_price_short, 5)}</span>
             </div>
             <div style={{ ...rowStyle, borderBottom: 'none' }}>
-              <span style={labelStyle}>Closed</span>
+              <span style={labelStyle}>{t.closedAt}</span>
               <span style={{ ...valueStyle, fontWeight: 400 }}>{formatDate(trade.closed_at || trade.close_time)}</span>
             </div>
           </div>
@@ -224,38 +224,38 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 24, marginBottom: 12 }}>
           {/* PNL Breakdown */}
           <div style={{ background: 'rgba(59,130,246,0.03)', borderRadius: 12, padding: '16px 20px', border: '1px solid var(--card-border)' }}>
-            <p style={{ ...sectionTitle, borderBottom: 'none' }}>PnL Breakdown</p>
+            <p style={{ ...sectionTitle, borderBottom: 'none' }}>{t.tradeDetailPnl}</p>
             <div style={rowStyle}>
-              <span style={labelStyle}>Price Move</span>
+              <span style={labelStyle}>{t.pricePnl}</span>
               <span style={{ ...valueStyle, color: pnlColor(pricePnl) }}>{usd(pricePnl)}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Funding Net</span>
+              <span style={labelStyle}>{t.fundingNetDetail}</span>
               <span style={{ ...valueStyle, color: pnlColor(fundingNet) }}>{usd(fundingNet)}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Total Fees</span>
+              <span style={labelStyle}>{t.feesDetail}</span>
               <span style={{ ...valueStyle, color: 'var(--red)' }}>{usd(feesNum)}</span>
             </div>
             <div style={totalRowStyle}>
-              <span style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-primary)' }}>TOTAL NET</span>
+              <span style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-primary)' }}>{t.totalNetPnl}</span>
               <span style={{ fontSize: 18, fontWeight: 900, color: pnlColor(totalPnl) }}>{usd(totalPnl)}</span>
             </div>
           </div>
 
           {/* Stats */}
           <div style={{ padding: '4px 0' }}>
-            <p style={{ ...sectionTitle, borderBottom: 'none' }}>Metrics</p>
+            <p style={{ ...sectionTitle, borderBottom: 'none' }}>{t.tradeDetailFunding}</p>
             <div style={rowStyle}>
-              <span style={labelStyle}>Collections</span>
+              <span style={labelStyle}>{t.collectionsCount}</span>
               <span style={valueStyle}>{trade.funding_collections ?? '--'}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Collected $</span>
+              <span style={labelStyle}>{t.fundingCollectedUsd}</span>
               <span style={{ ...valueStyle, color: 'var(--green)' }}>{usd(trade.funding_collected_usd)}</span>
             </div>
             <div style={rowStyle}>
-              <span style={labelStyle}>Entry Edge</span>
+              <span style={labelStyle}>{t.entryEdge}</span>
               <span style={valueStyle}>{pct(trade.entry_spread)}</span>
             </div>
           </div>
@@ -264,7 +264,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         {/* ── Exit Reason ── */}
         {trade.exit_reason && (
           <div style={{ marginTop: 12 }}>
-            <p style={{ ...sectionTitle, borderBottom: 'none', marginBottom: 8 }}>Exit Motivation</p>
+            <p style={{ ...sectionTitle, borderBottom: 'none', marginBottom: 8 }}>{t.exitReasonLabel}</p>
             <div style={{
               background: 'var(--tag-bg, rgba(148,163,184,0.1))',
               borderRadius: 8, padding: '10px 14px', fontSize: 12,

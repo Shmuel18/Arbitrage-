@@ -126,6 +126,8 @@ export interface Translations {
   closedAt: string;
   holdDuration: string;
   modeLabel: string;
+  statusActive: string;
+  statusClosed: string;
 }
 
 const en: Translations = {
@@ -243,8 +245,8 @@ const en: Translations = {
   openedAt: 'Opened',
   closedAt: 'Closed',
   holdDuration: 'Duration',
-  modeLabel: 'Mode',
-};
+  modeLabel: 'Mode',  statusActive: 'ACTIVE',
+  statusClosed: 'CLOSED',};
 
 const he: Translations = {
   dashboard: 'לוח מחוונים',
@@ -362,6 +364,8 @@ const he: Translations = {
   closedAt: 'נסגרה',
   holdDuration: 'משך',
   modeLabel: 'מצב',
+  statusActive: 'פעילה',
+  statusClosed: 'סגורה',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };
