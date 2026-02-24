@@ -76,6 +76,9 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     if (m === 'nutcracker') return (
       <span className="pos-mode-badge pos-mode-badge--nut">🔨 {t.nutcracker}</span>
     );
+    if (m === 'tzari') return (
+      <span className="pos-mode-badge pos-mode-badge--tzari">🔨🥜 {t.tzari}</span>
+    );
     if (m === 'hold' || m === 'hold_mixed') return (
       <span className="pos-mode-badge pos-mode-badge--hold">🤝 {t.hold}</span>
     );
