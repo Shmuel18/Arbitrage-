@@ -1025,8 +1025,13 @@ class ExecutionController:
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_trigger"},
             )
             # ── Per-payment tracking (SIGNED logic) ──────────────
-            _lr = long_funding.get('rate') if long_paid else None
-            _sr = short_funding.get('rate') if short_paid else None
+            # Use the ENTRY-TIME rates stored on the trade (set when the trade was
+            # opened and updated after each hold cycle).  The cache already holds the
+            # NEW post-payment rate by the time the 180s offset fires, so reading
+            # long_funding.get('rate') would give the next-cycle rate, not the one
+            # that was just paid.
+            _lr = trade.long_funding_rate if long_paid else None
+            _sr = trade.short_funding_rate if short_paid else None
             
             # Long side: income if rate < 0, cost if rate > 0
             _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else 0
@@ -1393,6 +1398,14 @@ class ExecutionController:
                 trade.next_funding_long = datetime.fromtimestamp(long_next / 1000, tz=timezone.utc)
             if short_next:
                 trade.next_funding_short = datetime.fromtimestamp(short_next / 1000, tz=timezone.utc)
+            # Refresh stored rates to the new-cycle cache values so the NEXT payment
+            # estimation uses the currently-visible rate (not the stale entry rate).
+            _new_lr = long_funding.get("rate")
+            _new_sr = short_funding.get("rate")
+            if _new_lr is not None:
+                trade.long_funding_rate = Decimal(str(_new_lr))
+            if _new_sr is not None:
+                trade.short_funding_rate = Decimal(str(_new_sr))
             # How long have we been holding?
             hold_min = 0
             if trade.opened_at:
