@@ -115,8 +115,6 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.qtyLS}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.sizeUsd}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>Entry%</th>
-              <th style={{ padding: '6px 8px', textAlign: 'right' }}>Immed</th>
-              <th style={{ padding: '6px 8px', textAlign: 'right' }}>8h</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>Fund%</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.nextPayout}</th>
               <th style={{ padding: '6px 8px', textAlign: 'center' }}>{t.state}</th>
@@ -125,14 +123,13 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           <tbody>
             {positions.length === 0 ? (
               <tr>
-                <td colSpan={10} className="text-center text-secondary py-4" style={{ fontSize: '0.85rem' }}>
+                <td colSpan={9} className="text-center text-secondary py-4" style={{ fontSize: '0.85rem' }}>
                   {t.noOpenPositions}
                 </td>
               </tr>
             ) : (
               positions.map((p) => {
                 const entryVal = Number(p.entry_edge_pct || 0);
-                const immediateVal = Number(p.immediate_spread_pct || 0);
                 const currentVal = Number(p.current_spread_pct || 0);
                 
                 const spreadDiff = currentVal - entryVal;
@@ -140,9 +137,8 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                   : spreadDiff > 0 ? 'text-green-400'
                   : spreadDiff < -0.1 ? 'text-red-400'
                   : 'text-yellow-400';
-                const arrow = !p.current_spread_pct ? ''
-                  : spreadDiff > 0 ? ' ▲' : spreadDiff < 0 ? ' ▼' : ' =';
                 
+                const immediateVal = Number(p.immediate_spread_pct || 0);
                 const immediateColor = !p.immediate_spread_pct ? 'text-secondary'
                   : immediateVal > 0 ? 'text-green-400'
                   : immediateVal < -0.1 ? 'text-red-400'
@@ -167,12 +163,6 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatSpread(p.entry_edge_pct)}
-                    </td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 500 }} className={`mono ${immediateColor}`}>
-                      {formatSpread(p.immediate_spread_pct)}
-                    </td>
-                    <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 500 }} className={`mono ${spreadColor}`}>
-                      {formatSpread(p.current_spread_pct)}{arrow}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatFunding(p.current_long_rate)}/{formatFunding(p.current_short_rate)}

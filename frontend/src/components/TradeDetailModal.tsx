@@ -33,7 +33,6 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     if (value == null || value === '') return '--';
     const n = Number(value);
     if (Number.isNaN(n)) return '--';
-    // values like 0.0042 → multiply by 100; values > 1 already percentage
     const p = Math.abs(n) <= 1 ? n * 100 : n;
     return `${p >= 0 ? '+' : ''}${p.toFixed(4)}%`;
   };
@@ -42,7 +41,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     if (!value) return '--';
     try {
       return new Intl.DateTimeFormat('default', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
+        month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit',
         hour12: false,
       }).format(new Date(value));
@@ -77,7 +76,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
       <span style={{
         background: color + '22', color, border: `1px solid ${color}55`,
         borderRadius: 4, padding: '1px 8px', fontSize: 11, fontWeight: 700,
-        textTransform: 'uppercase', letterSpacing: '0.06em', marginLeft: 8,
+        textTransform: 'uppercase', letterSpacing: '0.06em',
       }}>
         {emoji}{label}
       </span>
@@ -92,198 +91,190 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
 
   // ── Section styles ──────────────────────────────────────────────
   const sectionTitle: React.CSSProperties = {
-    fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase',
-    color: '#2d4060', marginBottom: 10, marginTop: 0,
-    paddingBottom: 6, borderBottom: '1px solid rgba(59,130,246,0.12)',
+    fontSize: 10, fontWeight: 800, letterSpacing: '0.12em', textTransform: 'uppercase',
+    color: 'var(--text-muted)', marginBottom: 12, marginTop: 0,
+    paddingBottom: 6, borderBottom: '1px solid var(--card-border)',
   };
 
   const rowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
+    padding: '6px 0', borderBottom: '1px solid var(--card-border)',
   };
 
   const labelStyle: React.CSSProperties = {
-    color: '#3d5068', fontSize: 12,
+    color: 'var(--text-secondary)', fontSize: 12,
   };
 
   const valueStyle: React.CSSProperties = {
     fontSize: 13, fontWeight: 600,
-    fontFamily: 'JetBrains Mono, ui-monospace, monospace',
+    fontFamily: 'var(--font-mono, monospace)',
     fontVariantNumeric: 'tabular-nums',
     color: 'var(--text-primary)',
   };
 
   const totalRowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '8px 0 2px', borderTop: '1px solid rgba(59,130,246,0.2)', marginTop: 4,
+    padding: '12px 0 4px', borderTop: '2px solid var(--card-border)', marginTop: 8,
   };
 
   return (
     <>
-      {/* Backdrop */}
       <div
         onClick={onClose}
         style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
-          zIndex: 1000, backdropFilter: 'blur(8px)',
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+          zIndex: 1000, backdropFilter: 'blur(4px)',
         }}
       />
 
-      {/* Modal */}
       <div style={{
         position: 'fixed', top: '50%', left: '50%',
         transform: 'translate(-50%, -50%)',
         zIndex: 1001,
-        width: 'min(540px, 95vw)',
+        width: 'min(600px, 95vw)',
         maxHeight: '90vh',
         overflowY: 'auto',
-        background: 'rgba(8, 14, 26, 0.95)',
-        border: '1px solid rgba(59, 130, 246, 0.2)',
+        background: 'var(--card-bg)',
+        border: '1px solid var(--card-border)',
         borderRadius: 16,
-        boxShadow: '0 0 0 1px rgba(59,130,246,0.08), 0 16px 60px rgba(0,0,0,0.7), 0 0 40px rgba(59,130,246,0.06)',
-        padding: '22px 26px',
-        backdropFilter: 'blur(20px)',
+        boxShadow: 'var(--shadow-xl)',
+        padding: '24px 28px',
         overflow: 'hidden',
       }}>
-        {/* Top accent line */}
         <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-          background: 'linear-gradient(90deg, transparent, #3b82f6, #8b5cf6, transparent)',
-          borderRadius: '16px 16px 0 0',
+          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+          background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899)',
         }} />
 
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, marginTop: 4 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, letterSpacing: '0.04em', color: 'var(--accent)' }}>
-              {trade.symbol}
-            </span>
-            {modeBadge(trade.mode)}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <span style={{ fontSize: 22, fontWeight: 900, letterSpacing: '-0.02em', color: 'var(--accent)' }}>
+                {trade.symbol}
+              </span>
+              {modeBadge(trade.mode)}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500 }}>
+              <span className="mono">{trade.long_exchange?.toUpperCase()}</span>
+              <span style={{ opacity: 0.3 }}>/</span>
+              <span className="mono">{trade.short_exchange?.toUpperCase()}</span>
+              <span style={{ color: 'var(--card-border)', margin: '0 4px' }}>|</span>
+              <span>{formatDuration(trade.hold_minutes)}</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{
-              background: trade.status === 'closed' ? 'var(--green-muted, #16a34a33)' : 'var(--blue-muted, #0ea5e933)',
-              color: trade.status === 'closed' ? 'var(--green)' : 'var(--info, #38bdf8)',
-              border: `1px solid ${trade.status === 'closed' ? 'var(--green)' : 'var(--info, #38bdf8)'}55`,
-              borderRadius: 4, padding: '1px 8px', fontSize: 11, fontWeight: 700,
-              letterSpacing: '0.06em', marginLeft: 4,
+              background: trade.status === 'closed' ? 'rgba(16,185,129,0.1)' : 'rgba(14,165,233,0.1)',
+              color: trade.status === 'closed' ? 'var(--green)' : 'var(--blue)',
+              borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 800,
+              textTransform: 'uppercase', letterSpacing: '0.05em',
             }}>
-              {(trade.status ?? 'open').toUpperCase()}
+              {trade.status}
             </span>
+            <button
+              onClick={onClose}
+              style={{
+                background: 'rgba(148,163,184,0.1)', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', fontSize: 18, borderRadius: '50%',
+                width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >×</button>
           </div>
-          <button
-            onClick={onClose}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              color: 'var(--text-muted)', fontSize: 20, lineHeight: 1, padding: 4,
-            }}
-            aria-label="Close"
-          >×</button>
         </div>
 
-        <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 20 }}>
-          {trade.long_exchange?.toUpperCase()} LONG &nbsp;/&nbsp; {trade.short_exchange?.toUpperCase()} SHORT
-          &nbsp;·&nbsp; {formatDuration(trade.hold_minutes)}
-        </div>
-
-        {/* ── Prices ── */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={sectionTitle}>{t.tradeDetailPrices}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
-            <div>
-              <div style={rowStyle}>
-                <span style={labelStyle}>{t.entryPriceLong}</span>
-                <span style={valueStyle}>{usd(trade.entry_price_long, 4)}</span>
-              </div>
-              <div style={rowStyle}>
-                <span style={labelStyle}>{t.exitPriceLong}</span>
-                <span style={valueStyle}>{usd(trade.exit_price_long, 4)}</span>
-              </div>
+        {/* ── Times & Prices ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
+          {/* LONG SIDE */}
+          <div>
+            <p style={sectionTitle}>{trade.long_exchange?.toUpperCase()} (LONG)</p>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Entry Price</span>
+              <span style={valueStyle}>{usd(trade.entry_price_long, 5)}</span>
             </div>
-            <div>
-              <div style={rowStyle}>
-                <span style={labelStyle}>{t.entryPriceShort}</span>
-                <span style={valueStyle}>{usd(trade.entry_price_short, 4)}</span>
-              </div>
-              <div style={rowStyle}>
-                <span style={labelStyle}>{t.exitPriceShort}</span>
-                <span style={valueStyle}>{usd(trade.exit_price_short, 4)}</span>
-              </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Exit Price</span>
+              <span style={valueStyle}>{usd(trade.exit_price_long, 5)}</span>
+            </div>
+            <div style={{ ...rowStyle, borderBottom: 'none' }}>
+              <span style={labelStyle}>Opened</span>
+              <span style={{ ...valueStyle, fontWeight: 400 }}>{formatDate(trade.opened_at || trade.open_time)}</span>
             </div>
           </div>
-        </div>
 
-        {/* ── P&L Breakdown ── */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={sectionTitle}>{t.tradeDetailPnl}</p>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.pricePnl}</span>
-            <span style={{ ...valueStyle, color: pnlColor(pricePnl) }}>{usd(pricePnl)}</span>
-          </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.fundingNetDetail}</span>
-            <span style={{ ...valueStyle, color: pnlColor(fundingNet) }}>{usd(fundingNet)}</span>
-          </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.feesDetail}</span>
-            <span style={{ ...valueStyle, color: 'var(--red)' }}>{feesNum != null ? usd(feesNum) : '--'}</span>
-          </div>
-          <div style={totalRowStyle}>
-            <span style={{ color: 'var(--text-primary)', fontWeight: 700, fontSize: 14 }}>{t.totalNetPnl}</span>
-            <span style={{ fontSize: 16, fontWeight: 800, fontFamily: 'var(--font-mono, monospace)', color: pnlColor(totalPnl) }}>
-              {usd(totalPnl)}
-            </span>
+          {/* SHORT SIDE */}
+          <div>
+            <p style={sectionTitle}>{trade.short_exchange?.toUpperCase()} (SHORT)</p>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Entry Price</span>
+              <span style={valueStyle}>{usd(trade.entry_price_short, 5)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Exit Price</span>
+              <span style={valueStyle}>{usd(trade.exit_price_short, 5)}</span>
+            </div>
+            <div style={{ ...rowStyle, borderBottom: 'none' }}>
+              <span style={labelStyle}>Closed</span>
+              <span style={{ ...valueStyle, fontWeight: 400 }}>{formatDate(trade.closed_at || trade.close_time)}</span>
+            </div>
           </div>
         </div>
 
-        {/* ── Funding Collections ── */}
-        <div style={{ marginBottom: 20 }}>
-          <p style={sectionTitle}>{t.tradeDetailFunding}</p>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.collectionsCount}</span>
-            <span style={valueStyle}>
-              {trade.funding_collections != null ? trade.funding_collections : '--'}
-            </span>
+        {/* ── Financials ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 24, marginBottom: 12 }}>
+          {/* PNL Breakdown */}
+          <div style={{ background: 'rgba(59,130,246,0.03)', borderRadius: 12, padding: '16px 20px', border: '1px solid var(--card-border)' }}>
+            <p style={{ ...sectionTitle, borderBottom: 'none' }}>PnL Breakdown</p>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Price Move</span>
+              <span style={{ ...valueStyle, color: pnlColor(pricePnl) }}>{usd(pricePnl)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Funding Net</span>
+              <span style={{ ...valueStyle, color: pnlColor(fundingNet) }}>{usd(fundingNet)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Total Fees</span>
+              <span style={{ ...valueStyle, color: 'var(--red)' }}>{usd(feesNum)}</span>
+            </div>
+            <div style={totalRowStyle}>
+              <span style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-primary)' }}>TOTAL NET</span>
+              <span style={{ fontSize: 18, fontWeight: 900, color: pnlColor(totalPnl) }}>{usd(totalPnl)}</span>
+            </div>
           </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.fundingCollectedUsd}</span>
-            <span style={{ ...valueStyle, color: pnlColor(trade.funding_collected_usd) }}>
-              {usd(trade.funding_collected_usd)}
-            </span>
-          </div>
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.entryEdge}</span>
-            <span style={valueStyle}>{pct(trade.entry_spread)}</span>
+
+          {/* Stats */}
+          <div style={{ padding: '4px 0' }}>
+            <p style={{ ...sectionTitle, borderBottom: 'none' }}>Metrics</p>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Collections</span>
+              <span style={valueStyle}>{trade.funding_collections ?? '--'}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Collected $</span>
+              <span style={{ ...valueStyle, color: 'var(--green)' }}>{usd(trade.funding_collected_usd)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>Entry Edge</span>
+              <span style={valueStyle}>{pct(trade.entry_spread)}</span>
+            </div>
           </div>
         </div>
 
-        {/* ── Exit & Timing ── */}
-        <div>
-          <p style={sectionTitle}>{t.exitReasonLabel}</p>
-          {trade.exit_reason ? (
+        {/* ── Exit Reason ── */}
+        {trade.exit_reason && (
+          <div style={{ marginTop: 12 }}>
+            <p style={{ ...sectionTitle, borderBottom: 'none', marginBottom: 8 }}>Exit Motivation</p>
             <div style={{
-              background: 'var(--tag-bg, rgba(100,116,139,0.15))',
-              borderRadius: 6, padding: '6px 12px', marginBottom: 12,
-              fontSize: 13, fontFamily: 'var(--font-mono, monospace)',
-              color: 'var(--text-secondary)', wordBreak: 'break-all',
+              background: 'var(--tag-bg, rgba(148,163,184,0.1))',
+              borderRadius: 8, padding: '10px 14px', fontSize: 12,
+              color: 'var(--text-secondary)', fontStyle: 'italic',
+              borderLeft: '3px solid var(--accent)',
             }}>
-              {trade.exit_reason}
+              "{trade.exit_reason}"
             </div>
-          ) : (
-            <div style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 12 }}>--</div>
-          )}
-
-          <div style={rowStyle}>
-            <span style={labelStyle}>{t.openedAt}</span>
-            <span style={{ ...valueStyle, fontWeight: 400, color: 'var(--text-secondary)' }}>
-              {formatDate(trade.opened_at ?? trade.open_time)}
-            </span>
           </div>
-          <div style={{ ...rowStyle, borderBottom: 'none' }}>
-            <span style={labelStyle}>{t.closedAt}</span>
-            <span style={{ ...valueStyle, fontWeight: 400, color: 'var(--text-secondary)' }}>
-              {formatDate(trade.closed_at ?? trade.close_time)}
-            </span>
-          </div>
-        </div>
+        )}
       </div>
     </>
   );
