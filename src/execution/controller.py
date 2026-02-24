@@ -263,43 +263,9 @@ class ExecutionController:
                 return
 
         logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
-
-        # ── Basis Inversion Guard: check if we're buying dear and selling cheap ──
-        try:
-            long_ticker = await long_adapter.get_ticker(opp.symbol)
-            short_ticker = await short_adapter.get_ticker(opp.symbol)
-            raw_ask = long_ticker.get("ask") or opp.reference_price
-            raw_bid = short_ticker.get("bid") or opp.reference_price
-            long_ask = Decimal(str(raw_ask)) if raw_ask else Decimal(str(opp.reference_price))
-            short_bid = Decimal(str(raw_bid)) if raw_bid else Decimal(str(opp.reference_price))
-            
-            # Basis loss = (ask_long - bid_short) / bid_short * 100%
-            if short_bid > 0:
-                basis_loss_pct = (long_ask - short_bid) / short_bid * Decimal("100")
-            else:
-                basis_loss_pct = Decimal("0")
-            
-            # If basis loss >= net_edge, skip trade (basis inverted)
-            if basis_loss_pct >= opp.net_edge_pct:
-                logger.warning(
-                    f"🚫 [{opp.symbol}] BASIS INVERSION GUARD: "
-                    f"L_ask={long_ask} > S_bid={short_bid}, "
-                    f"basis_loss={basis_loss_pct:.4f}% ≥ net_edge={opp.net_edge_pct:.4f}% — REJECTED"
-                )
-                self._journal.basis_rejection(
-                    opp.symbol, opp.long_exchange, opp.short_exchange,
-                    basis_loss=basis_loss_pct, net_edge=opp.net_edge_pct,
-                    long_ask=long_ask, short_bid=short_bid,
-                )
-                return
-            
-            logger.debug(
-                f"[{opp.symbol}] Basis check OK: L_ask={long_ask}, S_bid={short_bid}, "
-                f"basis_loss={basis_loss_pct:.4f}% < net_edge={opp.net_edge_pct:.4f}%"
-            )
-        except Exception as e:
-            logger.warning(f"Cannot fetch tickers for basis check {opp.symbol}: {e}")
-            # Don't reject — proceed with caution
+        # NOTE: Basis Inversion Guard removed — the exit guard already ensures we exit
+        # at entry_basis or better, so the entry ask/bid spread is neutral on round-trip.
+        # Any bid-ask spread cost is already covered by fees_pct + slippage_buffer_pct.
 
         # Acquire lock
         lock_key = f"trade:{opp.symbol}"
