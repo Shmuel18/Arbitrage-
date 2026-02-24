@@ -768,8 +768,15 @@ class ExecutionController:
                     return False
         # ─────────────────────────────────────────────────────────────────────
 
-        # Immediate spread: (-long_rate + short_rate) * 100 — next payment only, no 8h norm
+        # Projected net for current trade: income spread minus round-trip fees.
+        # This mirrors the scanner's net_pct formula so comparisons are apples-to-apples.
         current_immediate = (-long_funding["rate"] + short_funding["rate"]) * Decimal("100")
+        fee_per_side = (
+            (trade.long_taker_fee or Decimal("0.00075"))
+            + (trade.short_taker_fee or Decimal("0.00075"))
+        )
+        fee_roundtrip_pct = fee_per_side * Decimal("2") * Decimal("100")  # open + close
+        current_projected_net = current_immediate - fee_roundtrip_pct
 
         # Read latest opportunities from Redis
         try:
@@ -784,7 +791,9 @@ class ExecutionController:
 
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         now_ms = _time.time() * 1000
-        threshold = current_immediate + upgrade_delta  # upgrade threshold (next payment only)
+        # Threshold uses projected net (income - fees) so NUTCRACKER's high rate is
+        # never beaten by a lower-rate candidate just because its immediate price is positive.
+        threshold = current_projected_net + upgrade_delta
 
         for cand in candidates:
             if not cand.get("qualified", False):
@@ -793,7 +802,10 @@ class ExecutionController:
             cand_symbol = cand.get("symbol", "")
             cand_long = cand.get("long_exchange", "")
             cand_short = cand.get("short_exchange", "")
-            cand_spread = Decimal(str(cand.get("immediate_spread_pct", 0)))
+            # Use net_pct (projected income - fees) for comparison, not immediate_spread.
+            # This ensures a NUTCRACKER with high rate isn't displaced by a candidate
+            # whose immediate price spread looks better but earns less total income.
+            cand_spread = Decimal(str(cand.get("net_pct", cand.get("immediate_spread_pct", 0))))
             same_symbol = cand_symbol == trade.symbol
 
             if same_symbol:
@@ -808,7 +820,7 @@ class ExecutionController:
                         other_busy.add(t.short_exchange)
                 if cand_long in other_busy or cand_short in other_busy:
                     continue
-                # Compare immediate spreads (same symbol = same time horizon)
+                # Compare projected net (next funding payment income - fees)
                 if cand_spread < threshold:
                     continue
             else:
@@ -851,9 +863,9 @@ class ExecutionController:
             upgrade_type = "PAIR SWITCH" if same_symbol else "UPGRADE"
             logger.info(
                 f"⬆️  {upgrade_type}: closing {trade.symbol} on "
-                f"{trade.long_exchange}↔{trade.short_exchange} (spread {float(current_immediate):.4f}%) "
-                f"→ {cand_symbol} on {cand_long}↔{cand_short} (spread {float(cand_spread):.4f}%) — "
-                f"delta {float(cand_spread - current_immediate):.4f}% "
+                f"{trade.long_exchange}↔{trade.short_exchange} (net {float(current_projected_net):.4f}%) "
+                f"→ {cand_symbol} on {cand_long}↔{cand_short} (net {float(cand_spread):.4f}%) — "
+                f"delta {float(cand_spread - current_projected_net):.4f}% "
                 f"≥ {float(upgrade_delta):.2f}% (held {hold_min}min)",
                 extra={
                     "trade_id": trade.trade_id,
