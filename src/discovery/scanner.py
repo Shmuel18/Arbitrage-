@@ -82,8 +82,19 @@ class Scanner:
                 qualified_opps = [o for o in opps if o.qualified]
                 all_opps = list(opps)  # includes both qualified and display-only
 
-                # Sort all by immediate net for display (next payment only — no hourly normalization)
-                all_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
+                # Sort for DISPLAY: near-term opportunities (payment within 1h) come first.
+                # Within each group, sort by immediate_net_pct descending.
+                # This ensures the top 5 shows the best actionable opportunities right now,
+                # not high-spread opportunities whose payment is hours away.
+                _now_ms = time.time() * 1000
+                _one_hour_ms = 3600_000
+                all_opps.sort(
+                    key=lambda o: (
+                        1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
+                        float(o.immediate_net_pct),
+                    ),
+                    reverse=True,
+                )
                 # Sort qualified by net_edge_pct for execution (includes funding income for cherry_pick)
                 qualified_opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
 
@@ -98,7 +109,7 @@ class Scanner:
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
                         logger.info(
-                            "📊 TOP 5 OPPORTUNITIES (by Immediate Net)",
+                            "📊 TOP 5 OPPORTUNITIES (near-term first, then by Net)",
                             extra={"action": "top_opportunities"},
                         )
                         for idx, opp in enumerate(display_top, 1):
