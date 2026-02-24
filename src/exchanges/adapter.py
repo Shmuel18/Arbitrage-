@@ -423,7 +423,9 @@ class ExchangeAdapter:
             return
 
         interval_hours = self._get_funding_interval(symbol, data)
-        next_ts = data.get("fundingTimestamp")
+        # Prefer nextFundingTimestamp (future payment) over fundingTimestamp (current/past).
+        # Bitget and others populate nextFundingTimestamp correctly; fundingTimestamp is past.
+        next_ts = data.get("nextFundingTimestamp") or data.get("fundingTimestamp")
 
         now_ms = _time.time() * 1000
         interval_ms = interval_hours * 3_600_000
@@ -844,7 +846,8 @@ class ExchangeAdapter:
     async def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
         data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
         interval_hours = self._get_funding_interval(symbol, data)
-        next_ts = data.get("fundingTimestamp")
+        # Prefer nextFundingTimestamp (future payment) over fundingTimestamp (current/past)
+        next_ts = data.get("nextFundingTimestamp") or data.get("fundingTimestamp")
         rate = Decimal(str(data.get("fundingRate", 0)))
         
         # 🔍 DEBUG: Log REST fetch
