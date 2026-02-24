@@ -1778,13 +1778,8 @@ class ExecutionController:
         If the exchange doesn't provide fee data in the order response (common),
         we use the fallback_rate (if provided) multiplied by the fill cost.
         """
-        avg_price = Decimal("0")
-        try:
-            p = order.get("average") or order.get("price") or order.get("avgPrice") or 0
-            if p:
-                avg_price = Decimal(str(p))
-        except Exception:
-            pass
+        # Use more robust price extraction
+        avg_price = ExecutionController._extract_avg_price(order) or Decimal("0")
 
         def _cost_to_usdt(f: dict) -> Decimal:
             try:
@@ -1801,9 +1796,11 @@ class ExecutionController:
                 return Decimal("0")
 
         total = Decimal("0")
+        # Check single fee field
         fee = order.get("fee")
         if isinstance(fee, dict) and fee.get("cost") is not None:
             total += _cost_to_usdt(fee)
+        # Check multiple fees list
         fees = order.get("fees")
         if isinstance(fees, list):
             for f in fees:
@@ -1812,9 +1809,13 @@ class ExecutionController:
 
         # ── Fallback Calculation ──
         # If total is still 0 and we have a fallback rate, estimate it.
-        # This fixes the "$0.00 fees" issue on Binance/Bitget/Gate.
+        # Fixed: check 'amount' if 'filled' is missing (common in initial return)
         if total == 0 and fallback_rate is not None and fallback_rate > 0:
-            filled = Decimal(str(order.get("filled", 0) or 0))
+            filled_val = order.get("filled")
+            if filled_val is None or Decimal(str(filled_val)) == 0:
+                filled_val = order.get("amount") or 0
+                
+            filled = Decimal(str(filled_val))
             if filled > 0 and avg_price > 0:
                 total = filled * avg_price * fallback_rate
 

@@ -193,6 +193,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={valueStyle}>{usd(trade.entry_price_long, 5)}</span>
             </div>
             <div style={rowStyle}>
+              <span style={labelStyle}>{t.fundingAtEntry}</span>
+              <span style={valueStyle}>{pct(trade.long_funding_rate)}</span>
+            </div>
+            <div style={rowStyle}>
               <span style={labelStyle}>{t.exitPriceLong}</span>
               <span style={valueStyle}>{usd(trade.exit_price_long, 5)}</span>
             </div>
@@ -208,6 +212,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             <div style={rowStyle}>
               <span style={labelStyle}>{t.entryPriceShort}</span>
               <span style={valueStyle}>{usd(trade.entry_price_short, 5)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.fundingAtEntry}</span>
+              <span style={valueStyle}>{pct(trade.short_funding_rate)}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.exitPriceShort}</span>

@@ -121,6 +121,7 @@ export interface Translations {
   collectionsCount: string;
   fundingCollectedUsd: string;
   entryEdge: string;
+  fundingAtEntry: string;
   exitReasonLabel: string;
   openedAt: string;
   closedAt: string;
@@ -247,6 +248,7 @@ const en: Translations = {
   collectionsCount: 'Collections',
   fundingCollectedUsd: 'Collected (USD)',
   entryEdge: 'Entry Edge',
+  fundingAtEntry: 'Funding at Entry',
   exitReasonLabel: 'Exit Reason',
   openedAt: 'Opened',
   closedAt: 'Closed',
@@ -371,6 +373,7 @@ const he: Translations = {
   collectionsCount: 'גביות',
   fundingCollectedUsd: 'מימון שנגבה (USD)',
   entryEdge: 'יתרון כניסה',
+  fundingAtEntry: 'מימון בכניסה',
   exitReasonLabel: 'סיבת יציאה',
   openedAt: 'נפתחה',
   closedAt: 'נסגרה',

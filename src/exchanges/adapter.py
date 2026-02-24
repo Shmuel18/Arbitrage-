@@ -764,6 +764,12 @@ class ExchangeAdapter:
         if not mkt:
             return None
 
+        # Use CCXT taker fee if available, otherwise conservative fallback 
+        # (prevents "$0.00 Fees" accounting and over-optimistic scanning)
+        taker_fee = Decimal(str(mkt.get("taker") or 0))
+        if taker_fee == 0:
+            taker_fee = Decimal("0.0005")  # 0.05% conservative default
+
         spec = InstrumentSpec(
             exchange=self.exchange_id,
             symbol=symbol,
@@ -774,7 +780,7 @@ class ExchangeAdapter:
             lot_size=Decimal(str(mkt.get("precision", {}).get("amount", "0.001"))),
             min_notional=Decimal(str(mkt.get("limits", {}).get("cost", {}).get("min", 0) or 0)),
             maker_fee=Decimal(str(mkt.get("maker", 0) or 0)),
-            taker_fee=Decimal(str(mkt.get("taker", 0) or 0)),
+            taker_fee=taker_fee,
         )
         self._instrument_cache[symbol] = spec
         return spec
