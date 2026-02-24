@@ -27,6 +27,7 @@ trading_params:
   hold_min_spread: 0.5 # Min spread % to hold position after funding collection
   hold_max_wait_seconds: 3600 # Max seconds to wait for NEXT funding; if longer, exit (e.g. 3600 = 1h)
   upgrade_spread_delta: 0.5 # Switch to a better opportunity if its spread is +N% higher
+  upgrade_funding_lock_secs: 900 # Lock upgrades when funding is within N seconds (15 min)
   top_opportunities_display: 5
   execute_only_best_opportunity: true
 

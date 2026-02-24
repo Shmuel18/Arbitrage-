@@ -78,6 +78,21 @@ class ExchangeAdapter:
                 extra={"exchange": self.exchange_id, "action": "load_markets_partial"},
             )
 
+        # Sync clock offset against exchange server time to avoid timestamp errors
+        try:
+            if hasattr(self._exchange, "load_time_difference"):
+                await self._exchange.load_time_difference()
+                logger.info(
+                    f"{self.exchange_id}: clock offset synced "
+                    f"(timeDifference={self._exchange.options.get('timeDifference', 0)}ms)",
+                    extra={"exchange": self.exchange_id},
+                )
+        except Exception as e:
+            logger.warning(
+                f"{self.exchange_id}: could not sync clock offset: {e}",
+                extra={"exchange": self.exchange_id},
+            )
+
         # Filter to ACTIVE linear perpetuals settled in USDT or USD
         filtered = {
             k: v for k, v in self._exchange.markets.items()
