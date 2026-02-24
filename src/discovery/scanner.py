@@ -433,9 +433,10 @@ class Scanner:
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
 
-        # ── Live price basis check (from cache — no extra API calls) ──
-        # If long exchange price > short exchange price, adverse basis → extra cost.
-        # Uses get_mark_price(): markPrice from funding cache → indexPrice → ticker price cache.
+        # ── Live price basis check (info only — NOT added to entry cost) ──
+        # Rationale: at exit the bot already waits until exit_basis ≤ entry_basis,
+        # so entry basis cancels out and has zero net P&L impact.
+        # Adding it to entry cost would double-count a risk that the exit guard covers.
         price_basis_pct = Decimal("0")
         _live_basis_available = False
         try:
@@ -446,19 +447,13 @@ class Scanner:
             if long_price > 0 and short_price > 0:
                 _live_basis_available = True
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
-                price_basis_pct = max(raw_basis, Decimal("0"))
-                if price_basis_pct > Decimal("0"):
-                    total_cost_pct += price_basis_pct
-                    logger.debug(
-                        f"[{symbol}] Adverse price basis: {long_eid}={long_price} vs "
-                        f"{short_eid}={short_price} → +{float(price_basis_pct):.4f}% cost"
-                    )
+                price_basis_pct = raw_basis  # signed — informational only
+                logger.debug(
+                    f"[{symbol}] Entry price basis: {long_eid}={long_price} vs "
+                    f"{short_eid}={short_price} → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
+                )
         except Exception as _basis_err:
             logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
-
-        # Fallback: when live prices unavailable, add the static basis_buffer_pct reserve
-        if not _live_basis_available:
-            total_cost_pct += tp.basis_buffer_pct
 
         # Debug: show NEV breakdown
         logger.debug(
@@ -467,8 +462,7 @@ class Scanner:
             f"Fees={fees_pct:.4f}% (L:{long_spec.taker_fee*100:.4f}% + S:{short_spec.taker_fee*100:.4f}% × 2) - "
             f"Slippage={tp.slippage_buffer_pct:.4f}% - "
             f"Safety={tp.safety_buffer_pct:.4f}% - "
-            f"Basis={tp.basis_buffer_pct:.4f}% - "
-            f"PriceBasis={float(price_basis_pct):.4f}%"
+            f"PriceBasis={float(price_basis_pct):+.4f}% (info only)"
         )
 
         # ── Qualification tracking (soft gates for display) ──────
