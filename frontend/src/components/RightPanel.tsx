@@ -169,8 +169,8 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities }) => 
         <td className="text-end mono font-semibold" style={getSpreadStyle(immediateSpread)}>
           {formatSpread(immediateSpread)}
         </td>
-        <td className="text-end mono" style={getSpreadStyle(opp.net_edge_pct ?? 0)}>
-          {opp.net_edge_pct != null ? formatSpread(opp.net_edge_pct) : '--'}
+        <td className="text-end mono" style={getSpreadStyle(opp.net_pct ?? 0)}>
+          {opp.net_pct != null ? formatSpread(opp.net_pct) : '--'}
         </td>
         <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
           {opp.mode === 'cherry_pick'
