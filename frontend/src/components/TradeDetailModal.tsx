@@ -64,12 +64,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
 
   const modeBadge = (m?: string | null) => {
     if (!m) return null;
-    const label = m.replace('_', ' ').toUpperCase();
+    let label = m.replace('_', ' ').toUpperCase();
     let color = '#22d3ee'; // default Cyan
-    if (m === 'cherry_pick') color = '#f97316'; // Orange
-    if (m === 'pot') color = '#f59e0b'; // Amber
-    if (m === 'nutcracker') color = '#a855f7'; // Purple
-    if (m === 'hold' || m === 'hold_mixed') color = '#eab308'; // Yellow/Mixed
+    let emoji = '';
+    
+    if (m === 'cherry_pick') { color = '#f97316'; emoji = '🍒 '; }
+    if (m === 'pot') { color = '#f59e0b'; emoji = '🍯 '; }
+    if (m === 'nutcracker') { color = '#a855f7'; emoji = '🔨 '; }
+    if (m === 'hold' || m === 'hold_mixed') { color = '#22c55e'; emoji = '🤝 '; label = 'HOLD'; }
 
     return (
       <span style={{
@@ -77,7 +79,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         borderRadius: 4, padding: '1px 8px', fontSize: 11, fontWeight: 700,
         textTransform: 'uppercase', letterSpacing: '0.06em', marginLeft: 8,
       }}>
-        {label}
+        {emoji}{label}
       </span>
     );
   };
