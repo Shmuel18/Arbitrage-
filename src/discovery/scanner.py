@@ -84,8 +84,8 @@ class Scanner:
 
                 # Sort all by immediate net for display (next payment only — no hourly normalization)
                 all_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
-                # Sort qualified by immediate net edge for execution (best immediate profit first)
-                qualified_opps.sort(key=lambda o: o.immediate_net_pct, reverse=True)
+                # Sort qualified by net_edge_pct for execution (includes funding income for cherry_pick)
+                qualified_opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
 
                 # Display top 5: qualified first, then fill with display-only
                 display_qualified = [o for o in all_opps if o.qualified][:5]
