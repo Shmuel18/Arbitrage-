@@ -1638,6 +1638,104 @@ class ExecutionController:
                         paid, received = self._estimate_funding_totals(trade)
                         trade.funding_paid_total = paid
                         trade.funding_received_total = received
+
+            # ── Reconcile with ACTUAL exchange funding history ────────────
+            # Fetch real funding payments from both exchanges for the trade window.
+            # This overrides the bot's internal estimate (which was based on rates
+            # snapshotted at entry) with what the exchange actually settled.
+            _since_ms = int(trade.opened_at.timestamp() * 1000) if trade.opened_at else None
+            # Add a small buffer after close so delayed settlements are captured
+            _until_ms = int((trade.closed_at.timestamp() + 300) * 1000) if trade.closed_at else None
+            _real_funding_source = "estimate"
+            _real_funding_long: Optional[Dict] = None
+            _real_funding_short: Optional[Dict] = None
+            _long_net: float = 0.0
+            _short_net: float = 0.0
+            if _since_ms and long_adapter and short_adapter:
+                try:
+                    _real_funding_long, _real_funding_short = await asyncio.gather(
+                        long_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
+                        short_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
+                        return_exceptions=True,
+                    )
+                except Exception as _rfe:
+                    logger.debug(f"[{trade.symbol}] Funding reconcile gather failed: {_rfe}")
+
+            _long_hist_ok = (
+                isinstance(_real_funding_long, dict)
+                and _real_funding_long.get("source") == "exchange"
+            )
+            _short_hist_ok = (
+                isinstance(_real_funding_short, dict)
+                and _real_funding_short.get("source") == "exchange"
+            )
+
+            if _long_hist_ok or _short_hist_ok:
+                _long_net = _real_funding_long.get("net_usd", 0.0) if _long_hist_ok else 0.0
+                _short_net = _real_funding_short.get("net_usd", 0.0) if _short_hist_ok else 0.0
+                # If only one side responded but the other didn't, log which is missing
+                if _long_hist_ok and not _short_hist_ok:
+                    logger.warning(
+                        f"[{trade.symbol}] Real funding: {trade.long_exchange} responded "
+                        f"(${_long_net:+.4f}) but {trade.short_exchange} unavailable — "
+                        f"using estimate for short side",
+                        extra={"trade_id": trade.trade_id},
+                    )
+                    _short_net = float(trade.funding_received_total or 0) - float(trade.funding_paid_total or 0) - _long_net
+                elif _short_hist_ok and not _long_hist_ok:
+                    logger.warning(
+                        f"[{trade.symbol}] Real funding: {trade.short_exchange} responded "
+                        f"(${_short_net:+.4f}) but {trade.long_exchange} unavailable — "
+                        f"using estimate for long side",
+                        extra={"trade_id": trade.trade_id},
+                    )
+                    _long_net = float(trade.funding_received_total or 0) - float(trade.funding_paid_total or 0) - _short_net
+
+                _real_net_total = _long_net + _short_net
+                _est_net = float((trade.funding_received_total or Decimal("0")) - (trade.funding_paid_total or Decimal("0")))
+                logger.info(
+                    f"[{trade.symbol}] Funding reconcile: "
+                    f"estimated=${_est_net:+.4f}  real=${_real_net_total:+.4f}  "
+                    f"(long={trade.long_exchange}:${_long_net:+.4f}  short={trade.short_exchange}:${_short_net:+.4f})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "funding_reconcile"},
+                )
+                # Override estimates with real values
+                if _real_net_total >= 0:
+                    trade.funding_received_total = Decimal(str(round(_real_net_total, 8)))
+                    trade.funding_paid_total = Decimal("0")
+                else:
+                    trade.funding_received_total = Decimal("0")
+                    trade.funding_paid_total = Decimal(str(round(abs(_real_net_total), 8)))
+                _real_funding_source = "exchange"
+
+                # Log per-exchange breakdown
+                if _long_hist_ok and _real_funding_long.get("payments"):
+                    _long_pmts = _real_funding_long["payments"]
+                    logger.info(
+                        f"[{trade.symbol}] {trade.long_exchange} funding ({len(_long_pmts)} payment(s)): "
+                        + "  ".join(
+                            f"${p['amount']:+.4f} @ {datetime.fromtimestamp(p['timestamp']/1000, tz=timezone.utc).strftime('%H:%M:%S')}"
+                            for p in _long_pmts
+                        ),
+                        extra={"trade_id": trade.trade_id},
+                    )
+                if _short_hist_ok and _real_funding_short.get("payments"):
+                    _short_pmts = _real_funding_short["payments"]
+                    logger.info(
+                        f"[{trade.symbol}] {trade.short_exchange} funding ({len(_short_pmts)} payment(s)): "
+                        + "  ".join(
+                            f"${p['amount']:+.4f} @ {datetime.fromtimestamp(p['timestamp']/1000, tz=timezone.utc).strftime('%H:%M:%S')}"
+                            for p in _short_pmts
+                        ),
+                        extra={"trade_id": trade.trade_id},
+                    )
+            else:
+                logger.info(
+                    f"[{trade.symbol}] Funding reconcile: exchange history unavailable — using bot estimate "
+                    f"(${float((trade.funding_received_total or Decimal('0')) - (trade.funding_paid_total or Decimal('0'))):+.4f})",
+                    extra={"trade_id": trade.trade_id},
+                )
+
             await self._redis.delete_trade_state(trade.trade_id)
             del self._active_trades[trade.trade_id]
 
@@ -1718,9 +1816,16 @@ class ExecutionController:
                 f"{funding_rates_str}\n"
                 f"  ────────── PRICE BASIS ──────────\n"
                 f"  Basis:      {_basis_pnl_str}\n"
+                f"  ────────── FUNDING P&L [{_real_funding_source.upper()}] ──────────\n"
+                + (
+                    f"  {trade.long_exchange} (long):   ${_long_net:+.4f}\n"
+                    f"  {trade.short_exchange} (short):  ${_short_net:+.4f}\n"
+                    if _real_funding_source == "exchange" and _real_funding_long and _real_funding_short
+                    else ""
+                ) +
+                f"  Funding:    +${float(funding_income):.4f} income  -${float(funding_cost):.4f} cost  = ${float(funding_net):.4f} net\n"
                 f"  ────────── TOTALS ──────────\n"
                 f"  Price PnL:  ${float(price_pnl):.4f}  (long=${float(long_pnl):.4f} + short=${float(short_pnl):.4f})\n"
-                f"  Funding:    +${float(funding_income):.4f} income  -${float(funding_cost):.4f} cost  = ${float(funding_net):.4f} net\n"
                 f"  Fees:       -${float(total_fees):.4f}\n"
                 f"  Invested:   ${float(invested):.2f}\n"
                 f"  ────────────────────────────────\n"
@@ -1764,6 +1869,10 @@ class ExecutionController:
                 entry_funding_short=trade.short_funding_rate,
                 exit_funding_long=exit_funding_long_rate,
                 exit_funding_short=exit_funding_short_rate,
+                # Real exchange data (if available)
+                funding_source=_real_funding_source,
+                long_funding_net_real=_long_net if _real_funding_source == "exchange" else None,
+                short_funding_net_real=_short_net if _real_funding_source == "exchange" else None,
             )
 
             # ── Publish PnL data point to Redis for frontend chart ──

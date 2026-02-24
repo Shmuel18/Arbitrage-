@@ -1070,6 +1070,94 @@ class ExchangeAdapter:
             "used":  Decimal(str(usdt.get("used", 0) or 0)),
         }
 
+    async def fetch_funding_history(
+        self,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        until_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Fetch actual funding payments from the exchange for a symbol, filtered by time range.
+
+        Returns a dict:
+            {
+                "net_usd":      float,   # positive = received, negative = paid
+                "received_usd": float,   # sum of positive payments
+                "paid_usd":     float,   # sum of negative payments (abs value)
+                "payments":     list,    # raw list of {timestamp, amount, rate?, info}
+                "source":       str,     # "exchange" | "unavailable"
+            }
+        """
+        resolved = self._resolve_symbol(symbol)
+        payments: List[Dict] = []
+
+        try:
+            # ── Binance: uses fetch_income_history with type='FUNDING_FEE' ──
+            if self.exchange_id in ("binanceusdm", "binance", "binancecoinm"):
+                has_income = getattr(self._exchange, "has", {}).get("fetchIncomeHistory", False)
+                if has_income:
+                    params: Dict[str, Any] = {"type": "FUNDING_FEE"}
+                    if since_ms:
+                        params["startTime"] = since_ms
+                    if until_ms:
+                        params["endTime"] = until_ms
+                    raw = await self._exchange.fetch_income_history(resolved, params=params)
+                    for r in (raw or []):
+                        ts = r.get("timestamp") or r.get("time", 0)
+                        if since_ms and ts < since_ms:
+                            continue
+                        if until_ms and ts > until_ms:
+                            continue
+                        payments.append({
+                            "timestamp": ts,
+                            "amount": float(r.get("amount", 0) or 0),
+                            "info": r.get("info", {}),
+                        })
+
+            # ── All others: ccxt fetch_funding_history ──
+            elif getattr(self._exchange, "has", {}).get("fetchFundingHistory", False):
+                raw = await self._exchange.fetch_funding_history(
+                    resolved, since=since_ms, limit=50
+                )
+                for r in (raw or []):
+                    ts = r.get("timestamp", 0) or 0
+                    if since_ms and ts < (since_ms - 60_000):  # 1 min tolerance
+                        continue
+                    if until_ms and ts > (until_ms + 60_000):
+                        continue
+                    amt = float(r.get("amount", 0) or 0)
+                    payments.append({
+                        "timestamp": ts,
+                        "amount": amt,
+                        "info": r.get("info", {}),
+                    })
+
+        except Exception as e:
+            logger.warning(
+                f"[{self.exchange_id}] fetch_funding_history({symbol}) failed: {e}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return {
+                "net_usd": 0.0, "received_usd": 0.0, "paid_usd": 0.0,
+                "payments": [], "source": "unavailable",
+            }
+
+        if not payments:
+            return {
+                "net_usd": 0.0, "received_usd": 0.0, "paid_usd": 0.0,
+                "payments": payments, "source": "unavailable",
+            }
+
+        received = sum(p["amount"] for p in payments if p["amount"] > 0)
+        paid_abs = sum(abs(p["amount"]) for p in payments if p["amount"] < 0)
+        net = sum(p["amount"] for p in payments)
+        return {
+            "net_usd": net,
+            "received_usd": received,
+            "paid_usd": paid_abs,
+            "payments": payments,
+            "source": "exchange",
+        }
+
     async def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         symbols = [self._resolve_symbol(symbol)] if symbol else None
 
