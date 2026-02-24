@@ -125,6 +125,8 @@ class TradeRecord:
     fees_paid_total: Optional[Decimal] = None
     funding_received_total: Optional[Decimal] = None
     funding_paid_total: Optional[Decimal] = None
+    long_taker_fee: Optional[Decimal] = None
+    short_taker_fee: Optional[Decimal] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     mode: str = "hold"                     # "hold" or "cherry_pick"

@@ -454,7 +454,11 @@ class ExecutionController:
                 except Exception:
                     entry_price_short = opp.reference_price  # last resort
 
-            entry_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
+            long_spec = await long_adapter.get_instrument_spec(opp.symbol)
+            short_spec = await short_adapter.get_instrument_spec(opp.symbol)
+
+            entry_fees = self._extract_fee(long_fill, long_spec.taker_fee) + \
+                         self._extract_fee(short_fill, short_spec.taker_fee)
 
             # Entry price basis: (long_price − short_price) / short_price × 100
             # Positive = long was more expensive than short at entry.
@@ -496,7 +500,7 @@ class ExecutionController:
                     if trim_fill:
                         trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
                         long_filled_qty -= trimmed
-                        trim_fee = self._extract_fee(trim_fill)
+                        trim_fee = self._extract_fee(trim_fill, long_spec.taker_fee)
                         entry_fees += trim_fee
                         logger.info(
                             f"✅ Delta corrected: trimmed {trimmed} on {opp.long_exchange}, "
@@ -530,7 +534,7 @@ class ExecutionController:
                     if trim_fill:
                         trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
                         short_filled_qty -= trimmed
-                        trim_fee = self._extract_fee(trim_fill)
+                        trim_fee = self._extract_fee(trim_fill, short_spec.taker_fee)
                         entry_fees += trim_fee
                         logger.info(
                             f"✅ Delta corrected: trimmed {trimmed} on {opp.short_exchange}, "
@@ -569,6 +573,8 @@ class ExecutionController:
                 entry_price_short=entry_price_short,
                 entry_basis_pct=entry_basis_pct,
                 fees_paid_total=entry_fees,
+                long_taker_fee=long_spec.taker_fee,
+                short_taker_fee=short_spec.taker_fee,
                 opened_at=datetime.now(timezone.utc),
                 mode=opp.mode,
                 exit_before=opp.exit_before,
@@ -1511,7 +1517,20 @@ class ExecutionController:
                 except Exception:
                     pass
 
-            close_fees = self._extract_fee(long_fill) + self._extract_fee(short_fill)
+            # Use stored taker fees as fallback for extract_fee
+            fallback_long = trade.long_taker_fee
+            fallback_short = trade.short_taker_fee
+            
+            # If not in record (old trades), fetch from adapter
+            if fallback_long is None and long_adapter:
+                _ls = await long_adapter.get_instrument_spec(trade.symbol)
+                fallback_long = _ls.taker_fee
+            if fallback_short is None and short_adapter:
+                _ss = await short_adapter.get_instrument_spec(trade.symbol)
+                fallback_short = _ss.taker_fee
+
+            close_fees = self._extract_fee(long_fill, fallback_long) + \
+                         self._extract_fee(short_fill, fallback_short)
             total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
             trade.fees_paid_total = total_fees
             if trade.funding_paid_total is None and trade.funding_received_total is None:
@@ -1749,12 +1768,15 @@ class ExecutionController:
         return None
 
     @staticmethod
-    def _extract_fee(order: dict) -> Decimal:
+    def _extract_fee(order: dict, fallback_rate: Optional[Decimal] = None) -> Decimal:
         """Extract fee cost in USDT from a CCXT order dict.
 
         Some exchanges return fees in the base currency (e.g. CYBER) rather than USDT.
         When that happens we convert using the order's average fill price so the
         total_fees figure is always denominated in USDT.
+
+        If the exchange doesn't provide fee data in the order response (common),
+        we use the fallback_rate (if provided) multiplied by the fill cost.
         """
         avg_price = Decimal("0")
         try:
@@ -1787,6 +1809,15 @@ class ExecutionController:
             for f in fees:
                 if isinstance(f, dict) and f.get("cost") is not None:
                     total += _cost_to_usdt(f)
+
+        # ── Fallback Calculation ──
+        # If total is still 0 and we have a fallback rate, estimate it.
+        # This fixes the "$0.00 fees" issue on Binance/Bitget/Gate.
+        if total == 0 and fallback_rate is not None and fallback_rate > 0:
+            filled = Decimal(str(order.get("filled", 0) or 0))
+            if filled > 0 and avg_price > 0:
+                total = filled * avg_price * fallback_rate
+
         return total
 
     @staticmethod
@@ -2038,6 +2069,8 @@ class ExecutionController:
             "entry_basis_pct": str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None,
             "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
             "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
+            "long_taker_fee": str(trade.long_taker_fee) if trade.long_taker_fee is not None else None,
+            "short_taker_fee": str(trade.short_taker_fee) if trade.short_taker_fee is not None else None,
             "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
             "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
             "fees_paid_total": str(trade.fees_paid_total) if trade.fees_paid_total is not None else None,
@@ -2067,6 +2100,8 @@ class ExecutionController:
                 entry_basis_pct=Decimal(data["entry_basis_pct"]) if data.get("entry_basis_pct") else None,
                 long_funding_rate=Decimal(data["long_funding_rate"]) if data.get("long_funding_rate") else None,
                 short_funding_rate=Decimal(data["short_funding_rate"]) if data.get("short_funding_rate") else None,
+                long_taker_fee=Decimal(data["long_taker_fee"]) if data.get("long_taker_fee") else None,
+                short_taker_fee=Decimal(data["short_taker_fee"]) if data.get("short_taker_fee") else None,
                 entry_price_long=Decimal(data["entry_price_long"]) if data.get("entry_price_long") else None,
                 entry_price_short=Decimal(data["entry_price_short"]) if data.get("entry_price_short") else None,
                 fees_paid_total=Decimal(data["fees_paid_total"]) if data.get("fees_paid_total") else None,
