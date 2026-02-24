@@ -725,6 +725,12 @@ class ExecutionController:
         upgrade_funding_lock_secs = getattr(
             self._cfg.trading_params, 'upgrade_funding_lock_secs', 180
         )
+        # For nutcracker trades, use the full entry window as the lock period.
+        # We entered specifically to collect the imminent payment — any upgrade
+        # that exits before that payment fires is always a loss.
+        if trade.mode == "nutcracker":
+            entry_offset = self._cfg.trading_params.entry_offset_seconds
+            upgrade_funding_lock_secs = max(upgrade_funding_lock_secs, entry_offset)
         if upgrade_funding_lock_secs > 0:
             now_ms = _time.time() * 1000
             # Prefer live cache timestamps; fall back to TradeRecord fields
@@ -1580,10 +1586,32 @@ class ExecutionController:
                         trade.funding_received_total = Decimal("0")
                         trade.funding_paid_total = abs(trade.funding_collected_usd)
                 else:
-                    # Fallback: estimate from entry rates (single-payment approximation)
-                    paid, received = self._estimate_funding_totals(trade)
-                    trade.funding_paid_total = paid
-                    trade.funding_received_total = received
+                    # Fallback: estimate from entry rates — BUT only if we actually
+                    # held through a funding payment. If closed before next_funding_time,
+                    # no payment fired so funding P&L is zero.
+                    next_long_ms = trade.next_funding_long.timestamp() * 1000 if trade.next_funding_long else None
+                    next_short_ms = trade.next_funding_short.timestamp() * 1000 if trade.next_funding_short else None
+                    earliest_funding_ms: Optional[float] = None
+                    if next_long_ms is not None and next_short_ms is not None:
+                        earliest_funding_ms = min(next_long_ms, next_short_ms)
+                    elif next_long_ms is not None:
+                        earliest_funding_ms = next_long_ms
+                    elif next_short_ms is not None:
+                        earliest_funding_ms = next_short_ms
+                    closed_ms = trade.closed_at.timestamp() * 1000 if trade.closed_at else None
+                    if earliest_funding_ms is not None and closed_ms is not None and closed_ms < earliest_funding_ms:
+                        # Closed before any payment fired — no funding to report
+                        logger.info(
+                            f"[{trade.symbol}] Closed {(earliest_funding_ms - closed_ms)/1000:.0f}s before funding "
+                            f"— funding P&L = $0 (not collected)",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol}
+                        )
+                        trade.funding_paid_total = Decimal("0")
+                        trade.funding_received_total = Decimal("0")
+                    else:
+                        paid, received = self._estimate_funding_totals(trade)
+                        trade.funding_paid_total = paid
+                        trade.funding_received_total = received
             await self._redis.delete_trade_state(trade.trade_id)
             del self._active_trades[trade.trade_id]
 
