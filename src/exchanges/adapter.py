@@ -39,6 +39,9 @@ class ExchangeAdapter:
         self._ws_funding_disabled_logged = False
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
         self._funding_intervals: Dict[str, int] = {}  # symbol → interval hours (from exchange API)
+        # Candidate tracking for interval change confirmation (avoids false changes from
+        # CCXT computing interval = (next_funding_ts - now) / 3600 near payment times)
+        self._interval_change_candidates: Dict[str, tuple] = {}  # symbol → (candidate_hours, count)
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
 
     # ── Lifecycle ────────────────────────────────────────────────
@@ -887,51 +890,85 @@ class ExchangeAdapter:
     def _get_funding_interval(self, symbol: str, funding_data: dict) -> int:
         """Detect funding interval in hours from CCXT data.
 
-        Dynamically updates stored intervals when live data reports a change
-        (exchanges can adjust intervals based on market conditions).
+        Priority:
+          1) Raw API info dict — most reliable (exchange's own field, not computed)
+             • Gate.io:  info.funding_interval  (seconds, snake_case)
+             • Bybit:    info.fundingInterval   (minutes, camelCase)
+             • Binance:  info.fundingIntervalHours
+          2) CCXT normalized 'interval' string (e.g. '1h', '8h') — used only when
+             raw info is absent.  CAUTION: CCXT may compute this as
+             (next_funding_ts - now) / 3600, giving a spuriously small value near
+             funding payment times (e.g. '1h' when exchange is actually 8h).
+          3) Market info (static, loaded at startup)
+          4) Pre-fetched Binance fundingInfo table
+          5) Default 8h
+
+        Change-confirmation guard: a detected interval different from the stored
+        value must appear in 2 consecutive polls before being accepted.  This
+        filters transient CCXT mis-computations near payment events.
         """
         detected: int | None = None
 
-        # 1) CCXT normalized 'interval' field (e.g. '1h', '4h', '8h')
-        interval_str = funding_data.get("interval") or ""
-        if interval_str:
-            try:
-                detected = int(interval_str.replace("h", ""))
-            except ValueError:
-                pass
-
-        # 2) Raw API info — Bybit fundingInterval (minutes),
-        #    Binance fundingIntervalHours, Gate.io funding_interval, etc.
-        if detected is None:
-            info = funding_data.get("info", {})
-            if isinstance(info, dict):
-                # Bybit: fundingInterval in minutes
+        # 1) Raw API info — highest priority; exchange provides explicit field
+        info = funding_data.get("info", {}) or {}
+        if isinstance(info, dict):
+            # Gate.io: funding_interval in seconds (snake_case)
+            fi_sec = info.get("funding_interval")
+            if fi_sec is not None:
+                try:
+                    seconds = int(fi_sec)
+                    if seconds > 0:
+                        detected = max(1, seconds // 3600)
+                except (ValueError, TypeError):
+                    pass
+            # Bybit: fundingInterval in minutes (camelCase)
+            if detected is None:
                 fi_min = info.get("fundingInterval")
-                if fi_min:
+                if fi_min is not None:
                     try:
                         detected = max(1, int(fi_min) // 60)
                     except (ValueError, TypeError):
                         pass
-                # Binance: fundingIntervalHours
-                if detected is None:
-                    fi_h = info.get("fundingIntervalHours")
-                    if fi_h:
-                        try:
-                            detected = int(fi_h)
-                        except (ValueError, TypeError):
-                            pass
+            # Binance: fundingIntervalHours
+            if detected is None:
+                fi_h = info.get("fundingIntervalHours")
+                if fi_h is not None:
+                    try:
+                        detected = int(fi_h)
+                    except (ValueError, TypeError):
+                        pass
+
+        # 2) CCXT normalized 'interval' string — fallback only
+        #    (may be computed from timestamps, unreliable near payment time)
+        if detected is None:
+            interval_str = funding_data.get("interval") or ""
+            if interval_str:
+                try:
+                    detected = int(interval_str.replace("h", ""))
+                except ValueError:
+                    pass
 
         # 3) Fallback: market info (static from exchange load)
         if detected is None:
             mkt = self._exchange.markets.get(symbol)
             if mkt:
-                mkt_info = mkt.get("info", {})
-                fi_min = mkt_info.get("fundingInterval")
-                if fi_min:
+                mkt_info = mkt.get("info", {}) or {}
+                # Gate.io market info also uses snake_case seconds
+                fi_sec = mkt_info.get("funding_interval")
+                if fi_sec is not None:
                     try:
-                        detected = max(1, int(fi_min) // 60)
+                        seconds = int(fi_sec)
+                        if seconds > 0:
+                            detected = max(1, seconds // 3600)
                     except (ValueError, TypeError):
                         pass
+                if detected is None:
+                    fi_min = mkt_info.get("fundingInterval")
+                    if fi_min:
+                        try:
+                            detected = max(1, int(fi_min) // 60)
+                        except (ValueError, TypeError):
+                            pass
 
         # 4) Pre-fetched from Binance /fapi/v1/fundingInfo
         if detected is None and symbol in self._funding_intervals:
@@ -941,16 +978,42 @@ class ExchangeAdapter:
         if detected is None:
             return 8
 
-        # ── Dynamic update: persist detected interval & log changes ──
+        # ── Change-confirmation guard ──────────────────────────────────
+        # If the detected interval differs from the stored one, require it
+        # to appear in 2 CONSECUTIVE polls before accepting the change.
+        # This prevents transient CCXT mis-computations (e.g. near payment
+        # time) from permanently flipping the stored interval.
         old = self._funding_intervals.get(symbol)
         if old is not None and old != detected:
+            candidate, count = self._interval_change_candidates.get(symbol, (detected, 0))
+            if candidate == detected:
+                count += 1
+            else:
+                # Different candidate — reset counter
+                count = 1
+            self._interval_change_candidates[symbol] = (detected, count)
+            if count < 2:
+                # Not yet confirmed — keep old interval, log a debug notice
+                logger.debug(
+                    f"⏱️ Interval candidate {detected}h for {symbol} on {self.exchange_id} "
+                    f"(stored={old}h, need 2 consecutive, have {count})",
+                    extra={"exchange": self.exchange_id, "symbol": symbol,
+                           "action": "interval_candidate"},
+                )
+                return old  # keep old until confirmed
+            # Confirmed change
+            del self._interval_change_candidates[symbol]
             logger.warning(
                 f"⏱️ Funding interval CHANGED for {symbol} on {self.exchange_id}: "
-                f"{old}h → {detected}h",
+                f"{old}h → {detected}h (confirmed over 2 polls)",
                 extra={"exchange": self.exchange_id, "symbol": symbol,
                        "action": "interval_changed",
                        "old_hours": old, "new_hours": detected},
             )
+        else:
+            # No change — clear any stale candidate
+            self._interval_change_candidates.pop(symbol, None)
+
         self._funding_intervals[symbol] = detected
         return detected
 
