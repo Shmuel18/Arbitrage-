@@ -54,7 +54,7 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
         <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
           {t.totalTradesLabel}: <span style={{ color: '#60a5fa' }}>{tradeCount}</span>
           <span style={{ margin: '0 8px', opacity: 0.3 }}>|</span>
-          {t.winRate}: <span style={{ color: winRate >= '50.0' ? 'var(--green)' : 'var(--red)' }}>{winRate}%</span>
+          {t.winRate}: <span style={{ color: parseFloat(winRate) >= 50 ? 'var(--green)' : 'var(--red)' }}>{winRate}%</span>
         </div>
       </div>
 

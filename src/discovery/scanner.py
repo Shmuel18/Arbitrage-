@@ -250,6 +250,9 @@ class Scanner:
             self._cache_exchange_ids = exchange_ids
         common_symbols = self._common_symbols_cache
 
+        # Batch cooldown check: one Redis pipeline instead of N round-trips
+        cooled_symbols = await self._redis.get_cooled_down_symbols(list(common_symbols))
+
         # Parallelism for faster scanning
         parallelism = self._cfg.execution.scan_parallelism
         if logger.isEnabledFor(logging.DEBUG):
@@ -260,7 +263,7 @@ class Scanner:
         # Scan symbols in parallel batches
         symbol_list = list(common_symbols)
         scan_tasks = [
-            self._scan_symbol(symbol, adapters, exchange_ids)
+            self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols)
             for symbol in symbol_list
         ]
         
@@ -294,11 +297,12 @@ class Scanner:
         return results
 
     async def _scan_symbol(
-        self, symbol: str, adapters: Dict[str, "ExchangeAdapter"], exchange_ids: List[str]
+        self, symbol: str, adapters: Dict[str, "ExchangeAdapter"], exchange_ids: List[str],
+        cooled_symbols: set[str] = frozenset(),
     ) -> List[OpportunityCandidate]:
         """Scan a single symbol for opportunities using WebSocket-cached rates."""
-        # Cooldown check
-        if await self._redis.is_cooled_down(symbol):
+        # Cooldown check (O(1) set lookup — batch-fetched in scan_all)
+        if symbol in cooled_symbols:
             return []
 
         # Fetch funding from in-memory cache (updated by WebSocket)

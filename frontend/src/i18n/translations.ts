@@ -136,6 +136,31 @@ export interface Translations {
   pot: string;
   nutcracker: string;
   hold: string;
+
+  // StatsCards sub-labels
+  subTotalAcross: string;
+  subProfitableSession: string;
+  subLossSession: string;
+  subPositionsOpen: string;
+  subNoPositions: string;
+  subScanningMarkets: string;
+  subBotIdle: string;
+  subCumulativePnl: string;
+  subPerClosedTrade: string;
+  subAllTimeExec: string;
+
+  // PositionsTable column headers
+  colExchange: string;
+  colEntryPct: string;
+  colFundPct: string;
+
+  // RightPanel column headers
+  colBridge: string;
+  colMode: string;
+  colNextFunding: string;
+
+  // RecentTradesPanel hints
+  clickRowForDetails: string;
 }
 
 const en: Translations = {
@@ -262,6 +287,31 @@ const en: Translations = {
   pot: 'POT',
   nutcracker: 'NUTCRACKER',
   hold: 'HOLD',
+
+  // StatsCards sub-labels
+  subTotalAcross: 'Total across all exchanges',
+  subProfitableSession: '▲ Profitable session',
+  subLossSession: '▼ Loss session',
+  subPositionsOpen: 'open',
+  subNoPositions: 'No open positions',
+  subScanningMarkets: 'Scanning markets',
+  subBotIdle: 'Bot is idle',
+  subCumulativePnl: 'Cumulative P&L',
+  subPerClosedTrade: 'Per closed trade',
+  subAllTimeExec: 'All-time executions',
+
+  // PositionsTable column headers
+  colExchange: 'Ex',
+  colEntryPct: 'Entry%',
+  colFundPct: 'Fund%',
+
+  // RightPanel column headers
+  colBridge: 'BRIDGE',
+  colMode: 'MODE',
+  colNextFunding: 'NEXT FUNDING',
+
+  // RecentTradesPanel hints
+  clickRowForDetails: 'Click row for details',
 };
 
 const he: Translations = {
@@ -388,6 +438,31 @@ const he: Translations = {
   pot: 'סיר דבש',
   nutcracker: 'מפצח אגוזים',
   hold: 'החזקה',
+
+  // StatsCards sub-labels
+  subTotalAcross: 'סה״כ בכל הבורסאות',
+  subProfitableSession: '▲ סשן רווחי',
+  subLossSession: '▼ סשן הפסדי',
+  subPositionsOpen: 'פתוחות',
+  subNoPositions: 'אין פוזיציות פתוחות',
+  subScanningMarkets: 'סורק שווקים',
+  subBotIdle: 'הבוט לא פעיל',
+  subCumulativePnl: 'רווח מצטבר',
+  subPerClosedTrade: 'ממוצע לעסקה',
+  subAllTimeExec: 'סה״כ ביצועים',
+
+  // PositionsTable column headers
+  colExchange: 'בורסה',
+  colEntryPct: '% כניסה',
+  colFundPct: '% מימון',
+
+  // RightPanel column headers
+  colBridge: 'גשר',
+  colMode: 'מצב',
+  colNextFunding: 'מימון הבא',
+
+  // RecentTradesPanel hints
+  clickRowForDetails: 'לחץ על שורה לפרטים',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

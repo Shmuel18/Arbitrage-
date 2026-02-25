@@ -52,11 +52,11 @@ from src.execution._util_mixin import _UtilMixin
 
 logger = get_logger("execution")
 
-# Single source of truth — imported by all mixin modules via controller.py
-_ORDER_TIMEOUT_SEC = 10
-
-
 class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
+    # ── Cross-mixin constants (shared by _UtilMixin / _CloseMixin) ──
+    _TIMEOUT_COOLDOWN_SEC = 600          # 10 min cooldown after first order timeout
+    _TIMEOUT_BLACKLIST_THRESHOLD = 2     # blacklist after N consecutive timeouts
+
     def __init__(
         self,
         config: "Config",

@@ -12,13 +12,6 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
   const { t } = useSettings();
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
-  const formatCurrency = (value?: string | null) => {
-    if (!value) return '--';
-    const n = Number(value);
-    if (Number.isNaN(n)) return '--';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n);
-  };
-
   const formatPrice = (value?: string | null) => {
     if (!value) return '--';
     const n = Number(value);
@@ -82,7 +75,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
         {t.last10Trades}
         {trades.length > 0 && (
           <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-            Click row for details
+            {t.clickRowForDetails}
           </span>
         )}
       </div>

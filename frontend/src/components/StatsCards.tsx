@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 
 interface StatsCardsProps {
@@ -131,8 +131,10 @@ const StatsCards: React.FC<StatsCardsProps> = ({
 }) => {
   const { t } = useSettings();
 
-  const fmt = (v: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v);
+  const fmt = useMemo(() => {
+    const nf = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
+    return (v: number) => nf.format(v);
+  }, []);
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
   return (
@@ -140,7 +142,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.totalBalance}
         value={fmt(totalBalance)}
-        sub="Total across all exchanges"
+        sub={t.subTotalAcross}
         icon={<IconWallet />}
         accentVar="--accent"
         accentHex="#3b82f6"
@@ -150,7 +152,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.dailyPnl}
         value={fmt(dailyPnl)}
-        sub={dailyPnl >= 0 ? '▲ Profitable session' : '▼ Loss session'}
+        sub={dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession}
         subColor={dailyPnl >= 0 ? 'var(--green)' : 'var(--red)'}
         icon={<IconTrendUp />}
         accentVar="--green"
@@ -160,7 +162,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.activeTrades}
         value={String(activeTrades)}
-        sub={activeTrades > 0 ? `${activeTrades} position${activeTrades !== 1 ? 's' : ''} open` : 'No open positions'}
+        sub={activeTrades > 0 ? `${activeTrades} ${t.subPositionsOpen}` : t.subNoPositions}
         icon={<IconActivity />}
         accentVar="--teal"
         accentHex="#06b6d4"
@@ -170,7 +172,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.systemStatus}
         value={systemRunning ? t.running : t.stopped}
-        sub={systemRunning ? 'Scanning markets' : 'Bot is idle'}
+        sub={systemRunning ? t.subScanningMarkets : t.subBotIdle}
         subColor={systemRunning ? 'var(--green)' : 'var(--text-muted)'}
         icon={<IconShield />}
         accentVar="--purple"
@@ -181,7 +183,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.allTimePnl}
         value={fmt(allTimePnl)}
-        sub="Cumulative P&L"
+        sub={t.subCumulativePnl}
         subColor={allTimePnl >= 0 ? 'var(--green)' : 'var(--red)'}
         icon={<IconBarChart />}
         accentVar="--accent"
@@ -201,7 +203,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.avgPnlStat}
         value={fmt(avgPnl)}
-        sub="Per closed trade"
+        sub={t.subPerClosedTrade}
         subColor={avgPnl >= 0 ? 'var(--green)' : 'var(--red)'}
         icon={<IconZap />}
         accentVar="--teal"
@@ -211,7 +213,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
       <StatCard
         label={t.totalTradesLabel}
         value={String(totalTrades)}
-        sub="All-time executions"
+        sub={t.subAllTimeExec}
         icon={<IconLayers />}
         accentVar="--purple"
         accentHex="#8b5cf6"

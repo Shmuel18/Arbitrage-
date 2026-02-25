@@ -5,36 +5,23 @@ Do NOT import this module directly; use ExecutionController from controller.py.
 from __future__ import annotations
 
 import asyncio
-import time as _time
 import json
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from src.core.contracts import (
     ExitReason,
-    OpportunityCandidate,
     OrderRequest,
     OrderSide,
-    Position,
-    TradeMode,
     TradeRecord,
     TradeState,
 )
 from src.core.logging import get_logger
-from src.core.journal import get_journal
-from src.discovery.calculator import calculate_fees
-from src.execution.blacklist import BlacklistManager
-from src.execution.sizer import PositionSizer
 from src.execution import helpers as _h
 
 if TYPE_CHECKING:
-    from src.core.config import Config
-    from src.exchanges.adapter import ExchangeManager
-    from src.storage.redis_client import RedisClient
-    from src.risk.guard import RiskGuard
-    from src.api.publisher import APIPublisher
+    pass  # all attribute access via self (mixin pattern)
 
 logger = get_logger("execution")
 
@@ -370,7 +357,6 @@ class _CloseMixin:
 
             # ── Publish PnL data point to Redis for frontend chart ──
             try:
-                import json as _json
                 pnl_value = float(total_pnl)
                 ts = datetime.now(timezone.utc).timestamp()
                 await self._redis._client.zadd(
@@ -572,6 +558,5 @@ class _CloseMixin:
 
     # ── Helpers ──────────────────────────────────────────────────
 
-    _TIMEOUT_COOLDOWN_SEC = 600        # 10 min cooldown after first order timeout
-    _TIMEOUT_BLACKLIST_THRESHOLD = 2     # blacklist after N consecutive timeouts
+    # _TIMEOUT_COOLDOWN_SEC and _TIMEOUT_BLACKLIST_THRESHOLD live in controller.py
 

@@ -160,6 +160,59 @@ class TradeRecord:
     # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≤ entry_basis_pct
     entry_basis_pct: Optional[Decimal] = None
 
+    # ── Serialization ────────────────────────────────────────────
+
+    _DECIMAL_FIELDS = (
+        "long_qty", "short_qty", "entry_edge_pct", "entry_basis_pct",
+        "long_funding_rate", "short_funding_rate", "long_taker_fee",
+        "short_taker_fee", "entry_price_long", "entry_price_short",
+        "fees_paid_total", "funding_collected_usd",
+    )
+    _DATETIME_FIELDS = ("opened_at",)
+
+    def to_persist_dict(self) -> dict:
+        """Serialise persistent fields to a plain dict for Redis storage."""
+        d: dict = {
+            "symbol": self.symbol,
+            "state": self.state.value if isinstance(self.state, TradeState) else self.state,
+            "mode": self.mode.value if isinstance(self.mode, TradeMode) else self.mode,
+            "long_exchange": self.long_exchange,
+            "short_exchange": self.short_exchange,
+            "funding_collections": self.funding_collections,
+        }
+        for key in self._DECIMAL_FIELDS:
+            val = getattr(self, key)
+            d[key] = str(val) if val is not None else None
+        for key in self._DATETIME_FIELDS:
+            val = getattr(self, key)
+            d[key] = val.isoformat() if val is not None else None
+        return d
+
+    @classmethod
+    def from_persist_dict(cls, trade_id: str, data: dict) -> "TradeRecord":
+        """Reconstruct a TradeRecord from a Redis-stored dict."""
+        kwargs: dict = {
+            "trade_id": trade_id,
+            "symbol": data["symbol"],
+            "state": TradeState(data.get("state", "open")),
+            "mode": TradeMode(data.get("mode", "hold")),
+            "long_exchange": data["long_exchange"],
+            "short_exchange": data["short_exchange"],
+            "funding_collections": int(data.get("funding_collections", 0)),
+        }
+        for key in cls._DECIMAL_FIELDS:
+            raw = data.get(key)
+            kwargs[key] = Decimal(raw) if raw else (
+                Decimal("0") if key == "funding_collected_usd" else None
+            )
+        for key in cls._DATETIME_FIELDS:
+            raw = data.get(key)
+            kwargs[key] = datetime.fromisoformat(raw) if raw else None
+        # Legacy alias (entry_edge_bps → entry_edge_pct).
+        if kwargs.get("entry_edge_pct") is None and data.get("entry_edge_bps"):
+            kwargs["entry_edge_pct"] = Decimal(data["entry_edge_bps"])
+        return cls(**kwargs)
+
     # ── Runtime state (not persisted to Redis) ───────────────────
     # These track in-memory monitoring state across monitor loop cycles.
     # Using field(compare=False, repr=False) keeps them out of equality

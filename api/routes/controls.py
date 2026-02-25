@@ -2,11 +2,12 @@
 Bot Controls API Routes
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 import json
+import os
 
 redis_client = None
 
@@ -19,6 +20,12 @@ router = APIRouter()
 
 class BotCommand(BaseModel):
     action: str  # start, stop, pause, resume
+
+
+_ALLOWED_CONFIG_KEYS = frozenset({
+    "max_concurrent_trades", "min_funding_spread", "strategy",
+    "max_position_usd", "min_edge_pct", "mode",
+})
 
 
 class ConfigUpdate(BaseModel):
@@ -54,7 +61,14 @@ async def update_config(update: ConfigUpdate):
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")
-        
+
+        if update.key not in _ALLOWED_CONFIG_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Config key '{update.key}' is not allowed. "
+                       f"Allowed: {', '.join(sorted(_ALLOWED_CONFIG_KEYS))}",
+            )
+
         # Update config in Redis
         config_key = f"trinity:config:{update.key}"
         await redis_client._client.set(config_key, json.dumps(update.value))
@@ -78,8 +92,12 @@ async def update_config(update: ConfigUpdate):
 
 
 @router.post("/emergency_stop")
-async def emergency_stop():
-    """Emergency stop - close all positions and stop bot"""
+async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
+    """Emergency stop - close all positions and stop bot.
+    Requires X-Emergency-Token header if EMERGENCY_TOKEN env var is set."""
+    expected = os.environ.get("EMERGENCY_TOKEN")
+    if expected and x_emergency_token != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing emergency token")
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")

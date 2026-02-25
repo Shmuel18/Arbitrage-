@@ -5,36 +5,21 @@ Do NOT import this module directly; use ExecutionController from controller.py.
 from __future__ import annotations
 
 import asyncio
-import time as _time
-import json
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 from src.core.contracts import (
-    ExitReason,
-    OpportunityCandidate,
     OrderRequest,
     OrderSide,
-    Position,
     TradeMode,
     TradeRecord,
     TradeState,
 )
 from src.core.logging import get_logger
-from src.core.journal import get_journal
-from src.discovery.calculator import calculate_fees
-from src.execution.blacklist import BlacklistManager
-from src.execution.sizer import PositionSizer
-from src.execution import helpers as _h
 
 if TYPE_CHECKING:
-    from src.core.config import Config
-    from src.exchanges.adapter import ExchangeManager
-    from src.storage.redis_client import RedisClient
-    from src.risk.guard import RiskGuard
-    from src.api.publisher import APIPublisher
+    pass  # all attribute access via self (mixin pattern)
 
 logger = get_logger("execution")
 
@@ -184,27 +169,9 @@ class _UtilMixin:
     # ── Persistence ──────────────────────────────────────────────
 
     async def _persist_trade(self, trade: TradeRecord) -> None:
-        await self._redis.set_trade_state(trade.trade_id, {
-            "symbol": trade.symbol,
-            "state": trade.state.value,
-            "mode": trade.mode,
-            "long_exchange": trade.long_exchange,
-            "short_exchange": trade.short_exchange,
-            "long_qty": str(trade.long_qty),
-            "short_qty": str(trade.short_qty),
-            "entry_edge_pct": str(trade.entry_edge_pct),
-            "entry_basis_pct": str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None,
-            "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
-            "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
-            "long_taker_fee": str(trade.long_taker_fee) if trade.long_taker_fee is not None else None,
-            "short_taker_fee": str(trade.short_taker_fee) if trade.short_taker_fee is not None else None,
-            "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
-            "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
-            "fees_paid_total": str(trade.fees_paid_total) if trade.fees_paid_total is not None else None,
-            "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
-            "funding_collections": trade.funding_collections,
-            "funding_collected_usd": str(trade.funding_collected_usd),
-        })
+        await self._redis.set_trade_state(
+            trade.trade_id, trade.to_persist_dict(),
+        )
 
     async def _recover_trades(self) -> None:
         """Recover active trades from Redis after crash/restart."""
@@ -214,28 +181,7 @@ class _UtilMixin:
             if state_val not in (TradeState.OPEN.value, TradeState.CLOSING.value):
                 continue
 
-            trade = TradeRecord(
-                trade_id=trade_id,
-                symbol=data["symbol"],
-                state=TradeState(state_val),
-                mode=TradeMode(data.get("mode", "hold")),
-                long_exchange=data["long_exchange"],
-                short_exchange=data["short_exchange"],
-                long_qty=Decimal(data["long_qty"]),
-                short_qty=Decimal(data["short_qty"]),
-                entry_edge_pct=Decimal(data.get("entry_edge_pct", data.get("entry_edge_bps", "0"))),
-                entry_basis_pct=Decimal(data["entry_basis_pct"]) if data.get("entry_basis_pct") else None,
-                long_funding_rate=Decimal(data["long_funding_rate"]) if data.get("long_funding_rate") else None,
-                short_funding_rate=Decimal(data["short_funding_rate"]) if data.get("short_funding_rate") else None,
-                long_taker_fee=Decimal(data["long_taker_fee"]) if data.get("long_taker_fee") else None,
-                short_taker_fee=Decimal(data["short_taker_fee"]) if data.get("short_taker_fee") else None,
-                entry_price_long=Decimal(data["entry_price_long"]) if data.get("entry_price_long") else None,
-                entry_price_short=Decimal(data["entry_price_short"]) if data.get("entry_price_short") else None,
-                fees_paid_total=Decimal(data["fees_paid_total"]) if data.get("fees_paid_total") else None,
-                opened_at=datetime.fromisoformat(data["opened_at"]) if data.get("opened_at") else None,
-                funding_collections=int(data.get("funding_collections", 0)),
-                funding_collected_usd=Decimal(data["funding_collected_usd"]) if data.get("funding_collected_usd") else Decimal("0"),
-            )
+            trade = TradeRecord.from_persist_dict(trade_id, data)
             self._register_trade(trade)
             logger.info(
                 f"Recovered trade {trade_id} ({trade.symbol}) state={trade.state.value}",

@@ -1,7 +1,10 @@
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT_DELAY = 30000; // 30s cap
+const BASE_RECONNECT_DELAY = 1000; // 1s base
 
-export const connectWebSocket = (onMessage: (data: any) => void) => {
+export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => void) => {
   // Prevent duplicate connections
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
     return;
@@ -20,6 +23,7 @@ export const connectWebSocket = (onMessage: (data: any) => void) => {
 
   ws.onopen = () => {
     console.log('✅ WebSocket connected');
+    reconnectAttempts = 0; // reset backoff on successful connect
   };
 
   ws.onmessage = (event) => {
@@ -38,25 +42,29 @@ export const connectWebSocket = (onMessage: (data: any) => void) => {
   ws.onclose = () => {
     console.log('❌ WebSocket disconnected');
     ws = null;
-    // Reconnect after 5 seconds, but only if not already scheduled
+    // Exponential backoff with jitter, capped at MAX_RECONNECT_DELAY
     if (!reconnectTimer) {
+      const delay = Math.min(
+        BASE_RECONNECT_DELAY * Math.pow(2, reconnectAttempts) + Math.random() * 500,
+        MAX_RECONNECT_DELAY,
+      );
+      reconnectAttempts++;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         connectWebSocket(onMessage);
-      }, 5000);
+      }, delay);
     }
   };
 };
 
 export const disconnectWebSocket = () => {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
   if (ws) {
     ws.close();
     ws = null;
-  }
-};
-
-export const sendWebSocketMessage = (message: any) => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message));
   }
 };

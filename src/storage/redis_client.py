@@ -117,6 +117,19 @@ class RedisClient:
     async def is_cooled_down(self, symbol: str) -> bool:
         return bool(await self._client.exists(self._key("cooldown", symbol)))
 
+    async def get_cooled_down_symbols(self, symbols: list[str]) -> set[str]:
+        """Batch check: return the subset of *symbols* currently in cooldown.
+
+        Uses a Redis pipeline (one round-trip) instead of N individual EXISTS calls.
+        """
+        if not symbols:
+            return set()
+        pipe = self._client.pipeline()
+        for s in symbols:
+            pipe.exists(self._key("cooldown", s))
+        results = await pipe.execute()
+        return {s for s, exists in zip(symbols, results) if exists}
+
     # ── Distributed lock ─────────────────────────────────────────
 
     async def acquire_lock(self, name: str, timeout: int = 10) -> bool:

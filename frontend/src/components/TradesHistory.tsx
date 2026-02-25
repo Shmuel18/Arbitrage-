@@ -1,3 +1,8 @@
+/**
+ * @deprecated This component is not imported anywhere in the app.
+ * Its functionality has been replaced by RecentTradesPanel.
+ * Kept for reference only — safe to delete.
+ */
 import React, { useState, useEffect } from 'react';
 import { getTrades } from '../services/api';
 import { Trade } from '../types';

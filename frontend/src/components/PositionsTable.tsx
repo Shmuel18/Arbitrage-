@@ -111,11 +111,11 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           <thead>
             <tr style={{ lineHeight: '1.2' }}>
               <th style={{ padding: '6px 8px', textAlign: 'left' }}>{t.symbol}</th>
-              <th style={{ padding: '6px 8px', textAlign: 'left' }}>Ex</th>
+              <th style={{ padding: '6px 8px', textAlign: 'left' }}>{t.colExchange}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.qtyLS}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.sizeUsd}</th>
-              <th style={{ padding: '6px 8px', textAlign: 'right' }}>Entry%</th>
-              <th style={{ padding: '6px 8px', textAlign: 'right' }}>Fund%</th>
+              <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.colEntryPct}</th>
+              <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.colFundPct}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.nextPayout}</th>
               <th style={{ padding: '6px 8px', textAlign: 'center' }}>{t.state}</th>
             </tr>
@@ -129,21 +129,6 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
               </tr>
             ) : (
               positions.map((p) => {
-                const entryVal = Number(p.entry_edge_pct || 0);
-                const currentVal = Number(p.current_spread_pct || 0);
-                
-                const spreadDiff = currentVal - entryVal;
-                const spreadColor = !p.current_spread_pct ? 'text-secondary'
-                  : spreadDiff > 0 ? 'text-green-400'
-                  : spreadDiff < -0.1 ? 'text-red-400'
-                  : 'text-yellow-400';
-                
-                const immediateVal = Number(p.immediate_spread_pct || 0);
-                const immediateColor = !p.immediate_spread_pct ? 'text-secondary'
-                  : immediateVal > 0 ? 'text-green-400'
-                  : immediateVal < -0.1 ? 'text-red-400'
-                  : 'text-yellow-400';
-                  
                 return (
                   <tr key={p.id} className="pos-row--active" style={{ lineHeight: '1.2' }}>
                     <td style={{ padding: '5px 8px', fontWeight: 500 }} className="text-accent">
@@ -154,11 +139,11 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {p.long_exchange?.slice(0,2).toUpperCase()}/{p.short_exchange?.slice(0,2).toUpperCase()}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
-                      {parseFloat(p.long_qty).toPrecision(6)}/{parseFloat(p.short_qty).toPrecision(6)}
+                      {p.long_qty && !isNaN(Number(p.long_qty)) ? Number(p.long_qty).toPrecision(6) : '--'}/{p.short_qty && !isNaN(Number(p.short_qty)) ? Number(p.short_qty).toPrecision(6) : '--'}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
-                      {p.entry_price_long
-                        ? '$' + (parseFloat(p.long_qty) * parseFloat(p.entry_price_long)).toLocaleString('en-US', { maximumFractionDigits: 0 })
+                      {p.entry_price_long && p.long_qty
+                        ? '$' + (Number(p.long_qty) * Number(p.entry_price_long)).toLocaleString('en-US', { maximumFractionDigits: 0 })
                         : '--'}
                     </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">

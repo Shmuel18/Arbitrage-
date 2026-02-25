@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 
@@ -9,6 +9,7 @@ interface TradeDetailModalProps {
 
 const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) => {
   const { t } = useSettings();
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape
   useEffect(() => {
@@ -16,6 +17,29 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
   }, [onClose]);
+
+  // Focus trap: keep focus inside the modal
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusable.length > 0) focusable[0].focus();
+
+    const trapFocus = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab' || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+      } else {
+        if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', trapFocus);
+    return () => document.removeEventListener('keydown', trapFocus);
+  }, []);
 
   // ── Formatters ──────────────────────────────────────────────────
   const usd = (value?: number | string | null, fractions = 2) => {
@@ -121,13 +145,19 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     <>
       <div
         onClick={onClose}
+        aria-hidden="true"
         style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
           zIndex: 1000, backdropFilter: 'blur(4px)',
         }}
       />
 
-      <div style={{
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${t.tradeDetail} — ${trade.symbol}`}
+        style={{
         position: 'fixed', top: '50%', left: '50%',
         transform: 'translate(-50%, -50%)',
         zIndex: 1001,
@@ -174,6 +204,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             </span>
             <button
               onClick={onClose}
+              aria-label="Close dialog"
               style={{
                 background: 'rgba(148,163,184,0.1)', border: 'none', cursor: 'pointer',
                 color: 'var(--text-muted)', fontSize: 18, borderRadius: '50%',

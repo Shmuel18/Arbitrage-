@@ -6,35 +6,24 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
-import json
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 from src.core.contracts import (
-    ExitReason,
     OpportunityCandidate,
     OrderRequest,
     OrderSide,
-    Position,
     TradeMode,
     TradeRecord,
     TradeState,
 )
 from src.core.logging import get_logger
-from src.core.journal import get_journal
-from src.discovery.calculator import calculate_fees
-from src.execution.blacklist import BlacklistManager
-from src.execution.sizer import PositionSizer
 from src.execution import helpers as _h
 
 if TYPE_CHECKING:
-    from src.core.config import Config
-    from src.exchanges.adapter import ExchangeManager
-    from src.storage.redis_client import RedisClient
-    from src.risk.guard import RiskGuard
-    from src.api.publisher import APIPublisher
+    pass  # all attribute access via self (mixin pattern)
 
 logger = get_logger("execution")
 
@@ -176,7 +165,6 @@ class _EntryMixin:
             return
 
         trade_id = str(uuid.uuid4())[:12]
-        self._symbols_entering.add(opp.symbol)
         try:
             # ── Position sizing ──────────────────────────────────
             sizing = await self._sizer.compute(opp, long_adapter, short_adapter)
@@ -513,7 +501,6 @@ class _EntryMixin:
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
-            self._symbols_entering.discard(opp.symbol)
             await self._redis.release_lock(lock_key)
 
     # ── Exit monitor ─────────────────────────────────────────────

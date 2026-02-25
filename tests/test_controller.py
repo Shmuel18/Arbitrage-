@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.contracts import OrderSide, TradeRecord, TradeState
+from src.core.contracts import OrderSide, TradeMode, TradeRecord, TradeState
 from src.execution.controller import ExecutionController
 
 
@@ -174,7 +174,7 @@ def _make_trade(controller, symbol="BTC/USDT", spread_pct="1.0",
         short_qty=Decimal("0.01"),
         entry_edge_pct=Decimal(spread_pct),
         opened_at=now - timedelta(minutes=opened_minutes_ago),
-        mode="hold",
+        mode=TradeMode.HOLD,
     )
     if funding_paid:
         # Set next_funding to the past so funding is considered paid
@@ -611,3 +611,311 @@ class TestUpgrade:
         assert len(controller._active_trades) == 1
         # Expired entry should be cleaned up
         assert "BTC/USDT" not in controller._upgrade_cooldown
+
+
+# ── Tests for _check_exit advanced branches ──────────────────────
+
+class TestCherryPickHardExit:
+    """Cherry-pick trades must close when exit_before is reached."""
+
+    @pytest.mark.asyncio
+    async def test_closes_when_exit_before_reached(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        now = datetime.now(timezone.utc)
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.mode = TradeMode.CHERRY_PICK
+        trade.exit_before = now - timedelta(minutes=1)  # already past
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_does_not_close_before_exit_time(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Cherry-pick should NOT hard-exit if exit_before is still in the future."""
+        now = datetime.now(timezone.utc)
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.3")
+        config.trading_params.exit_offset_seconds = 0
+
+        # High spread so it would HOLD
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            past_ms = (time.time() - 1200) * 1000
+            rate = Decimal("-0.0030") if eid == "exchange_a" else Decimal("0.0030")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.mode = TradeMode.CHERRY_PICK
+        trade.exit_before = now + timedelta(hours=2)  # far in future
+
+        await controller._check_exit(trade)
+
+        # Still open — not yet time to exit
+        assert trade.trade_id in controller._active_trades
+
+
+class TestBasisGuard:
+    """Adverse price basis should delay exit when awaiting favorable basis."""
+
+    @pytest.mark.asyncio
+    async def test_waits_when_spread_low_and_basis_adverse(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Spread < threshold + adverse basis → wait (don't exit yet)."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.exit_offset_seconds = 0
+
+        # Low spread (0.02%)
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        # Set adverse basis: exit_basis < entry_basis
+        # entry_basis_pct = +0.10 (long was more expensive at entry)
+        # Now: long=50000, short=50010 → exit_basis = (50000-50010)/50010*100 ≈ -0.02%
+        # This is adverse: -0.02 < +0.10
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50010.0}
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_basis_pct = Decimal("0.10")
+
+        await controller._check_exit(trade)
+
+        # Should still be open — waiting for basis to improve
+        assert trade.trade_id in controller._active_trades
+        assert trade._exit_wait_start is not None
+
+    @pytest.mark.asyncio
+    async def test_exits_on_basis_timeout(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """After 30 min of adverse basis with low spread → forced exit."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.exit_offset_seconds = 0
+
+        # Low spread (0.02%)
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        # Adverse basis prices
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50010.0}
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_basis_pct = Decimal("0.10")
+        # Pre-set wait start to 31 minutes ago → timeout should fire
+        trade._exit_wait_start = datetime.now(timezone.utc) - timedelta(minutes=31)
+
+        await controller._check_exit(trade)
+
+        # Should have been closed (basis timeout)
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_exits_immediately_when_basis_favorable(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Spread < threshold + favorable basis → exit immediately."""
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.5")
+        config.trading_params.exit_offset_seconds = 0
+
+        # Low spread (0.02%)
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        # Favorable basis: long rose > short → exit_basis > entry_basis
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50020.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_basis_pct = Decimal("0.01")
+
+        await controller._check_exit(trade)
+
+        # Should have been closed immediately (basis ok, spread low)
+        assert trade.trade_id not in controller._active_trades
+
+
+class TestCherryPickCostExit:
+    """Cherry-pick should exit when costly payment is within max_wait."""
+
+    @pytest.mark.asyncio
+    async def test_exits_when_cost_within_max_wait(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        config.trading_params.quick_cycle = True
+        config.trading_params.hold_min_spread = Decimal("0.3")
+        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
+        config.trading_params.exit_offset_seconds = 0
+
+        now = datetime.now(timezone.utc)
+
+        # High spread (profitable)
+        past_ms = (time.time() - 1200) * 1000
+        future_30m = (time.time() + 1800) * 1000  # next funding in 30 min
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0030") if eid == "exchange_a" else Decimal("0.0030")
+            data = {"rate": rate, "next_timestamp": future_30m, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.mode = TradeMode.CHERRY_PICK
+        # Costly payment in 30 min — within max_wait of 60 min
+        trade.exit_before = now + timedelta(minutes=30)
+        # Pre-set paid flags so we enter the hold/exit branch
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id not in controller._active_trades
+        assert "cherry_pick_cost" in (trade._exit_reason or "")
+
+
+class TestNonQuickCyclePath:
+    """Tests for the non-quick-cycle hold/exit path."""
+
+    @pytest.mark.asyncio
+    async def test_exits_when_net_below_threshold(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Non-quick-cycle: low net → exit."""
+        config.trading_params.quick_cycle = False
+        config.trading_params.hold_min_spread = Decimal("0.3")
+        config.trading_params.exit_offset_seconds = 0
+
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_holds_when_net_above_threshold(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Non-quick-cycle: good net → hold + advance trackers."""
+        config.trading_params.quick_cycle = False
+        config.trading_params.hold_min_spread = Decimal("0.01")
+        config.trading_params.exit_offset_seconds = 0
+
+        past_ms = (time.time() - 1200) * 1000
+        future_4h = (time.time() + 4 * 3600) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0030") if eid == "exchange_a" else Decimal("0.0030")
+            data = {"rate": rate, "next_timestamp": future_4h, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        trade = _make_trade(controller, spread_pct="1.0")
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+
+
+# ── Tests for TradeRecord serialization ──────────────────────────
+
+class TestTradeRecordPersistence:
+    """Round-trip test for to_persist_dict / from_persist_dict."""
+
+    def test_round_trip(self):
+        now = datetime.now(timezone.utc)
+        original = TradeRecord(
+            trade_id="rt-001",
+            symbol="ETH/USDT",
+            state=TradeState.OPEN,
+            mode=TradeMode.CHERRY_PICK,
+            long_exchange="binance",
+            short_exchange="bybit",
+            long_qty=Decimal("1.5"),
+            short_qty=Decimal("1.5"),
+            entry_edge_pct=Decimal("0.85"),
+            entry_basis_pct=Decimal("0.03"),
+            long_funding_rate=Decimal("-0.0002"),
+            short_funding_rate=Decimal("0.0004"),
+            long_taker_fee=Decimal("0.0005"),
+            short_taker_fee=Decimal("0.0006"),
+            entry_price_long=Decimal("3200.50"),
+            entry_price_short=Decimal("3201.10"),
+            fees_paid_total=Decimal("2.88"),
+            opened_at=now,
+            funding_collections=3,
+            funding_collected_usd=Decimal("1.23"),
+        )
+
+        d = original.to_persist_dict()
+        restored = TradeRecord.from_persist_dict("rt-001", d)
+
+        assert restored.symbol == original.symbol
+        assert restored.state == original.state
+        assert restored.mode == original.mode
+        assert restored.long_qty == original.long_qty
+        assert restored.entry_basis_pct == original.entry_basis_pct
+        assert restored.long_funding_rate == original.long_funding_rate
+        assert restored.funding_collections == original.funding_collections
+        assert restored.funding_collected_usd == original.funding_collected_usd
+        assert restored.opened_at.isoformat() == original.opened_at.isoformat()
+
+    def test_legacy_entry_edge_bps(self):
+        """from_persist_dict handles old 'entry_edge_bps' key."""
+        data = {
+            "symbol": "BTC/USDT",
+            "state": "open",
+            "long_exchange": "a",
+            "short_exchange": "b",
+            "long_qty": "0.01",
+            "short_qty": "0.01",
+            "entry_edge_bps": "150",  # legacy key
+        }
+        trade = TradeRecord.from_persist_dict("legacy-1", data)
+        assert trade.entry_edge_pct == Decimal("150")
+
+    def test_none_optionals(self):
+        """Fields that are None should round-trip correctly."""
+        original = TradeRecord(
+            trade_id="n-001",
+            symbol="SOL/USDT",
+            state=TradeState.OPEN,
+            long_exchange="a",
+            short_exchange="b",
+            long_qty=Decimal("10"),
+            short_qty=Decimal("10"),
+            entry_edge_pct=Decimal("0.5"),
+        )
+        d = original.to_persist_dict()
+        restored = TradeRecord.from_persist_dict("n-001", d)
+
+        assert restored.entry_basis_pct is None
+        assert restored.long_funding_rate is None
+        assert restored.opened_at is None
+        assert restored.funding_collected_usd == Decimal("0")

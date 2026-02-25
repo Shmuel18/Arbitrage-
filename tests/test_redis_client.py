@@ -115,6 +115,18 @@ class TestCooldown:
         await redis_client.set_cooldown("ETH/USDT", seconds=3600)
         assert await redis_client.is_cooled_down("BTC/USDT") is False
 
+    async def test_batch_get_cooled_down_symbols(self, redis_client):
+        await redis_client.set_cooldown("ETH/USDT", seconds=3600)
+        await redis_client.set_cooldown("SOL/USDT", seconds=3600)
+        result = await redis_client.get_cooled_down_symbols(
+            ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT"]
+        )
+        assert result == {"ETH/USDT", "SOL/USDT"}
+
+    async def test_batch_empty_input(self, redis_client):
+        result = await redis_client.get_cooled_down_symbols([])
+        assert result == set()
+
 
 # ── distributed lock ─────────────────────────────────────────────
 

@@ -1159,7 +1159,8 @@ code, .mono {
 
 /* ══════════════════════════════════════════
    CONTENT AREA — RateBridge ambient depth
-   ═════════════40810;
+   ══════════════════════════════════════════ */
+.content-area {
   background-image:
     radial-gradient(rgba(96, 165, 250, 0.018) 1px, transparent 1px),
     radial-gradient(ellipse at 10% 50%, rgba(37, 99, 235, 0.04) 0%, transparent 40%),

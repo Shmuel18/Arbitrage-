@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 
 interface Opportunity {
@@ -35,7 +35,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     ? `${status.min_funding_spread}%`
     : '?%';
   const { t } = useSettings();
-  const opps = opportunities?.opportunities ?? [];
+  const opps = useMemo(() => opportunities?.opportunities ?? [], [opportunities]);
   const count = opportunities?.count ?? 0;
 
   const formatFunding = (rate: number) => {
@@ -81,8 +81,8 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     return { color: 'var(--text-muted)' };
   };
 
-  const aboveThreshold = opps.filter(o => o.qualified !== false);
-  const belowThreshold = opps.filter(o => o.qualified === false);
+  const aboveThreshold = useMemo(() => opps.filter(o => o.qualified !== false), [opps]);
+  const belowThreshold = useMemo(() => opps.filter(o => o.qualified === false), [opps]);
 
   const renderFundingCell = (
     exchange: string,
@@ -235,13 +235,13 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
             <thead>
               <tr>
                 <th>{t.pair}</th>
-                <th>BRIDGE</th>
+                <th>{t.colBridge}</th>
                 <th className="text-end">{t.fundingL}</th>
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
                 <th className="text-end">{t.netPct}</th>
-                <th className="text-end">MODE</th>
-                <th className="text-end">NEXT FUNDING</th>
+                <th className="text-end">{t.colMode}</th>
+                <th className="text-end">{t.colNextFunding}</th>
               </tr>
             </thead>
             <tbody>

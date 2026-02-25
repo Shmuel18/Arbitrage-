@@ -59,12 +59,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware — restrict to known origins; falls back to ["*"] if env not set
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=[o.strip() for o in _cors_origins],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -87,7 +88,8 @@ async def get_opportunities():
             return json.loads(data)
         return {"opportunities": [], "count": 0}
     except Exception as e:
-        return {"opportunities": [], "count": 0, "error": str(e)}
+        print(f"Error fetching opportunities: {e}")
+        return {"opportunities": [], "count": 0}
 
 
 @app.get("/api/balances")
@@ -101,7 +103,8 @@ async def get_balances():
             return json.loads(data)
         return {"balances": {}, "total": 0}
     except Exception as e:
-        return {"balances": {}, "total": 0, "error": str(e)}
+        print(f"Error fetching balances: {e}")
+        return {"balances": {}, "total": 0}
 
 
 @app.get("/api/logs")
@@ -114,7 +117,8 @@ async def get_logs(limit: int = 50):
         logs = [json.loads(log) for log in raw_logs]
         return {"logs": logs}
     except Exception as e:
-        return {"logs": [], "error": str(e)}
+        print(f"Error fetching logs: {e}")
+        return {"logs": []}
 
 
 @app.get("/")
@@ -155,7 +159,8 @@ async def get_status():
             "uptime": 0
         }
     except Exception as e:
-        return {"error": str(e)}
+        print(f"Error fetching status: {e}")
+        return {"bot_running": False, "connected_exchanges": [], "active_positions": 0, "uptime": 0}
 
 
 @app.websocket("/ws")
