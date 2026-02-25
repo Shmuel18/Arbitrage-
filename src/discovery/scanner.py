@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from src.core.contracts import OpportunityCandidate, OrderSide, TradeMode
+from src.core.contracts import EntryTier, OpportunityCandidate, OrderSide, TradeMode
 from src.core.logging import get_logger
 from src.discovery.calculator import (
     analyze_per_payment_pnl,
@@ -122,10 +122,12 @@ class Scanner:
                                 (-opp.long_funding_rate) + opp.short_funding_rate
                             ) * Decimal("100")
                             q_mark = "✅" if opp.qualified else "○ "
+                            tier_mark = f" [{opp.entry_tier.upper()}]" if opp.entry_tier else ""
+                            price_mark = f" P={float(opp.price_spread_pct):+.2f}%" if opp.price_spread_pct else ""
                             logger.info(
                                 f"  {idx}. {q_mark} {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
                                 f"L={opp.long_funding_rate:.6f} S={opp.short_funding_rate:.6f} | "
-                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}% | "
+                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}%{tier_mark}{price_mark} | "
                                 f"/h: {opp.hourly_rate_pct:.4f}% ({opp.min_interval_hours}h)",
                                 extra={
                                     "action": "opportunity",
@@ -168,6 +170,8 @@ class Scanner:
                                 "qualified": o.qualified,
                                 "long_interval_hours": o.long_interval_hours,
                                 "short_interval_hours": o.short_interval_hours,
+                                "entry_tier": o.entry_tier,
+                                "price_spread_pct": float(o.price_spread_pct),
                             }
                             for o in display_top
                         ]
@@ -494,6 +498,37 @@ class Scanner:
                 f"PriceBasis={float(price_basis_pct):+.4f}% (info only)"
             )
 
+        # ── Tier classification (funding arb + price arb) ─────────
+        # Price spread: positive = favorable (buy cheap on long exchange, sell expensive on short)
+        # price_spread = (short_price - long_price) / long_price × 100
+        if _live_basis_available and long_price > 0:
+            price_spread_pct = (short_price - long_price) / long_price * Decimal("100")
+        else:
+            price_spread_pct = Decimal("0")
+
+        # Net funding after costs (used for tier classification)
+        _tier_net = immediate_spread - total_cost_pct
+        entry_tier: Optional[str] = None
+        if _tier_net >= tp.min_funding_spread:
+            if price_spread_pct > Decimal("0"):
+                # Favorable price spread → TOP tier
+                entry_tier = EntryTier.TOP.value
+            elif price_spread_pct >= -_tier_net:
+                # Neutral or slightly adverse (within funding amount) → MEDIUM
+                entry_tier = EntryTier.MEDIUM.value
+            elif abs(price_spread_pct) <= tp.tier_bad_max_adverse_spread:
+                # Adverse but within cap → BAD
+                entry_tier = EntryTier.BAD.value
+            # else: too adverse → no tier, won't enter
+
+        if entry_tier and logger.isEnabledFor(logging.DEBUG):
+            tier_emoji = {"top": "🏆", "medium": "📊", "bad": "⚠️"}.get(entry_tier, "")
+            logger.debug(
+                f"[{symbol}] Tier: {tier_emoji} {entry_tier.upper()} | "
+                f"Price spread: {float(price_spread_pct):+.4f}% | "
+                f"Net funding: {float(_tier_net):.4f}%"
+            )
+
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
 
@@ -552,8 +587,21 @@ class Scanner:
             closest_ms = short_next  # display only
 
         # ── Gate: imminent income must exist & meet threshold ────
+        # TOP tier with strong price spread (>= tier_top_anytime_price_spread) can
+        # enter ANYTIME — no need for imminent funding window.
+        # All other tiers require funding within the entry window.
+        _top_anytime = (
+            entry_tier == EntryTier.TOP.value
+            and price_spread_pct >= tp.tier_top_anytime_price_spread
+            and _tier_net >= tp.min_funding_spread
+            and not (long_stale or short_stale)
+        )
+
         hold_qualified = True
-        if long_stale or short_stale:
+        if _top_anytime:
+            # TOP tier anytime entry — use full funding spread, not just imminent
+            pass  # bypass imminent window check
+        elif long_stale or short_stale:
             hold_qualified = False
         elif not (long_imminent or short_imminent):
             # No income side has funding within the entry window
@@ -564,10 +612,24 @@ class Scanner:
 
         # ── Determine mode & net (based on imminent payments) ────
         mode: TradeMode = TradeMode.HOLD
-        gross_pct = imminent_spread_pct
-        net_pct = imminent_spread_pct - total_cost_pct
         exit_before = None
         n_collections = 0
+
+        # TOP anytime: use full immediate spread (not just imminent window payments)
+        if _top_anytime:
+            gross_pct = immediate_spread
+            net_pct = immediate_spread - total_cost_pct
+            # Ensure closest_ms is set (use earliest future funding from either side)
+            if not closest_ms:
+                _future_ts = []
+                if long_next and long_next > now_ms:
+                    _future_ts.append(long_next)
+                if short_next and short_next > now_ms:
+                    _future_ts.append(short_next)
+                closest_ms = min(_future_ts) if _future_ts else None
+        else:
+            gross_pct = imminent_spread_pct
+            net_pct = imminent_spread_pct - total_cost_pct
 
         if hold_qualified:
             # ── HOLD / POT / NUTCRACKER Block ─────────────────
@@ -597,15 +659,19 @@ class Scanner:
                 emoji = "🤝"
                 label = "HOLD"
 
-            if (imminent_spread_pct - total_cost_pct) < tp.min_net_pct:
+            if (imminent_spread_pct - total_cost_pct) < tp.min_net_pct and not _top_anytime:
+                qualified = False
+            elif _top_anytime and net_pct < tp.min_net_pct:
                 qualified = False
             else:
                 min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
                 funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
+                tier_tag = f" [{entry_tier.upper()}]" if entry_tier else ""
+                price_tag = f" price_spread={float(price_spread_pct):+.4f}%" if _live_basis_available else ""
                 logger.info(
-                    f"🎯 [{symbol}] OPPORTUNITY FOUND ({label} {emoji}): "
+                    f"🎯 [{symbol}] OPPORTUNITY FOUND ({label} {emoji}){tier_tag}: "
                     f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
-                    f"NET={net_pct:.4f}% | NEXT_FUNDING={funding_tag}",
+                    f"NET={net_pct:.4f}%{price_tag} | NEXT_FUNDING={funding_tag}",
                     extra={
                         "action": "opportunity_found",
                         "symbol": symbol,
@@ -695,6 +761,8 @@ class Scanner:
                 short_next_funding_ms=short_next,
                 exit_before=exit_before,
                 n_collections=n_collections,
+                entry_tier=entry_tier,
+                price_spread_pct=price_spread_pct,
             )
             return opp
         else:
@@ -760,6 +828,8 @@ class Scanner:
                 mode=mode,
                 exit_before=exit_before,
                 n_collections=n_collections,
+                entry_tier=entry_tier,
+                price_spread_pct=price_spread_pct,
             )
 
     async def _build_opportunity(
@@ -777,6 +847,8 @@ class Scanner:
         next_funding_ms: Optional[float] = None,
         long_next_funding_ms: Optional[float] = None,
         short_next_funding_ms: Optional[float] = None,
+        entry_tier: Optional[str] = None,
+        price_spread_pct: Decimal = Decimal("0"),
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
         long_bal = await adapters[long_eid].get_balance()
@@ -833,8 +905,8 @@ class Scanner:
             short_interval_hours=short_interval_hours,
             mode=mode,
             exit_before=exit_before,
-            n_collections=n_collections,
-        )
+            n_collections=n_collections,            entry_tier=entry_tier,
+            price_spread_pct=price_spread_pct,        )
 
     # ── Helpers ──────────────────────────────────────────────────
 

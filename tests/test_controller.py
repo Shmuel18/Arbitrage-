@@ -232,39 +232,31 @@ class TestHoldOrExit:
     async def test_exits_when_next_funding_too_far(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """Even if spread >= threshold, EXIT if next funding is beyond hold_max_wait."""
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
-        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
+        """After 1.5h timeout + next funding doesn't qualify → EXIT."""
         config.trading_params.exit_offset_seconds = 0
 
-        # Good spread (0.6%) BUT next_timestamp is 4 hours away
-        future_4h_ms = (time.time() + 4 * 3600) * 1000
+        # Low funding rates (won't qualify for next cycle)
+        past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
-            if eid == "exchange_a":
-                data = {
-                    "rate": Decimal("-0.0030"),
-                    "next_timestamp": future_4h_ms,  # 4h away
-                    "interval_hours": 8,
-                }
-            else:
-                data = {
-                    "rate": Decimal("0.0030"),
-                    "next_timestamp": future_4h_ms,
-                    "interval_hours": 8,
-                }
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter.get_funding_rate.return_value = data
             adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
-        # Pre-set funding_paid flags so tracker doesn't get overwritten to future
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        # Pre-set: funding already collected, timeout elapsed (2h > 1.5h)
+        trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        trade.funding_collections = 1
 
         await controller._check_exit(trade)
 
-        # Should have exited despite good spread — next funding too far
+        # Should have exited — timeout reached, next funding doesn't qualify
         assert trade.trade_id not in controller._active_trades
 
     @pytest.mark.asyncio
@@ -311,36 +303,31 @@ class TestHoldOrExit:
     async def test_exits_when_spread_below_threshold(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """If spread < hold_min_spread after payment, should EXIT."""
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        """If PnL >= profit_target_pct (0.7%) on notional → EXIT."""
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.profit_target_pct = Decimal("0.7")
 
-        # Set exchange funding rates to produce a LOW spread (< 0.5%)
-        # Must populate _funding_rate_cache since _check_exit uses get_funding_rate_cached()
+        # Funding rates to trigger collection
+        past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
-            past_ms = (time.time() - 1200) * 1000
-            if eid == "exchange_a":
-                data = {
-                    "rate": Decimal("-0.0001"),  # tiny
-                    "next_timestamp": past_ms,
-                    "interval_hours": 8,
-                }
-            else:
-                data = {
-                    "rate": Decimal("0.0001"),  # tiny
-                    "next_timestamp": past_ms,
-                    "interval_hours": 8,
-                }
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter.get_funding_rate.return_value = data
             adapter._funding_rate_cache["BTC/USDT"] = data
 
+        # Set prices: long up 0.7% → profit target hit
+        # entry: 50000, current long: 50350 → PnL = 350/50000 * 100 = 0.7%
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50350.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
         trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
 
         await controller._check_exit(trade)
 
-        # Trade should have been closed
+        # Trade should have been closed — profit target hit
         assert trade.trade_id not in controller._active_trades
 
 
@@ -660,18 +647,15 @@ class TestCherryPickHardExit:
 
 
 class TestBasisGuard:
-    """Adverse price basis should delay exit when awaiting favorable basis."""
+    """Tests for tier-aware profit target and timeout exit."""
 
     @pytest.mark.asyncio
     async def test_waits_when_spread_low_and_basis_adverse(
         self, controller, config, mock_exchange_mgr
     ):
-        """Spread < threshold + adverse basis → wait (don't exit yet)."""
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        """PnL below target, within timeout → holds."""
         config.trading_params.exit_offset_seconds = 0
 
-        # Low spread (0.02%)
         past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
@@ -679,32 +663,27 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Set adverse basis: exit_basis < entry_basis
-        # entry_basis_pct = +0.10 (long was more expensive at entry)
-        # Now: long=50000, short=50010 → exit_basis = (50000-50010)/50010*100 ≈ -0.02%
-        # This is adverse: -0.02 < +0.10
+        # Prices unchanged → PnL = 0% (below 0.7% target)
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
-        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50010.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
-        trade.entry_basis_pct = Decimal("0.10")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
 
         await controller._check_exit(trade)
 
-        # Should still be open — waiting for basis to improve
+        # Should still be open — PnL below target, timeout not reached
         assert trade.trade_id in controller._active_trades
-        assert trade._exit_wait_start is not None
+        assert trade._funding_paid_at is not None
 
     @pytest.mark.asyncio
     async def test_exits_on_basis_timeout(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """After 30 min of adverse basis with low spread → forced exit."""
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        """After 1.5h timeout with no qualifying next funding → EXIT."""
         config.trading_params.exit_offset_seconds = 0
 
-        # Low spread (0.02%)
         past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
@@ -712,30 +691,32 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Adverse basis prices
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
-        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50010.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
-        trade.entry_basis_pct = Decimal("0.10")
-        # Pre-set wait start to 31 minutes ago → timeout should fire
-        trade._exit_wait_start = datetime.now(timezone.utc) - timedelta(minutes=31)
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        # Pre-set: funding collected, 2h have passed (> 1.5h timeout)
+        trade._exit_check_active = True
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        trade.funding_collections = 1
 
         await controller._check_exit(trade)
 
-        # Should have been closed (basis timeout)
+        # Should have been closed (timeout + no qualifying next funding)
         assert trade.trade_id not in controller._active_trades
 
     @pytest.mark.asyncio
     async def test_exits_immediately_when_basis_favorable(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """Spread < threshold + favorable basis → exit immediately."""
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        """PnL >= profit_target → exits immediately."""
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.profit_target_pct = Decimal("0.7")
 
-        # Low spread (0.02%)
         past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
@@ -743,68 +724,60 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Favorable basis: long rose > short → exit_basis > entry_basis
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50020.0}
+        # Long price rose enough for 0.8% PnL (above 0.7% target)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50400.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
-        trade.entry_basis_pct = Decimal("0.01")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
 
         await controller._check_exit(trade)
 
-        # Should have been closed immediately (basis ok, spread low)
+        # Should have been closed immediately (profit target hit)
         assert trade.trade_id not in controller._active_trades
 
 
 class TestCherryPickCostExit:
-    """Cherry-pick should exit when costly payment is within max_wait."""
+    """Cherry-pick should exit when now >= exit_before."""
 
     @pytest.mark.asyncio
     async def test_exits_when_cost_within_max_wait(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.3")
-        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
         config.trading_params.exit_offset_seconds = 0
 
         now = datetime.now(timezone.utc)
 
-        # High spread (profitable)
+        # Fund rates
         past_ms = (time.time() - 1200) * 1000
-        future_30m = (time.time() + 1800) * 1000  # next funding in 30 min
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             rate = Decimal("-0.0030") if eid == "exchange_a" else Decimal("0.0030")
-            data = {"rate": rate, "next_timestamp": future_30m, "interval_hours": 8}
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.mode = TradeMode.CHERRY_PICK
-        # Costly payment in 30 min — within max_wait of 60 min
-        trade.exit_before = now + timedelta(minutes=30)
-        # Pre-set paid flags so we enter the hold/exit branch
-        trade._funding_paid_long = True
-        trade._funding_paid_short = True
+        # exit_before is in the past → should trigger hard exit
+        trade.exit_before = now - timedelta(minutes=1)
 
         await controller._check_exit(trade)
 
         assert trade.trade_id not in controller._active_trades
-        assert "cherry_pick_cost" in (trade._exit_reason or "")
 
 
 class TestNonQuickCyclePath:
-    """Tests for the non-quick-cycle hold/exit path."""
+    """Tests for timeout-based exit and next-cycle hold logic."""
 
     @pytest.mark.asyncio
     async def test_exits_when_net_below_threshold(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """Non-quick-cycle: low net → exit."""
-        config.trading_params.quick_cycle = False
-        config.trading_params.hold_min_spread = Decimal("0.3")
+        """Timeout elapsed + next funding doesn't qualify → EXIT."""
         config.trading_params.exit_offset_seconds = 0
 
+        # Low funding rates (won't qualify for next cycle)
         past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
@@ -812,7 +785,18 @@ class TestNonQuickCyclePath:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
         trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        # Pre-set: funding collected 2h ago (past 1.5h timeout)
+        trade._exit_check_active = True
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(hours=2)
+        trade.funding_collections = 1
 
         await controller._check_exit(trade)
 

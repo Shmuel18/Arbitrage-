@@ -30,6 +30,14 @@ trading_params:
   upgrade_funding_lock_secs: 900 # Lock upgrades when funding is within N seconds (15 min)
   top_opportunities_display: 5
   execute_only_best_opportunity: true
+  # Tier-based entry strategy
+  tier_bad_max_adverse_spread: 2.0 # BAD tier: max adverse price spread (%) to still enter
+  tier_top_anytime_price_spread: 0.5 # TOP tier: min favorable spread (%) for anytime entry
+  # Exit strategy
+  profit_target_pct: 0.7 # Exit at 0.7% profit on notional (= 0.5% net + 0.2% slippage buffer)
+  exit_timeout_hours: 1.5 # After funding, wait up to 1.5h for profit target before evaluating
+  exit_slippage_buffer_pct: 0.2 # Slippage buffer for exits
+  liquidation_safety_pct: 80.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)
 
 execution:
   concurrent_opportunities: 3

@@ -34,6 +34,13 @@ class TradeMode(str, Enum):
     NUTCRACKER = "nutcracker"   # both sides in same cycle (income & cost overlap)
 
 
+class EntryTier(str, Enum):
+    """Entry quality tier — determines timing and risk classification."""
+    TOP = "top"          # 🏆 Funding + favorable price spread
+    MEDIUM = "medium"    # 📊 Funding + neutral/slight adverse spread (within funding)
+    BAD = "bad"          # ⚠️ Funding + larger adverse spread (up to max cap)
+
+
 class ExitReason(str, Enum):
     """Static exit reason codes persisted to Redis and the trade journal.
 
@@ -43,6 +50,9 @@ class ExitReason(str, Enum):
     SPREAD_BELOW_THRESHOLD = "spread_below_threshold"
     MANUAL_CLOSE = "manual_close"
     UPGRADE_EXIT = "upgrade_exit"
+    PROFIT_TARGET = "profit_target"
+    EXIT_TIMEOUT = "exit_timeout"
+    LIQUIDATION_RISK = "liquidation_risk"
 
 
 # ── Instrument specification ─────────────────────────────────────
@@ -121,6 +131,9 @@ class OpportunityCandidate:
     mode: TradeMode = TradeMode.HOLD       # see TradeMode enum
     exit_before: Optional[datetime] = None # when to exit (before costly payment)
     n_collections: int = 0                 # how many income payments we'll collect
+    # Tier-based entry strategy
+    entry_tier: Optional[str] = None       # TOP / MEDIUM / BAD (see EntryTier)
+    price_spread_pct: Decimal = Decimal("0")  # cross-exchange price diff % (positive = favorable)
 
 
 # ── Trade record ─────────────────────────────────────────────────
@@ -159,6 +172,9 @@ class TradeRecord:
     # Positive = long was more expensive at entry. Used as the exit break-even threshold:
     # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≤ entry_basis_pct
     entry_basis_pct: Optional[Decimal] = None
+    # Tier-based entry classification
+    entry_tier: Optional[str] = None       # TOP / MEDIUM / BAD (see EntryTier)
+    price_spread_pct: Optional[Decimal] = None  # cross-exchange price spread at entry
 
     # ── Serialization ────────────────────────────────────────────
 
@@ -166,7 +182,7 @@ class TradeRecord:
         "long_qty", "short_qty", "entry_edge_pct", "entry_basis_pct",
         "long_funding_rate", "short_funding_rate", "long_taker_fee",
         "short_taker_fee", "entry_price_long", "entry_price_short",
-        "fees_paid_total", "funding_collected_usd",
+        "fees_paid_total", "funding_collected_usd", "price_spread_pct",
     )
     _DATETIME_FIELDS = ("opened_at",)
 
@@ -179,6 +195,7 @@ class TradeRecord:
             "long_exchange": self.long_exchange,
             "short_exchange": self.short_exchange,
             "funding_collections": self.funding_collections,
+            "entry_tier": self.entry_tier,
         }
         for key in self._DECIMAL_FIELDS:
             val = getattr(self, key)
@@ -199,6 +216,7 @@ class TradeRecord:
             "long_exchange": data["long_exchange"],
             "short_exchange": data["short_exchange"],
             "funding_collections": int(data.get("funding_collections", 0)),
+            "entry_tier": data.get("entry_tier"),
         }
         for key in cls._DECIMAL_FIELDS:
             raw = data.get(key)

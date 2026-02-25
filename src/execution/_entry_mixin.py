@@ -117,7 +117,9 @@ class _EntryMixin:
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
 
-        # ── Entry timing gate: PRIMARY CONTRIBUTOR must be within 15 min ──
+        # ── Tier-based Entry timing gate ─────────────────────────────
+        # TOP tier: enters anytime (no timing restriction)
+        # MEDIUM/BAD: only within entry_offset_seconds of funding payment
         # Use next_funding_ms from scanner (no REST call needed)
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         now_ms = _time.time() * 1000
@@ -139,18 +141,61 @@ class _EntryMixin:
 
         # Use next_funding_ms from scanner
         primary_next_ms = opp.next_funding_ms
-        if primary_next_ms is None:
+
+        # Tier-based timing decision
+        tier = opp.entry_tier
+        tier_emoji = {"top": "🏆", "medium": "📊", "bad": "⚠️"}.get(tier or "", "")
+
+        if tier == "top":
+            # TOP tier: enter anytime — only ensure funding timestamp exists
+            if primary_next_ms is None:
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: TOP tier but no funding timestamp available"
+                )
+                return
+            seconds_until = (primary_next_ms - now_ms) / 1000
+            if seconds_until <= 0:
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: TOP tier but funding timestamp in the past"
+                )
+                return
             logger.info(
-                f"⏳ Skipping {opp.symbol}: no funding timestamp available from scanner"
+                f"{tier_emoji} [{opp.symbol}] TOP tier — entering anytime "
+                f"(price_spread={float(opp.price_spread_pct):+.4f}%, "
+                f"funding in {int(seconds_until/60)}min)"
             )
-            return
-        else:
+        elif tier in ("medium", "bad"):
+            # MEDIUM/BAD: require entry within entry_offset_seconds window
+            if primary_next_ms is None:
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: {tier.upper()} tier but no funding timestamp"
+                )
+                return
             seconds_until = (primary_next_ms - now_ms) / 1000
             if not (0 < seconds_until <= entry_offset):
                 logger.info(
-                    f"⏳ Skipping {opp.symbol}: primary contributor ({primary_side} {primary_exchange}, "
-                    f"contributes {float(primary_contribution)*100:.4f}%) not in entry window. "
-                    f"Next funding in {int(seconds_until/60)}min. Entry allowed ≤{entry_offset}s before payment."
+                    f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
+                    f"not in {entry_offset}s window. Next funding in {int(seconds_until/60)}min."
+                )
+                return
+            logger.info(
+                f"{tier_emoji} [{opp.symbol}] {tier.upper()} tier — "
+                f"entering in {entry_offset}s window "
+                f"(price_spread={float(opp.price_spread_pct):+.4f}%, "
+                f"funding in {int(seconds_until/60)}min)"
+            )
+        else:
+            # No qualifying tier — fall back to original timing gate
+            if primary_next_ms is None:
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: no funding timestamp available from scanner"
+                )
+                return
+            seconds_until = (primary_next_ms - now_ms) / 1000
+            if not (0 < seconds_until <= entry_offset):
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: no tier, not in entry window. "
+                    f"Next funding in {int(seconds_until/60)}min."
                 )
                 return
 
@@ -391,11 +436,15 @@ class _EntryMixin:
                 opened_at=datetime.now(timezone.utc),
                 mode=opp.mode,
                 exit_before=opp.exit_before,
+                entry_tier=opp.entry_tier,
+                price_spread_pct=opp.price_spread_pct,
             )
             self._register_trade(trade)
             await self._persist_trade(trade)
 
             mode_str = f" mode={opp.mode}"
+            tier_str = f" tier={opp.entry_tier.upper()}" if opp.entry_tier else ""
+            price_spread_str = f" price_spread={float(opp.price_spread_pct):+.4f}%" if opp.price_spread_pct else ""
             if opp.exit_before:
                 mode_str += f" exit_before={opp.exit_before.strftime('%H:%M UTC')}"
             if opp.n_collections > 0:
@@ -405,7 +454,7 @@ class _EntryMixin:
                 f"Trade opened: {trade_id} {opp.symbol} "
                 f"L={opp.long_exchange}({long_filled_qty}) "
                 f"S={opp.short_exchange}({short_filled_qty}) "
-                f"spread={opp.immediate_spread_pct:.4f}% net={opp.net_edge_pct:.4f}%{mode_str}",
+                f"spread={opp.immediate_spread_pct:.4f}% net={opp.net_edge_pct:.4f}%{mode_str}{tier_str}{price_spread_str}",
                 extra={
                     "trade_id": trade_id,
                     "symbol": opp.symbol,
@@ -454,11 +503,14 @@ class _EntryMixin:
                 f"  🟢 TRADE ENTRY — {trade_id}\n"
                 f"  Symbol:    {opp.symbol}\n"
                 f"  Mode:      {opp.mode}\n"
+                f"  Tier:      {(opp.entry_tier or 'N/A').upper()} {tier_emoji}\n"
                 f"  Reason:    {entry_reason}\n"
                 f"  LONG:      {opp.long_exchange} qty={long_filled_qty} @ ${float(entry_price_long or 0):.6f} "
                     f"| funding={lr_pct:+.4f}%\n"
                 f"  SHORT:     {opp.short_exchange} qty={short_filled_qty} @ ${float(entry_price_short or 0):.6f} "
                     f"| funding={sr_pct:+.4f}%\n"
+                f"  Price Spread: {float(opp.price_spread_pct):+.4f}% "
+                    f"({'favorable ✅' if opp.price_spread_pct > 0 else 'adverse ⚠️' if opp.price_spread_pct < 0 else 'neutral'})\n"
                 f"  Notional:  ${entry_notional:.2f} per leg\n"
                 f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
                 f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"
