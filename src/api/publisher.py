@@ -4,7 +4,7 @@ Publishes bot data to Redis for API consumption
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any
 import asyncio
 
@@ -14,7 +14,7 @@ class APIPublisher:
     
     def __init__(self, redis_client):
         self.redis = redis_client
-        self.start_time = datetime.utcnow()
+        self.start_time = datetime.now(timezone.utc)
         self._total_trades = 0
         self._winning_trades = 0
     
@@ -24,7 +24,7 @@ class APIPublisher:
             "bot_running": running,
             "connected_exchanges": exchanges,
             "active_positions": positions_count,
-            "uptime": round((datetime.utcnow() - self.start_time).total_seconds() / 3600, 2),
+            "uptime": round((datetime.now(timezone.utc) - self.start_time).total_seconds() / 3600, 2),
             "min_funding_spread": min_funding_spread,
         }
         await self.redis.set("trinity:status", json.dumps(status), ex=15)
@@ -34,7 +34,7 @@ class APIPublisher:
         data = {
             "balances": balances,
             "total": sum(balances.values()),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         await self.redis.set("trinity:balances", json.dumps(data))
     
@@ -43,14 +43,14 @@ class APIPublisher:
         data = {
             "opportunities": opportunities,
             "count": len(opportunities),
-            "updated_at": datetime.utcnow().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         await self.redis.set("trinity:opportunities", json.dumps(data))
     
     async def publish_log(self, level: str, message: str):
         """Publish a log entry"""
         entry = json.dumps({
-            "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+            "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S"),
             "message": message,
             "level": level
         })
@@ -62,7 +62,7 @@ class APIPublisher:
         """Publish overall summary"""
         total_balance = sum(balances.values())
         win_rate = (self._winning_trades / self._total_trades) if self._total_trades > 0 else 0
-        uptime = round((datetime.utcnow() - self.start_time).total_seconds() / 3600, 2)
+        uptime = round((datetime.now(timezone.utc) - self.start_time).total_seconds() / 3600, 2)
         
         summary = {
             "total_pnl": total_balance,
@@ -85,7 +85,7 @@ class APIPublisher:
     
     async def publish_trade(self, trade: Dict[str, Any]):
         """Publish completed trade to history"""
-        timestamp = datetime.utcnow().timestamp()
+        timestamp = datetime.now(timezone.utc).timestamp()
         await self.redis.zadd(
             "trinity:trades:history",
             {json.dumps(trade): timestamp}

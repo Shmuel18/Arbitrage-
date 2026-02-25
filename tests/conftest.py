@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.core.config import Config, ExchangeConfig, RiskLimits, TradingParams, ExecutionConfig, RiskGuardConfig, RedisConfig, LoggingConfig
+from src.core.config import (
+    Config, ExchangeConfig, RiskLimits, TradingParams,
+    ExecutionConfig, RiskGuardConfig, RedisConfig, LoggingConfig,
+)
 from src.core.contracts import InstrumentSpec, OpportunityCandidate, OrderSide, Position
 
 
@@ -89,6 +92,7 @@ def mock_adapter(btc_spec):
     adapter = AsyncMock()
     adapter.exchange_id = "exchange_a"
     adapter.get_instrument_spec.return_value = btc_spec
+    adapter.get_cached_instrument_spec = MagicMock(return_value=btc_spec)
     adapter.get_balance.return_value = {
         "total": Decimal("1000"), "free": Decimal("800"), "used": Decimal("200"),
     }
@@ -101,10 +105,10 @@ def mock_adapter(btc_spec):
     adapter.place_order.return_value = {
         "id": "order-123", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
-    # Mock exchange markets for scanner symbol intersection
-    adapter._exchange = MagicMock()
-    adapter._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
-    adapter._exchange.symbols = ["BTC/USDT", "ETH/USDT"]
+    adapter.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    # Mock public adapter properties used by scanner and main
+    adapter.symbols = ["BTC/USDT", "ETH/USDT"]
+    adapter.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
     # Add funding rate cache for WebSocket-based scanner
     adapter._funding_rate_cache = {}
     adapter.get_funding_rate_cached = lambda sym: adapter._funding_rate_cache.get(sym)
@@ -119,6 +123,7 @@ def mock_exchange_mgr(mock_adapter):
     adapter_b = AsyncMock()
     adapter_b.exchange_id = "exchange_b"
     adapter_b.get_instrument_spec = mock_adapter.get_instrument_spec
+    adapter_b.get_cached_instrument_spec = mock_adapter.get_cached_instrument_spec
     adapter_b.get_balance.return_value = {
         "total": Decimal("1000"), "free": Decimal("800"), "used": Decimal("200"),
     }
@@ -131,10 +136,10 @@ def mock_exchange_mgr(mock_adapter):
     adapter_b.place_order.return_value = {
         "id": "order-456", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
-    # Mock exchange markets for scanner symbol intersection
-    adapter_b._exchange = MagicMock()
-    adapter_b._exchange.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
-    adapter_b._exchange.symbols = ["BTC/USDT", "ETH/USDT"]
+    adapter_b.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    # Mock public adapter properties used by scanner and main
+    adapter_b.symbols = ["BTC/USDT", "ETH/USDT"]
+    adapter_b.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
     # Add funding rate cache for WebSocket-based scanner
     adapter_b._funding_rate_cache = {}
     adapter_b.get_funding_rate_cached = lambda sym: adapter_b._funding_rate_cache.get(sym)

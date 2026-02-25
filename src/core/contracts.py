@@ -26,6 +26,25 @@ class OrderSide(str, Enum):
     SELL = "sell"
 
 
+class TradeMode(str, Enum):
+    """Trading sub-mode, determined by the funding-rate relationship."""
+    HOLD = "hold"               # both sides income (or default fallback)
+    POT = "pot"                 # both sides income, aliased label
+    CHERRY_PICK = "cherry_pick" # one income, one cost — exit before cost fires
+    NUTCRACKER = "nutcracker"   # both sides in same cycle (income & cost overlap)
+
+
+class ExitReason(str, Enum):
+    """Static exit reason codes persisted to Redis and the trade journal.
+
+    Dynamic reasons (e.g. ``max_wait_30min``) are plain strings and retain
+    their diagnostic suffix; only the static, non-parameterised codes live here.
+    """
+    SPREAD_BELOW_THRESHOLD = "spread_below_threshold"
+    MANUAL_CLOSE = "manual_close"
+    UPGRADE_EXIT = "upgrade_exit"
+
+
 # ── Instrument specification ─────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -99,7 +118,7 @@ class OpportunityCandidate:
     # Qualification flag (False = display-only, doesn't pass all trading gates)
     qualified: bool = True
     # Cherry-pick fields
-    mode: str = "hold"                    # "hold" or "cherry_pick"
+    mode: TradeMode = TradeMode.HOLD       # see TradeMode enum
     exit_before: Optional[datetime] = None # when to exit (before costly payment)
     n_collections: int = 0                 # how many income payments we'll collect
 
@@ -129,7 +148,7 @@ class TradeRecord:
     short_taker_fee: Optional[Decimal] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
-    mode: str = "hold"                     # "hold" or "cherry_pick"
+    mode: TradeMode = TradeMode.HOLD        # see TradeMode enum
     exit_before: Optional[datetime] = None # exit BEFORE this time
     next_funding_long: Optional[datetime] = None
     next_funding_short: Optional[datetime] = None
@@ -140,3 +159,15 @@ class TradeRecord:
     # Positive = long was more expensive at entry. Used as the exit break-even threshold:
     # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≤ entry_basis_pct
     entry_basis_pct: Optional[Decimal] = None
+
+    # ── Runtime state (not persisted to Redis) ───────────────────
+    # These track in-memory monitoring state across monitor loop cycles.
+    # Using field(compare=False, repr=False) keeps them out of equality
+    # checks and debug output while still being properly typed.
+    _funding_paid_long: bool = field(default=False, compare=False, repr=False)
+    _funding_paid_short: bool = field(default=False, compare=False, repr=False)
+    _exit_check_active: bool = field(default=False, compare=False, repr=False)
+    _exit_wait_start: Optional[datetime] = field(default=None, compare=False, repr=False)
+    _hold_logged_until: Optional[datetime] = field(default=None, compare=False, repr=False)
+    _funding_paid_at: Optional[datetime] = field(default=None, compare=False, repr=False)
+    _exit_reason: Optional[str] = field(default=None, compare=False, repr=False)

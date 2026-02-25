@@ -9,12 +9,13 @@ Two modes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from src.core.contracts import OpportunityCandidate, OrderSide
+from src.core.contracts import OpportunityCandidate, OrderSide, TradeMode
 from src.core.logging import get_logger
 from src.discovery.calculator import (
     analyze_per_payment_pnl,
@@ -49,19 +50,23 @@ class Scanner:
         self._running = False
         self._publisher = publisher
         self._last_top_log_ts = 0.0
+        # Cache for common_symbols — rebuilt every 60 scans or when exchanges change
+        self._common_symbols_cache: Optional[set] = None
+        self._cache_exchange_ids: List[str] = []
+        self._cache_scan_count: int = 0
 
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def start(self, callback) -> None:
         """Continuously scan; call *callback(opp)* when an opportunity is found."""
         self._running = True
-        scan_interval = getattr(self._cfg.risk_guard, 'scanner_interval_sec', 30)
+        scan_interval = self._cfg.risk_guard.scanner_interval_sec
         
         # Start WebSocket watchers for all symbols
         adapters = self._exchanges.all()
         all_symbols = set()
         for adapter in adapters.values():
-            all_symbols.update(adapter._exchange.symbols)
+            all_symbols.update(adapter.symbols)
         
         for adapter in adapters.values():
             try:
@@ -174,9 +179,7 @@ class Scanner:
                             )
                     
                     # Send opportunities to controller
-                    execute_only_best = getattr(
-                        self._cfg.trading_params, 'execute_only_best_opportunity', True
-                    )
+                    execute_only_best = self._cfg.trading_params.execute_only_best_opportunity
                     
                     if execute_only_best and qualified_opps:
                         # Send best opportunity PER exchange pair
@@ -232,15 +235,25 @@ class Scanner:
         if len(exchange_ids) < 2:
             return []
 
-        # Get all symbols available on at least 2 exchanges (not just ALL)
-        symbol_sets = [set(adapters[eid]._exchange.symbols) for eid in exchange_ids]
-        all_symbols = set.union(*symbol_sets)
-        symbol_counts = {s: sum(1 for ss in symbol_sets if s in ss) for s in all_symbols}
-        common_symbols = {s for s, c in symbol_counts.items() if c >= 2}
-        
+        # Common symbols set is stable between scans (symbols rarely change).
+        # Rebuild only every 60 calls (~5 min at 5 s intervals) or when exchanges change.
+        self._cache_scan_count += 1
+        if (
+            self._common_symbols_cache is None
+            or exchange_ids != self._cache_exchange_ids
+            or self._cache_scan_count % 60 == 0
+        ):
+            symbol_sets = [set(adapters[eid].symbols) for eid in exchange_ids]
+            all_symbols = set.union(*symbol_sets)
+            symbol_counts = {s: sum(1 for ss in symbol_sets if s in ss) for s in all_symbols}
+            self._common_symbols_cache = {s for s, c in symbol_counts.items() if c >= 2}
+            self._cache_exchange_ids = exchange_ids
+        common_symbols = self._common_symbols_cache
+
         # Parallelism for faster scanning
-        parallelism = getattr(self._cfg.execution, 'scan_parallelism', 10)
-        logger.debug(f"Scanning {len(common_symbols)} symbols (on 2+ exchanges) across {len(exchange_ids)} exchanges (parallelism={parallelism})")
+        parallelism = self._cfg.execution.scan_parallelism
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Scanning {len(common_symbols)} symbols (on 2+ exchanges) across {len(exchange_ids)} exchanges (parallelism={parallelism})")
 
         results: List[OpportunityCandidate] = []
         
@@ -290,7 +303,7 @@ class Scanner:
 
         # Fetch funding from in-memory cache (updated by WebSocket)
         funding: Dict[str, dict] = {}
-        eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid]._exchange.symbols]
+        eligible_eids = [eid for eid in exchange_ids if symbol in adapters[eid].symbols]
         if len(eligible_eids) < 2:
             return []
         
@@ -303,18 +316,19 @@ class Scanner:
         if len(funding) < 2:
             return []
 
-        # [DEBUG] Log all retrieved rates with full detail
-        funding_detail = " | ".join(
-            f"{eid}: rate={funding[eid]['rate']:.8f} ({funding[eid]['rate']*100:.6f}%), interval={funding[eid].get('interval_hours', 8)}h"
-            for eid in sorted(funding.keys())
-        )
-        logger.debug(
-            f"[ALL_RATES] [{symbol}] SCANNER RETRIEVED RATES: {funding_detail}",
-            extra={
-                "action": "scanner_rates_retrieved",
-                "symbol": symbol,
-            },
-        )
+        # Guard f-string formatting: called for every symbol on every scan cycle
+        if logger.isEnabledFor(logging.DEBUG):
+            funding_detail = " | ".join(
+                f"{eid}: rate={funding[eid]['rate']:.8f} ({funding[eid]['rate']*100:.6f}%), interval={funding[eid].get('interval_hours', 8)}h"
+                for eid in sorted(funding.keys())
+            )
+            logger.debug(
+                f"[ALL_RATES] [{symbol}] SCANNER RETRIEVED RATES: {funding_detail}",
+                extra={
+                    "action": "scanner_rates_retrieved",
+                    "symbol": symbol,
+                },
+            )
 
         # Try every pair
         results = []
@@ -398,21 +412,22 @@ class Scanner:
         immediate_spread = spread_info["immediate_spread_pct"]
         funding_spread = spread_info["funding_spread_pct"]
         
-        # Log funding rates for clarity (DEBUG to avoid log spam)
-        logger.debug(
-            f"[PAIR_EVAL] [{symbol}] PAIR EVALUATION: "
-            f"LONG({long_eid})={long_rate:.8f} ({long_rate*100:.6f}%, {long_interval}h) | "
-            f"SHORT({short_eid})={short_rate:.8f} ({short_rate*100:.6f}%, {short_interval}h) | "
-            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h norm)",
-            extra={
-                "action": "pair_evaluation",
-                "symbol": symbol,
-                "long_eid": long_eid,
-                "short_eid": short_eid,
-                "long_rate": str(long_rate),
-                "short_rate": str(short_rate),
-            },
-        )
+        # Guard f-string: called for every exchange pair on every scan cycle
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[PAIR_EVAL] [{symbol}] PAIR EVALUATION: "
+                f"LONG({long_eid})={long_rate:.8f} ({long_rate*100:.6f}%, {long_interval}h) | "
+                f"SHORT({short_eid})={short_rate:.8f} ({short_rate*100:.6f}%, {short_interval}h) | "
+                f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h norm)",
+                extra={
+                    "action": "pair_evaluation",
+                    "symbol": symbol,
+                    "long_eid": long_eid,
+                    "short_eid": short_eid,
+                    "long_rate": str(long_rate),
+                    "short_rate": str(short_rate),
+                },
+            )
 
         # ── Per-payment analysis ─────────────────────────────────
         pnl = analyze_per_payment_pnl(long_rate, short_rate)
@@ -422,8 +437,16 @@ class Scanner:
             return None
 
         # ── Fees & buffers ───────────────────────────────────────
-        long_spec = await adapters[long_eid].get_instrument_spec(symbol)
-        short_spec = await adapters[short_eid].get_instrument_spec(symbol)
+        # Use the in-memory cache (sync, zero coroutine overhead) when available.
+        # Falls back to a REST fetch only on the very first scan after startup.
+        long_spec = (
+            adapters[long_eid].get_cached_instrument_spec(symbol)
+            or await adapters[long_eid].get_instrument_spec(symbol)
+        )
+        short_spec = (
+            adapters[short_eid].get_cached_instrument_spec(symbol)
+            or await adapters[short_eid].get_instrument_spec(symbol)
+        )
         if not long_spec or not short_spec:
             return None
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
@@ -448,22 +471,24 @@ class Scanner:
                 _live_basis_available = True
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
                 price_basis_pct = raw_basis  # signed — informational only
-                logger.debug(
-                    f"[{symbol}] Entry price basis: {long_eid}={long_price} vs "
-                    f"{short_eid}={short_price} → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
-                )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"[{symbol}] Entry price basis: {long_eid}={long_price} vs "
+                        f"{short_eid}={short_price} → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
+                    )
         except Exception as _basis_err:
             logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
 
-        # Debug: show NEV breakdown
-        logger.debug(
-            f"[{symbol}] NEV Calculation: "
-            f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) - "
-            f"Fees={fees_pct:.4f}% (L:{long_spec.taker_fee*100:.4f}% + S:{short_spec.taker_fee*100:.4f}% × 2) - "
-            f"Slippage={tp.slippage_buffer_pct:.4f}% - "
-            f"Safety={tp.safety_buffer_pct:.4f}% - "
-            f"PriceBasis={float(price_basis_pct):+.4f}% (info only)"
-        )
+        # Guard f-string: spec.taker_fee formatting on every pair per scan
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{symbol}] NEV Calculation: "
+                f"Spread={immediate_spread:.4f}% (immediate), {funding_spread:.4f}% (8h) - "
+                f"Fees={fees_pct:.4f}% (L:{long_spec.taker_fee*100:.4f}% + S:{short_spec.taker_fee*100:.4f}% × 2) - "
+                f"Slippage={tp.slippage_buffer_pct:.4f}% - "
+                f"Safety={tp.safety_buffer_pct:.4f}% - "
+                f"PriceBasis={float(price_basis_pct):+.4f}% (info only)"
+            )
 
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
@@ -534,7 +559,7 @@ class Scanner:
             hold_qualified = False
 
         # ── Determine mode & net (based on imminent payments) ────
-        mode = "hold"
+        mode: TradeMode = TradeMode.HOLD
         gross_pct = imminent_spread_pct
         net_pct = imminent_spread_pct - total_cost_pct
         exit_before = None
@@ -543,7 +568,7 @@ class Scanner:
         if hold_qualified:
             # ── HOLD / POT / NUTCRACKER Block ─────────────────
             if pnl["both_income"]:
-                mode = "pot"
+                mode = TradeMode.POT
                 emoji = "🍯"
                 label = "POT"
             elif pnl["long_is_income"] or pnl["short_is_income"]:
@@ -556,15 +581,15 @@ class Scanner:
                 else:
                     cost_imminent_now = long_mins is not None and long_mins <= max_window
                 if cost_imminent_now:
-                    mode = "nutcracker"
+                    mode = TradeMode.NUTCRACKER
                     emoji = "🔨🥜"
                     label = "NUTCRACKER"
                 else:
-                    mode = "cherry_pick"
+                    mode = TradeMode.CHERRY_PICK
                     emoji = "🍒"
                     label = "CHERRY"
             else:
-                mode = "hold"
+                mode = TradeMode.HOLD
                 emoji = "🤝"
                 label = "HOLD"
 
@@ -632,7 +657,7 @@ class Scanner:
                             if cp_net >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
                                 cherry_ok = True
                                 qualified = True
-                                mode = "cherry_pick"
+                                mode = TradeMode.CHERRY_PICK
                                 gross_pct = cp_gross
                                 net_pct = cp_net
                                 n_collections = 1
@@ -689,23 +714,23 @@ class Scanner:
             # (receive AND pay in the same cycle → net earn, but not a pure cherry-pick).
             # CHERRY: one income, cost fires AFTER the income interval completes.
             if pnl["both_income"]:
-                mode = "pot"
+                mode = TradeMode.POT
             elif pnl["long_is_income"] and not pnl["short_is_income"]:
                 # Cost = short side; income interval = long_interval
                 cost_mins_disp = short_mins
                 income_interval_mins = long_interval * 60
                 if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
-                    mode = "nutcracker"
+                    mode = TradeMode.NUTCRACKER
                 else:
-                    mode = "cherry_pick"
+                    mode = TradeMode.CHERRY_PICK
             elif pnl["short_is_income"] and not pnl["long_is_income"]:
                 # Cost = long side; income interval = short_interval
                 cost_mins_disp = long_mins
                 income_interval_mins = short_interval * 60
                 if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
-                    mode = "nutcracker"
+                    mode = TradeMode.NUTCRACKER
                 else:
-                    mode = "cherry_pick"
+                    mode = TradeMode.CHERRY_PICK
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,
@@ -740,7 +765,7 @@ class Scanner:
         long_rate: Decimal, short_rate: Decimal,
         gross_pct: Decimal, fees_pct: Decimal, net_pct: Decimal,
         adapters: Dict[str, "ExchangeAdapter"],
-        mode: str = "hold",
+        mode: "TradeMode" = TradeMode.HOLD,
         exit_before: Optional[datetime] = None,
         n_collections: int = 0,
         long_interval_hours: int = 8,

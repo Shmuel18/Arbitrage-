@@ -12,20 +12,20 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings
 
 
 # ── Sub-configs ──────────────────────────────────────────────────
 
-class RiskLimits(BaseSettings):
+class RiskLimits(BaseModel):
     max_margin_usage: Decimal = Decimal("0.70")
     max_position_size_usd: Decimal = Decimal("10000")
     delta_threshold_pct: Decimal = Decimal("5.0")
     position_size_pct: Decimal = Decimal("0.70")
 
 
-class TradingParams(BaseSettings):
+class TradingParams(BaseModel):
     min_funding_spread: Decimal = Decimal("0.5")
     min_immediate_spread: Decimal = Decimal("0.5")   # min IMMEDIATE spread (next payment)
     min_net_pct: Decimal = Decimal("0.5")  # ← Requires 0.5% net profit (not 0.01%) after all fees & slippage
@@ -48,21 +48,21 @@ class TradingParams(BaseSettings):
     execute_only_best_opportunity: bool = True
 
 
-class ExecutionConfig(BaseSettings):
+class ExecutionConfig(BaseModel):
     concurrent_opportunities: int = 3
     order_timeout_ms: int = 10000
     batch_scan_concurrent: bool = True
     scan_parallelism: int = 10
 
 
-class RiskGuardConfig(BaseSettings):
+class RiskGuardConfig(BaseModel):
     fast_loop_interval_sec: int = 5
     deep_loop_interval_sec: int = 60
     enable_panic_close: bool = True
     scanner_interval_sec: int = 10
 
 
-class ExchangeConfig(BaseSettings):
+class ExchangeConfig(BaseModel):
     name: str
     ccxt_id: str
     default_type: str
@@ -77,7 +77,7 @@ class ExchangeConfig(BaseSettings):
     position_mode: Optional[str] = None
 
 
-class RedisConfig(BaseSettings):
+class RedisConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
     password: Optional[str] = None
@@ -91,7 +91,7 @@ class RedisConfig(BaseSettings):
         return f"redis://{auth}{self.host}:{self.port}/{self.db}"
 
 
-class LoggingConfig(BaseSettings):
+class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"
     console_output: bool = True

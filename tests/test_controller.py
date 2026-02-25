@@ -196,7 +196,8 @@ class TestHoldOrExit:
     ):
         """If spread >= hold_min_spread after payment, should HOLD."""
         config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        # Net spread = gross (0.6%) - exit fees (0.2%) = 0.4%; threshold must be below that
+        config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.exit_offset_seconds = 0  # instant for testing
 
         # Set exchange funding rates to produce a high spread (0.6%)
@@ -272,7 +273,8 @@ class TestHoldOrExit:
     ):
         """Spread >= threshold AND next funding within hold_max_wait → HOLD."""
         config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.5")
+        # Net spread = gross (0.6%) - exit fees (0.2%) = 0.4%; threshold must be below that
+        config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
         config.trading_params.exit_offset_seconds = 0
 
@@ -407,13 +409,14 @@ class TestUpgrade:
             adapter = mock_exchange_mgr.get(eid)
             if eid == "exchange_a":
                 data = {
-                    "rate": Decimal("-0.0001"),
+                    # Higher rates → current_immediate=0.6%, net=0.4%, threshold=0.9%
+                    "rate": Decimal("-0.0030"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
             else:
                 data = {
-                    "rate": Decimal("0.0001"),
+                    "rate": Decimal("0.0030"),
                     "next_timestamp": (time.time() + 600) * 1000,
                     "interval_hours": 8,
                 }
@@ -423,11 +426,12 @@ class TestUpgrade:
         trade = _make_trade(controller, spread_pct="0.5", funding_paid=False)
 
         # Redis opp is only slightly better — not enough for upgrade
+        # current_projected_net=0.4%, threshold=0.4+0.5=0.9%; candidate(0.4%) < 0.9% → no upgrade
         weak_opp = {
             "symbol": "DOGE/USDT",
             "long_exchange": "exchange_a",
             "short_exchange": "exchange_b",
-            "immediate_spread_pct": 0.4,  # ~0.16% + 0.4% threshold not met
+            "immediate_spread_pct": 0.4,  # < 0.9% threshold → not enough delta
             "qualified": True,
             "next_funding_ms": (time.time() + 600) * 1000,
         }

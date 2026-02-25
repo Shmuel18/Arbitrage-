@@ -7,11 +7,11 @@ No abstract base, no empty subclasses. All exchanges go through here.
 from __future__ import annotations
 
 import asyncio
+import logging
+import time as _time
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
-import asyncio
-import time as _time
 
 import ccxt.pro as ccxtpro
 
@@ -42,6 +42,8 @@ class ExchangeAdapter:
         # Candidate tracking for interval change confirmation (avoids false changes from
         # CCXT computing interval = (next_funding_ts - now) / 3600 near payment times)
         self._interval_change_candidates: Dict[str, tuple] = {}  # symbol → (candidate_hours, count)
+        # Cached symbol list populated in connect(); avoids list() copy on every .symbols access
+        self._symbols_list: Optional[List[str]] = None
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
 
     # ── Lifecycle ────────────────────────────────────────────────
@@ -122,6 +124,8 @@ class ExchangeAdapter:
             if s not in self._symbol_map.values()  # exclude raw USD keys
         ]
         self._exchange.symbols = normalized_symbols
+        # Cache right here so the `symbols` property never copies the list again.
+        self._symbols_list = normalized_symbols
 
         # krakenfutures has ccxt bugs in parse_funding_rate:
         # 1) String comparison instead of numeric for clamping (positive rates → -0.25)
@@ -413,20 +417,21 @@ class ExchangeAdapter:
         """Update in-memory cache with latest funding rate."""
         rate = Decimal(str(data.get("fundingRate", 0)))
         
-        # Raw ccxt data — DEBUG level to avoid log spam
-        logger.debug(
-            f"[{self.exchange_id}] Raw ccxt funding data for {symbol}: "
-            f"fundingRate={data.get('fundingRate')}, mark={data.get('markPrice')}, "
-            f"index={data.get('indexPrice')}, timestamp={data.get('timestamp')}, "
-            f"fundingTimestamp={data.get('fundingTimestamp')}",
-            extra={
-                "exchange": self.exchange_id,
-                "symbol": symbol,
-                "action": "ccxt_raw_funding",
-                "raw_rate": str(data.get("fundingRate")),
-                "interval_ms": data.get("fundingTimestamp"),
-            },
-        )
+        # Raw ccxt data — guard f-string: called on every WebSocket tick
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{self.exchange_id}] Raw ccxt funding data for {symbol}: "
+                f"fundingRate={data.get('fundingRate')}, mark={data.get('markPrice')}, "
+                f"index={data.get('indexPrice')}, timestamp={data.get('timestamp')}, "
+                f"fundingTimestamp={data.get('fundingTimestamp')}",
+                extra={
+                    "exchange": self.exchange_id,
+                    "symbol": symbol,
+                    "action": "ccxt_raw_funding",
+                    "raw_rate": str(data.get("fundingRate")),
+                    "interval_ms": data.get("fundingTimestamp"),
+                },
+            )
 
         # Sanity check: skip obviously broken rates (e.g. Kraken returning -0.25)
         if abs(rate) > self._MAX_SANE_RATE:
@@ -465,18 +470,19 @@ class ExchangeAdapter:
             "indexPrice": data.get("indexPrice"),
         }
         
-        # Cached funding — DEBUG level to avoid log spam
-        logger.debug(
-            f"[{self.exchange_id}] Cached funding for {symbol}: "
-            f"rate={rate:.8f} ({rate*100:.6f}%), interval={interval_hours}h, next_ts={next_ts}",
-            extra={
-                "exchange": self.exchange_id,
-                "symbol": symbol,
-                "action": "funding_cached",
-                "cached_rate": str(rate),
-                "interval_hours": interval_hours,
-            },
-        )
+        # Guard f-string: called on every WebSocket tick
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{self.exchange_id}] Cached funding for {symbol}: "
+                f"rate={rate:.8f} ({rate*100:.6f}%), interval={interval_hours}h, next_ts={next_ts}",
+                extra={
+                    "exchange": self.exchange_id,
+                    "symbol": symbol,
+                    "action": "funding_cached",
+                    "cached_rate": str(rate),
+                    "interval_hours": interval_hours,
+                },
+            )
 
     def get_mark_price(self, symbol: str) -> Optional[float]:
         """Return best available mark price for symbol (no API call).
@@ -493,8 +499,8 @@ class ExchangeAdapter:
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get latest cached funding rate (low-latency, no network call)."""  
         cached = self._funding_rate_cache.get(symbol)
-        if cached:
-            # [DEBUG] Log cache retrieval
+        # Guard f-string formatting: called ~1000×/scan, skip when not in DEBUG mode.
+        if cached and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 f"[{self.exchange_id}] Retrieved cached rate for {symbol}: "
                 f"rate={cached['rate']:.8f} ({cached['rate']*100:.6f}%), "
@@ -508,7 +514,26 @@ class ExchangeAdapter:
             )
         return cached
 
-    async def warm_up_funding_rates(self, symbols: List[str] = None) -> int:
+    # ── Public read-only views of internal exchange state ────────
+    # Use these instead of accessing _exchange directly from outside.
+
+    @property
+    def symbols(self) -> List[str]:
+        """Normalized symbol list available on this exchange (cached after connect)."""
+        return self._symbols_list if self._symbols_list is not None else []
+
+    @property
+    def markets(self) -> Dict[str, Any]:
+        """Market dict keyed by normalized symbol."""
+        if self._exchange is None:
+            return {}
+        return dict(self._exchange.markets)
+
+    def get_cached_instrument_spec(self, symbol: str) -> Optional[InstrumentSpec]:
+        """Return in-memory cached InstrumentSpec without a network call."""
+        return self._instrument_cache.get(symbol)
+
+    async def warm_up_funding_rates(self, symbols: Optional[List[str]] = None) -> None:
         """Batch-fetch ALL funding rates in one API call to pre-populate cache.
         Falls back to per-symbol fetch if batch not supported (e.g. KuCoin, Kraken)."""
         # Ensure Binance funding intervals are loaded (fallback if connect() failed)

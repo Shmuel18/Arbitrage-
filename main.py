@@ -85,7 +85,7 @@ async def main() -> None:
                 extra={"action": "exchanges_verified", "data": {"exchanges": verified}})
 
     # Warm up instrument specs for ALL symbols available on 2+ exchanges
-    all_symbol_sets = [set(a._exchange.symbols) for a in mgr.all().values()]
+    all_symbol_sets = [set(a.symbols) for a in mgr.all().values()]
     if len(all_symbol_sets) >= 2:
         # Union of all symbols, then keep only those on at least 2 exchanges
         all_symbols = set.union(*all_symbol_sets)
@@ -97,20 +97,20 @@ async def main() -> None:
         f"Found {len(common_symbols)} tradeable symbols (on 2+ exchanges) across {len(verified)} exchanges",
         extra={"action": "symbol_summary", "data": {"symbols": len(common_symbols)}},
     )
-    market_counts = {eid: len(a._exchange.symbols) for eid, a in mgr.all().items()}
+    market_counts = {eid: len(a.symbols) for eid, a in mgr.all().items()}
     logger.info(
         f"Market counts by exchange: {market_counts}",
         extra={"action": "market_counts", "data": market_counts},
     )
     for adapter in mgr.all().values():
         # Only warm up symbols that exist on this specific exchange
-        adapter_symbols = [s for s in common_symbols if s in adapter._exchange.markets]
+        adapter_symbols = [s for s in common_symbols if s in adapter.markets]
         await adapter.warm_up_symbols(adapter_symbols)
 
     # Batch-fetch ALL funding rates (one API call per exchange → instant cache)
     logger.info("Fetching funding rates (batch)...", extra={"action": "funding_batch_start"})
     for adapter in mgr.all().values():
-        adapter_symbols = [s for s in common_symbols if s in adapter._exchange.symbols]
+        adapter_symbols = [s for s in common_symbols if s in adapter.symbols]
         await adapter.warm_up_funding_rates(adapter_symbols)
     logger.info("Funding rate cache ready", extra={"action": "funding_batch_done"})
 
