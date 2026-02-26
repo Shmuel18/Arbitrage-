@@ -296,7 +296,7 @@ async def main() -> None:
                     pos_entry["funding_collected_usd"] = str(trade.funding_collected_usd)
                     pos_entry["fees_paid_total"] = str(trade.fees_paid_total) if trade.fees_paid_total is not None else None
                     pos_entry["funding_collections"] = trade.funding_collections
-                    pos_entry["profit_target_pct"] = str(cfg.strategy.profit_target_pct)
+                    pos_entry["profit_target_pct"] = str(cfg.trading_params.profit_target_pct)
 
                     positions_data.append(pos_entry)
                 await publisher.publish_positions(positions_data)

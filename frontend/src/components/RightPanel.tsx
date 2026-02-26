@@ -23,6 +23,8 @@ interface Opportunity {
   mode: string;
   fees_pct?: number;
   immediate_net_pct?: number;
+  entry_tier?: string | null;
+  price_spread_pct?: number | null;
 }
 
 interface RightPanelProps {
@@ -79,6 +81,26 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     if (pct > 0) return { color: 'var(--green)' };
     if (pct < 0) return { color: 'var(--red)' };
     return { color: 'var(--text-muted)' };
+  };
+
+  const tierBadge = (tier?: string | null) => {
+    if (!tier) return null;
+    const key = tier.toLowerCase();
+    let label = tier.toUpperCase();
+    let color = '#94a3b8';
+    let emoji = '';
+    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+    return (
+      <span style={{
+        background: color + '18', color, border: `1px solid ${color}44`,
+        borderRadius: 4, padding: '0px 5px', fontSize: 9, fontWeight: 700,
+        letterSpacing: '0.06em', marginInlineStart: 4,
+      }}>
+        {emoji}{label}
+      </span>
+    );
   };
 
   const aboveThreshold = useMemo(() => opps.filter(o => o.qualified !== false), [opps]);
@@ -139,9 +161,22 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     return (
       <tr key={stableKey} style={rowStyle} className={rowClass}>
         <td>
-          {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
-          {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
-          <span className="font-semibold text-accent">{opp.symbol}</span>
+          <div>
+            {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
+            {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
+            <span className="font-semibold text-accent">{opp.symbol}</span>
+          </div>
+          <div style={{ marginTop: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+            {tierBadge(opp.entry_tier)}
+            {opp.price_spread_pct != null && (
+              <span style={{
+                fontSize: 9, fontFamily: 'var(--font-mono)',
+                color: opp.price_spread_pct >= 0 ? 'var(--green)' : 'var(--red)',
+              }}>
+                P:{opp.price_spread_pct >= 0 ? '+' : ''}{opp.price_spread_pct.toFixed(2)}%
+              </span>
+            )}
+          </div>
         </td>
         <td>
           <span className="bridge-connector">
