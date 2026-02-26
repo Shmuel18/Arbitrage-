@@ -245,11 +245,23 @@ class _EntryMixin:
             if not long_fill:
                 return
 
+            # ── Zero-fill guard: catch orders accepted but not executed ──
+            long_raw_filled = float(long_fill.get("filled", 0))
+            if long_raw_filled <= 0:
+                logger.error(
+                    f"❌ [{opp.symbol}] Long ZERO-FILL on {opp.long_exchange}: "
+                    f"order accepted but nothing executed (filled={long_raw_filled}). "
+                    f"Aborting entry.",
+                    extra={"symbol": opp.symbol, "exchange": opp.long_exchange, "action": "zero_fill"},
+                )
+                await self._redis.set_cooldown(opp.symbol, 300)  # 5 min cooldown
+                return
+
             # Update cached taker_fee from actual fill (real account rate)
             long_adapter.update_taker_fee_from_fill(opp.symbol, long_fill)
 
             # ── Sync-Fire: adjust short qty to match long's ACTUAL filled qty ──
-            long_actual_filled = Decimal(str(long_fill.get("filled", 0) or order_qty))
+            long_actual_filled = Decimal(str(long_fill["filled"]))
             is_partial_fill = long_actual_filled < order_qty
             
             if is_partial_fill:
@@ -277,23 +289,38 @@ class _EntryMixin:
                 logger.error(f"Short leg failed — closing orphan long for {opp.symbol}")
                 await self._close_orphan(
                     long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, long_fill, order_qty,
+                    OrderSide.SELL, long_fill, long_actual_filled,
+                )
+                return
+
+            # ── Zero-fill guard for short leg ──
+            short_raw_filled = float(short_fill.get("filled", 0))
+            if short_raw_filled <= 0:
+                logger.error(
+                    f"❌ [{opp.symbol}] Short ZERO-FILL on {opp.short_exchange}: "
+                    f"order accepted but nothing executed (filled={short_raw_filled}). "
+                    f"Closing orphan long.",
+                    extra={"symbol": opp.symbol, "exchange": opp.short_exchange, "action": "zero_fill"},
+                )
+                await self._close_orphan(
+                    long_adapter, opp.long_exchange, opp.symbol,
+                    OrderSide.SELL, long_fill, long_actual_filled,
                 )
                 return
 
             # Update cached taker_fee from actual fill (real account rate)
             short_adapter.update_taker_fee_from_fill(opp.symbol, short_fill)
 
-            short_actual_filled = Decimal(str(short_fill.get("filled", 0) or short_order_qty))
+            short_actual_filled = Decimal(str(short_fill["filled"]))
             
             logger.info(
                 f"🔓 Trade FULLY OPEN {opp.symbol}: "
                 f"LONG({opp.long_exchange})={long_actual_filled} | "
                 f"SHORT({opp.short_exchange})={short_actual_filled} — "
                 f"Expecting delta=0 in next position fetch"
-            )            # Record trade with ACTUAL filled quantities (fallback to order_qty, not raw suggested_qty)
-            long_filled_qty = Decimal(str(long_fill.get("filled", 0) or order_qty))
-            short_filled_qty = Decimal(str(short_fill.get("filled", 0) or order_qty))
+            )            # Record trade with ACTUAL filled quantities (validated > 0 above)
+            long_filled_qty = Decimal(str(long_fill["filled"]))
+            short_filled_qty = Decimal(str(short_fill["filled"]))
             entry_price_long = _h.extract_avg_price(long_fill)
             entry_price_short = _h.extract_avg_price(short_fill)
 
@@ -357,7 +384,8 @@ class _EntryMixin:
                     )
                     trim_fill = await self._place_with_timeout(long_adapter, trim_req)
                     if trim_fill:
-                        trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
+                        _trim_raw = float(trim_fill.get("filled", 0))
+                        trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
                         long_filled_qty -= trimmed
                         trim_fee = _h.extract_fee(trim_fill, long_spec.taker_fee)
                         entry_fees += trim_fee
@@ -391,7 +419,8 @@ class _EntryMixin:
                     )
                     trim_fill = await self._place_with_timeout(short_adapter, trim_req)
                     if trim_fill:
-                        trimmed = Decimal(str(trim_fill.get("filled", 0) or excess))
+                        _trim_raw = float(trim_fill.get("filled", 0))
+                        trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
                         short_filled_qty -= trimmed
                         trim_fee = _h.extract_fee(trim_fill, short_spec.taker_fee)
                         entry_fees += trim_fee

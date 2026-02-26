@@ -1301,6 +1301,41 @@ class ExchangeAdapter:
 
         # Convert filled amount BACK to base currency (tokens) for the caller
         filled_native = float(order.get("filled", 0) or 0)
+
+        # ── Re-fetch order if filled=0 ──────────────────────────────
+        # Some exchanges (gateio, kucoin, okx) return filled=0/None on
+        # create_order for market orders, requiring a follow-up fetch to
+        # get the actual fill.  Without this, the bot records a zero-fill
+        # and the "or order_qty" fallback silently masks the discrepancy,
+        # creating one-sided (unhedged) positions.
+        if filled_native == 0 and order.get("id"):
+            _resolved = self._resolve_symbol(req.symbol)
+            for _attempt in range(1, 4):            # 3 attempts, 1s apart
+                try:
+                    await asyncio.sleep(1)
+                    updated = await self._exchange.fetch_order(order["id"], _resolved)
+                    filled_native = float(updated.get("filled", 0) or 0)
+                    if filled_native > 0:
+                        order.update(updated)       # merge full fill details
+                        logger.info(
+                            f"Order re-fetched on {self.exchange_id} "
+                            f"(attempt {_attempt}): filled={filled_native} {req.symbol}",
+                            extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                        )
+                        break
+                except Exception as _rfe:
+                    logger.warning(
+                        f"Order re-fetch attempt {_attempt} failed on "
+                        f"{self.exchange_id}/{req.symbol}: {_rfe}",
+                        extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                    )
+            else:
+                logger.warning(
+                    f"Order still shows filled=0 after 3 re-fetches on "
+                    f"{self.exchange_id}/{req.symbol} (order_id={order.get('id')})",
+                    extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                )
+
         filled_base = filled_native * contract_size
         order["filled"] = filled_base
         # Also store the base-currency qty we requested (for logging)
