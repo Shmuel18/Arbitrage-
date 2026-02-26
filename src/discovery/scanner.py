@@ -689,6 +689,19 @@ class Scanner:
             elif _top_anytime and net_pct < tp.min_net_pct:
                 qualified = False
             else:
+                # For CHERRY mode, the regular _tier_net uses immediate_spread (both sides)
+                # which is tiny. Instead use net_pct (income-only cherry net) for tier.
+                if mode == TradeMode.CHERRY_PICK and entry_tier is None:
+                    _cp_tier_net = net_pct
+                    if _cp_tier_net >= tp.min_funding_spread:
+                        if price_spread_pct >= _cp_tier_net:
+                            entry_tier = EntryTier.TOP.value
+                        elif price_spread_pct > Decimal("0"):
+                            entry_tier = EntryTier.MEDIUM.value
+                        elif price_spread_pct >= -_cp_tier_net:
+                            entry_tier = EntryTier.MEDIUM.value
+                        elif abs(price_spread_pct) <= tp.tier_bad_max_adverse_spread:
+                            entry_tier = EntryTier.BAD.value
                 min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
                 funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
                 tier_tag = f" [{entry_tier.upper()}]" if entry_tier else ""
