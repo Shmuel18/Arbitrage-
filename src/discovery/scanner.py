@@ -590,21 +590,15 @@ class Scanner:
             closest_ms = short_next  # display only
 
         # ── Gate: imminent income must exist & meet threshold ────
-        # TOP tier with strong price spread (>= tier_top_anytime_price_spread) can
-        # enter ANYTIME — no need for imminent funding window.
-        # All other tiers require funding within the entry window.
-        _top_anytime = (
-            entry_tier == EntryTier.TOP.value
-            and price_spread_pct >= tp.tier_top_anytime_price_spread
-            and _tier_net >= tp.min_funding_spread
-            and not (long_stale or short_stale)
-        )
+        # ALL tiers (including TOP) require favorable funding within the
+        # entry window (max_entry_window_minutes).  If funding is in our
+        # favor but hours away — skip.  This prevents entering trades
+        # where we wait for hours, exposed to price risk, before
+        # collecting anything.
+        _top_anytime = False  # disabled: every tier needs imminent funding
 
         hold_qualified = True
-        if _top_anytime:
-            # TOP tier anytime entry — use full funding spread, not just imminent
-            pass  # bypass imminent window check
-        elif long_stale or short_stale:
+        if long_stale or short_stale:
             hold_qualified = False
         elif not (long_imminent or short_imminent):
             # No income side has funding within the entry window

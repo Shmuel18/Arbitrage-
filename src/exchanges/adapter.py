@@ -1248,6 +1248,67 @@ class ExchangeAdapter:
             ))
         return positions
 
+    # ── Order fill verification (fallback for exchanges where fetchOrder fails) ──
+
+    async def _verify_fill_via_position(
+        self, symbol: str, resolved_symbol: str, side: OrderSide,
+        expected_native_qty: float, order_id: Optional[str] = None,
+    ) -> float:
+        """Fallback fill verification by checking actual position on the exchange.
+
+        When fetchOrder() fails (e.g. Bybit "last 500 orders" error), we check
+        if a matching position exists. If a position in the expected direction
+        with the expected quantity exists, the order was filled.
+
+        Returns filled quantity in NATIVE units (contracts), or 0.0 if unverifiable.
+        """
+        try:
+            positions = await self._exchange.fetch_positions([resolved_symbol])
+            expected_side = "long" if side == OrderSide.BUY else "short"
+
+            for pos in positions:
+                amt = float(pos.get("contracts", 0) or 0)
+                if abs(amt) < 1e-12:
+                    continue
+                pos_side = (pos.get("side") or "").lower()
+                if pos_side not in ("long", "buy", "short", "sell"):
+                    pos_side = "long" if amt > 0 else "short"
+                else:
+                    pos_side = "long" if pos_side in ("long", "buy") else "short"
+
+                if pos_side == expected_side:
+                    # Position exists in the expected direction — order was filled
+                    actual_qty = abs(amt)
+                    logger.warning(
+                        f"✅ Position-verified fill on {self.exchange_id}/{symbol}: "
+                        f"found {expected_side} position with {actual_qty} contracts "
+                        f"(expected {expected_native_qty}). "
+                        f"order_id={order_id} — fetchOrder() was unreliable.",
+                        extra={
+                            "exchange": self.exchange_id,
+                            "symbol": symbol,
+                            "action": "position_verified_fill",
+                        },
+                    )
+                    # Use the expected quantity (what we ordered) — the position
+                    # may include pre-existing qty, so clamp to what we requested
+                    return min(actual_qty, expected_native_qty)
+
+            logger.warning(
+                f"Order filled=0 after 3 re-fetches AND no matching position on "
+                f"{self.exchange_id}/{symbol} (order_id={order_id}) — "
+                f"genuinely unfilled or position already closed.",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return 0.0
+        except Exception as e:
+            logger.error(
+                f"Position-based fill verification failed on "
+                f"{self.exchange_id}/{symbol}: {e}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return 0.0
+
     # ── Order execution ──────────────────────────────────────────
 
     async def place_order(self, req: OrderRequest) -> Dict[str, Any]:
@@ -1330,11 +1391,14 @@ class ExchangeAdapter:
                         extra={"exchange": self.exchange_id, "symbol": req.symbol},
                     )
             else:
-                logger.warning(
-                    f"Order still shows filled=0 after 3 re-fetches on "
-                    f"{self.exchange_id}/{req.symbol} (order_id={order.get('id')})",
-                    extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                # ── Bybit fallback: fetchOrder() can fail with "last 500 orders"
+                # error. Fall back to checking actual positions to confirm fill.
+                filled_native = await self._verify_fill_via_position(
+                    req.symbol, _resolved, req.side, native_qty, order.get("id"),
                 )
+                if filled_native > 0:
+                    order["filled"] = filled_native  # will be overwritten below with base conversion
+                    order["average"] = order.get("average")  # keep whatever we have
 
         filled_base = filled_native * contract_size
         order["filled"] = filled_base

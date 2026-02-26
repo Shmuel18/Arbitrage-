@@ -22,7 +22,7 @@ trading_params:
   max_sane_funding_rate: 0.10 # max absolute funding rate before filtering (10%)
   entry_offset_seconds: 900
   exit_offset_seconds: 180
-  max_entry_window_minutes: 15 # Enter ~15 min before funding, collect, exit
+  max_entry_window_minutes: 60 # Only enter if funding is within 60 minutes
   quick_cycle: true # Exit after first funding payment (zero dead time)
   hold_min_spread: 0.5 # Min spread % to hold position after funding collection
   hold_max_wait_seconds: 3600 # Max seconds to wait for NEXT funding; if longer, exit (e.g. 3600 = 1h)

@@ -181,6 +181,35 @@ class RiskGuard:
                 logger.error(f"Panic close failed on {eid}/{symbol}: {e}",
                              extra={"exchange": eid, "symbol": symbol})
 
+        # ── Verify positions are actually gone ───────────────────
+        await asyncio.sleep(2)  # brief settle time for exchange state
+        still_open = []
+        for eid, adapter in exchanges_to_check.items():
+            try:
+                remaining = await adapter.get_positions(symbol)
+                for pos in remaining:
+                    if abs(pos.quantity) > 0:
+                        still_open.append((eid, pos.side.value, float(pos.quantity)))
+            except Exception as e:
+                logger.warning(
+                    f"Post-panic position check failed on {eid}/{symbol}: {e}",
+                    extra={"exchange": eid, "symbol": symbol},
+                )
+
+        if still_open:
+            breakdown = "; ".join(f"{eid}({side}): {qty}" for eid, side, qty in still_open)
+            logger.error(
+                f"⚠️ PANIC CLOSE INCOMPLETE — positions still open for {symbol}: {breakdown}. "
+                f"Manual intervention required!",
+                extra={"symbol": symbol, "action": "panic_close_incomplete",
+                        "data": {"remaining": still_open}},
+            )
+        else:
+            logger.info(
+                f"✅ Panic close verified — all {symbol} positions confirmed closed.",
+                extra={"symbol": symbol, "action": "panic_close_verified"},
+            )
+
         # Cooldown after panic
         cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
         await self._redis.set_cooldown(symbol, cooldown_sec)
