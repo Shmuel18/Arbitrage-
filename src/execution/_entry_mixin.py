@@ -31,7 +31,6 @@ logger = get_logger("execution")
 class _EntryMixin:
     async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
         """Validate and execute a new funding-arb trade."""
-        _t0_mono = _time.monotonic()  # execution latency tracking
         logger.info(
             f"🔍 [{opp.symbol}] Evaluating opportunity: mode={opp.mode} "
             f"spread={opp.immediate_spread_pct:.4f}% net={opp.net_edge_pct:.4f}% "
@@ -74,6 +73,8 @@ class _EntryMixin:
 
     async def _handle_opportunity_inner(self, opp: OpportunityCandidate) -> None:
         """Inner implementation — called only after the TOCTOU guard is held."""
+        _t0_mono = _time.monotonic()  # execution latency tracking
+
         # Duplicate guard — O(1) via maintained set
         if opp.symbol in self._active_symbols:
             logger.info(f"🔁 Skipping {opp.symbol}: already have active trade")
