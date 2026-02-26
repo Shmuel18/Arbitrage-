@@ -327,7 +327,7 @@ class Scanner:
         # Guard f-string formatting: called for every symbol on every scan cycle
         if logger.isEnabledFor(logging.DEBUG):
             funding_detail = " | ".join(
-                f"{eid}: rate={funding[eid]['rate']:.8f} ({funding[eid]['rate']*100:.6f}%), interval={funding[eid].get('interval_hours', 8)}h"
+                f"{eid}: rate={funding[eid]['rate']:.8f} ({funding[eid]['rate']*100:.6f}%, interval={funding[eid].get('interval_hours', 8)}h"
                 for eid in sorted(funding.keys())
             )
             logger.debug(
@@ -532,6 +532,16 @@ class Scanner:
                 f"Net funding: {float(_tier_net):.4f}%"
             )
 
+        # ── Gate: price spread too adverse for all tiers ──────────
+        # When live prices are available and price spread exceeds tier_bad_max_adverse_spread,
+        # entry_tier stays None — reject immediately (comment "won't enter" is now enforced).
+        if entry_tier is None and _live_basis_available:
+            logger.debug(
+                f"[{symbol}] Rejected: price spread {float(price_spread_pct):+.4f}% "
+                f"exceeds tier_bad_max_adverse_spread ({tp.tier_bad_max_adverse_spread}%)"
+            )
+            return None
+
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
 
@@ -539,7 +549,10 @@ class Scanner:
         # Check each side independently.  If ANY income-generating side
         # has funding within the window, calculate imminent net from
         # payments that actually fire during the hold.
-        max_window = getattr(tp, 'max_entry_window_minutes', 15)
+        current_entry_window_minutes = tp.max_entry_window_minutes
+        if entry_tier == EntryTier.MEDIUM.value or entry_tier == EntryTier.BAD.value:
+            current_entry_window_minutes = tp.narrow_entry_window_minutes
+
         now_ms = time.time() * 1000
         long_next = funding[long_eid].get("next_timestamp")
         short_next = funding[short_eid].get("next_timestamp")
@@ -553,8 +566,8 @@ class Scanner:
         short_mins = (short_next - now_ms) / 60_000 if (short_next and short_next > now_ms) else None
 
         # Is each income side within the entry window?
-        long_imminent = long_is_income and long_mins is not None and long_mins <= max_window
-        short_imminent = short_is_income and short_mins is not None and short_mins <= max_window
+        long_imminent = long_is_income and long_mins is not None and long_mins <= current_entry_window_minutes
+        short_imminent = short_is_income and short_mins is not None and short_mins <= current_entry_window_minutes
 
         # Stale: income side has funding timestamp in the past
         long_stale = long_is_income and long_next is not None and long_next <= now_ms
@@ -569,9 +582,9 @@ class Scanner:
         if short_imminent:
             imminent_income_pct += abs(short_rate) * Decimal("100")
         # Cost sides that also fire during the hold window
-        if not long_is_income and long_mins is not None and long_mins <= max_window:
+        if not long_is_income and long_mins is not None and long_mins <= current_entry_window_minutes:
             imminent_cost_pct += abs(long_rate) * Decimal("100")
-        if not short_is_income and short_mins is not None and short_mins <= max_window:
+        if not short_is_income and short_mins is not None and short_mins <= current_entry_window_minutes:
             imminent_cost_pct += abs(short_rate) * Decimal("100")
         imminent_spread_pct = imminent_income_pct - imminent_cost_pct
 
@@ -640,9 +653,9 @@ class Scanner:
                 # No  → CHERRY 🍒:    only receive this cycle, cost fires much later (silent).
                 #           No exit_before — NET over time is positive, just hold.
                 if pnl["long_is_income"]:
-                    cost_imminent_now = short_mins is not None and short_mins <= max_window
+                    cost_imminent_now = short_mins is not None and short_mins <= current_entry_window_minutes
                 else:
-                    cost_imminent_now = long_mins is not None and long_mins <= max_window
+                    cost_imminent_now = long_mins is not None and long_mins <= current_entry_window_minutes
                 if cost_imminent_now:
                     mode = TradeMode.NUTCRACKER
                     emoji = "🔨🥜"
@@ -715,7 +728,7 @@ class Scanner:
                         # Income must arrive before cost
                         if (minutes_until_cost >= _MIN_WINDOW_MINUTES
                                 and minutes_until_income < minutes_until_cost
-                                and minutes_until_income <= max_window):
+                                and minutes_until_income <= current_entry_window_minutes): # Use current_entry_window_minutes here as well for cherry_pick
                             # Single-payment cherry_pick: only the immediate income pulse counts.
                             # Do NOT accumulate multiple payments — if this one payment
                             # alone yields ≥ min_funding_spread net, enter.
@@ -737,7 +750,8 @@ class Scanner:
                                     f"(gross={float(cp_gross):.4f}%, net={float(cp_net):.4f}%) — "
                                     f"enter {int(minutes_until_income)}min before payment, "
                                     f"exit before {exit_before.strftime('%H:%M UTC')}",
-                                    extra={"action": "cherry_pick_found", "symbol": symbol, "mode": "cherry_pick"},
+                                    extra={
+                                        "action": "cherry_pick_found", "symbol": symbol, "mode": "cherry_pick"},
                                 )
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
