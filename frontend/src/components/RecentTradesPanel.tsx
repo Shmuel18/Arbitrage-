@@ -103,73 +103,72 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
         )}
       </div>
       <div className="overflow-auto scrollbar-thin">
-        <table className="corp-table">
+        <table className="corp-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+          <colgroup>
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '14%' }} />
+            <col style={{ width: '9%' }} />
+            <col style={{ width: '23%' }} />
+          </colgroup>
           <thead>
             <tr>
               <th>{t.symbol}</th>
               <th>{t.longShort}</th>
-              <th className="text-end">{t.entryLS}</th>
-              <th className="text-end">{t.exitLS}</th>
-              <th className="text-end">{t.fundingLS}</th>
-              <th className="text-end">{t.fundingNet}</th>
-              <th className="text-end">{t.fees}</th>
               <th className="text-end">{t.netPnl}</th>
+              <th className="text-end">{t.fundingNet}</th>
               <th className="text-end">{t.duration}</th>
-              <th className="text-end">{t.opened}</th>
               <th className="text-end">{t.closed}</th>
             </tr>
           </thead>
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={11} className="text-center text-secondary py-8">
+                <td colSpan={6} className="text-center text-secondary py-8">
                     {tradesLoaded ? t.noTradesYet : '...'}
                   </td>
               </tr>
             ) : (
-              trades.map((tr) => (
+              trades.map((tr) => {
+                const received = Number(tr.funding_received_total ?? 0);
+                const paid = Number(tr.funding_paid_total ?? 0);
+                const fundingNet = received - paid;
+                return (
                 <tr
                   key={tr.id}
                   onClick={() => setSelectedTrade(tr)}
                   style={{ cursor: 'pointer' }}
                   title="Click for trade details"
                 >
-                  <td className="font-semibold text-accent">
-                    <span>{tr.symbol}</span>
-                    {tierBadge(tr.entry_tier)}
+                  <td style={{ overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', overflow: 'hidden' }}>
+                      <span className="font-semibold text-accent" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {tr.symbol.replace('/USDT:USDT', '').replace('/USDT', '')}
+                      </span>
+                      {tierBadge(tr.entry_tier)}
+                    </div>
                   </td>
-                  <td>
-                    {tr.long_exchange?.toUpperCase()} / {tr.short_exchange?.toUpperCase()}
+                  <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <span style={{ fontSize: 11 }}>
+                      {tr.long_exchange?.toUpperCase()} → {tr.short_exchange?.toUpperCase()}
+                    </span>
                   </td>
+                  <td className="text-end mono">{formatPnl(tr.total_pnl)}</td>
                   <td className="text-end mono">
-                    {formatPrice(tr.entry_price_long)} / {formatPrice(tr.entry_price_short)}
+                    <span style={{ color: fundingNet >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                      {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
+                    </span>
                   </td>
-                  <td className="text-end mono">
-                    {formatPrice(tr.exit_price_long)} / {formatPrice(tr.exit_price_short)}
-                  </td>
-                  <td className="text-end mono">
-                    {formatRate(tr.long_funding_rate)} / {formatRate(tr.short_funding_rate)}
-                  </td>
-                  <td className="text-end mono">
-                    {formatFunding(tr.funding_received_total)} / {formatFunding(tr.funding_paid_total)}
-                  </td>
-                  <td className="text-end mono">
-                    {formatFunding(tr.fees_paid_total)}
-                  </td>
-                  <td className="text-end mono">
-                    {formatPnl(tr.total_pnl)}
-                  </td>
-                  <td className="text-end text-secondary">
+                  <td className="text-end text-secondary" style={{ whiteSpace: 'nowrap' }}>
                     {formatDuration(tr.hold_minutes)}
                   </td>
-                  <td className="text-end text-secondary">
-                    {formatDate(tr.opened_at)}
-                  </td>
-                  <td className="text-end text-secondary">
+                  <td className="text-end text-secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                     {formatDate(tr.closed_at)}
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>

@@ -41,11 +41,16 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
     ? values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${scaleX(i)} ${scaleY(v)}`).join(' ')
     : '';
 
-  const strokeColor = total >= 0 ? '#22c55e' : '#ef4444';
-  const fillPath = values.length > 1
-    ? `${path} L ${scaleX(values.length - 1)} ${height} L ${scaleX(0)} ${height} Z`
+  // Zero baseline in Y coordinates (clamped to chart bounds)
+  const zeroY = Math.max(0, Math.min(height, scaleY(0)));
+  const accentColor = total >= 0 ? '#22c55e' : '#ef4444'; // for header accent only
+
+  const closedFillPath = values.length > 1
+    ? `${path} L ${scaleX(values.length - 1)} ${zeroY} L ${scaleX(0)} ${zeroY} Z`
     : '';
-  const fillColor = total >= 0 ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)';
+
+  // Stroke: gradient that switches color at zero line
+  const zeroFrac = zeroY / height; // 0 = top, 1 = bottom
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value);
@@ -54,13 +59,13 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
     <div className="card p-5" style={{ position: 'relative' }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-        background: `linear-gradient(90deg, transparent, ${strokeColor}66, transparent)`,
+        background: `linear-gradient(90deg, transparent, ${accentColor}66, transparent)`,
         borderRadius: '14px 14px 0 0',
       }} />
 
       <div className="flex justify-between items-center mb-4">
         <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={strokeColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
             <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
           </svg>
           {t.pnlChart}
@@ -110,13 +115,28 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
           <>
             <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
               <defs>
-                <linearGradient id="chart-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={strokeColor} stopOpacity="0.2"/>
-                  <stop offset="100%" stopColor={strokeColor} stopOpacity="0"/>
+                {/* Clip to above-zero region (green area) */}
+                <clipPath id="clip-above">
+                  <rect x="0" y="0" width={width} height={zeroY} />
+                </clipPath>
+                {/* Clip to below-zero region (red area) */}
+                <clipPath id="clip-below">
+                  <rect x="0" y={zeroY} width={width} height={height - zeroY} />
+                </clipPath>
+                {/* Line gradient: green above zero, red below */}
+                <linearGradient id="line-grad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset={`${zeroFrac * 100}%`} stopColor="#22c55e" />
+                  <stop offset={`${zeroFrac * 100}%`} stopColor="#ef4444" />
                 </linearGradient>
               </defs>
-              <path d={fillPath} fill="url(#chart-fill)" />
-              <path d={path} fill="none" stroke={strokeColor} strokeWidth="2" filter={`drop-shadow(0 0 4px ${strokeColor}88)`} />
+              {/* Zero baseline */}
+              <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
+              {/* Green fill — above zero */}
+              <path d={closedFillPath} fill="rgba(34,197,94,0.15)" clipPath="url(#clip-above)" />
+              {/* Red fill — below zero */}
+              <path d={closedFillPath} fill="rgba(239,68,68,0.15)" clipPath="url(#clip-below)" />
+              {/* Line with split color */}
+              <path d={path} fill="none" stroke="url(#line-grad)" strokeWidth="2" filter="drop-shadow(0 0 3px rgba(255,255,255,0.2))" />
             </svg>
           </>
         ) : (
