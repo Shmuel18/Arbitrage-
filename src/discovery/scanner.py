@@ -537,7 +537,14 @@ class Scanner:
         # When live prices are available and price spread exceeds tier_bad_max_adverse_spread,
         # mark entry_tier as "adverse" so the frontend can show a visual warning badge.
         # The candidate will still appear in the top-5 display but cannot be executed.
-        _tier_too_adverse = entry_tier is None and _live_basis_available
+        # Only flag as "adverse" when funding was sufficient but price killed it.
+        # If funding itself is too low (_tier_net < min_funding_spread), entry_tier=None is fine
+        # (no tier badge needed — it's just a weak opportunity, not a price-adversarial one).
+        _tier_too_adverse = (
+            entry_tier is None
+            and _live_basis_available
+            and _tier_net >= tp.min_funding_spread
+        )
         if _tier_too_adverse:
             entry_tier = "adverse"
             logger.debug(
