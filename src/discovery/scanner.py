@@ -95,6 +95,7 @@ class Scanner:
                 _one_hour_ms = 3600_000
                 all_opps.sort(
                     key=lambda o: (
+                        0 if o.entry_tier == "adverse" else 1,   # adverse entries go last
                         1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
                         float(o.immediate_net_pct),
                     ),
@@ -534,11 +535,13 @@ class Scanner:
 
         # ── Gate: price spread too adverse for all tiers ──────────
         # When live prices are available and price spread exceeds tier_bad_max_adverse_spread,
-        # entry_tier stays None — mark as display-only (will not be executed).
+        # mark entry_tier as "adverse" so the frontend can show a visual warning badge.
+        # The candidate will still appear in the top-5 display but cannot be executed.
         _tier_too_adverse = entry_tier is None and _live_basis_available
         if _tier_too_adverse:
+            entry_tier = "adverse"
             logger.debug(
-                f"[{symbol}] Display-only: price spread {float(price_spread_pct):+.4f}% "
+                f"[{symbol}] Display-only (adverse): price spread {float(price_spread_pct):+.4f}% "
                 f"exceeds tier_bad_max_adverse_spread ({tp.tier_bad_max_adverse_spread}%)"
             )
 

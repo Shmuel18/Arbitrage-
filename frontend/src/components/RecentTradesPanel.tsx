@@ -66,9 +66,10 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
     let color = '#94a3b8';
     let emoji = '';
 
-    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
-    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
-    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+    if (key === 'top')     { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium')  { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')     { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+    if (key === 'adverse') { color = '#6b7280'; emoji = ''; label = t.tierAdverse; }
 
     return (
       <span style={{

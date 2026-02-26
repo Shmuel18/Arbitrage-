@@ -89,9 +89,10 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     let label = tier.toUpperCase();
     let color = '#94a3b8';
     let emoji = '';
-    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
-    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
-    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+    if (key === 'top')     { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium')  { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')     { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+    if (key === 'adverse') { color = '#6b7280'; emoji = ''; label = t.tierAdverse; }
     return (
       <span style={{
         background: color + '18', color, border: `1px solid ${color}44`,

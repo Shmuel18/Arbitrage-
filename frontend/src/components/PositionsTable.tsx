@@ -101,9 +101,10 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
 
   const tierConfig = (tier?: string | null) => {
     const k = (tier || '').toLowerCase();
-    if (k === 'top')    return { emoji: '🏆', label: t.tierTop, color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
-    if (k === 'medium') return { emoji: '📊', label: t.tierMedium, color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
-    if (k === 'bad')    return { emoji: '⚠️', label: t.tierBad, color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+    if (k === 'top')     return { emoji: '🏆', label: t.tierTop,     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
+    if (k === 'medium')  return { emoji: '📊', label: t.tierMedium,  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
+    if (k === 'bad')     return { emoji: '⚠️', label: t.tierBad,     color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
+    if (k === 'adverse') return { emoji: '',   label: t.tierAdverse, color: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
     return null;
   };
 

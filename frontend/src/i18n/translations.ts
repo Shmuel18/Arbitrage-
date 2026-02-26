@@ -142,6 +142,7 @@ export interface Translations {
   tierTop: string;
   tierMedium: string;
   tierBad: string;
+  tierAdverse: string;
 
   // StatsCards sub-labels
   subTotalAcross: string;
@@ -314,6 +315,7 @@ const en: Translations = {
   tierTop: 'TOP',
   tierMedium: 'MEDIUM',
   tierBad: 'BAD',
+  tierAdverse: 'PRICE ⛔',
 
   // StatsCards sub-labels
   subTotalAcross: 'Total across all exchanges',
@@ -486,6 +488,7 @@ const he: Translations = {
   tierTop: 'מוביל',
   tierMedium: 'בינוני',
   tierBad: 'חלש',
+  tierAdverse: 'מחיר ⛔',
 
   // StatsCards sub-labels
   subTotalAcross: 'סה״כ בכל הבורסאות',
