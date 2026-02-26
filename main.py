@@ -252,6 +252,22 @@ async def main() -> None:
                         pos_entry["current_short_rate"] = str(live_short["rate"])
                         if live_long.get("next_timestamp"):
                             pos_entry["next_funding_ms"] = live_long["next_timestamp"]
+                        # ── Pending funding estimate ──
+                        try:
+                            _lr = float(live_long["rate"])
+                            _sr = float(live_short["rate"])
+                            _notional = float(trade.entry_price_long or 0) * float(trade.long_qty or 0)
+                            if _notional > 0:
+                                # Income: long earns when rate<0, short earns when rate>0
+                                _income = _notional * max(0.0, -_lr) + _notional * max(0.0, _sr)
+                                # Cost: long pays when rate>0, short pays when rate<0
+                                _cost = _notional * max(0.0, _lr) + _notional * max(0.0, -_sr)
+                                pos_entry["pending_income_usd"] = str(round(_income, 4))
+                                pos_entry["pending_income_pct"] = str(round(_income / _notional * 100, 4))
+                                pos_entry["pending_net_usd"] = str(round(_income - _cost, 4))
+                                pos_entry["pending_net_pct"] = str(round((_income - _cost) / _notional * 100, 4))
+                        except Exception:
+                            pass
                     except Exception as fr_err:
                         logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
 

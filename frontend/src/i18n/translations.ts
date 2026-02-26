@@ -68,6 +68,7 @@ export interface Translations {
   netPct: string;
   fundingSpread: string;
   immediateSpreadOpp: string;
+  priceSpreadPct: string;
   hourlyRate: string;
   nextPayment: string;
   countdown: string;
@@ -247,6 +248,7 @@ const en: Translations = {
   netPct: 'NET %',
   fundingSpread: 'SPREAD %',
   immediateSpreadOpp: 'IMMED %',
+  priceSpreadPct: 'PRICE %',
   hourlyRate: '/HOUR %',
   nextPayment: 'NEXT CYC',
   countdown: 'PAYOUT',
@@ -420,6 +422,7 @@ const he: Translations = {
   netPct: '% נטו',
   fundingSpread: '% ספרד',
   immediateSpreadOpp: '% מיידי',
+  priceSpreadPct: '% מחיר',
   hourlyRate: '% לשעה',
   nextPayment: 'פעימה הבאה',
   countdown: 'פעימה',

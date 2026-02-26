@@ -34,6 +34,10 @@ interface PositionRow {
   fees_paid_total?: string | null;
   funding_collections?: number | null;
   profit_target_pct?: string | null;
+  pending_income_usd?: string | null;
+  pending_income_pct?: string | null;
+  pending_net_usd?: string | null;
+  pending_net_pct?: string | null;
   state: string;
 }
 
@@ -366,6 +370,27 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     <span>
                       💰 {p.funding_collections ?? 0}× ({fmtUsd(p.funding_collected_usd)})
                     </span>
+                    {(() => {
+                      const isCherryPick = (p.mode || '').toLowerCase() === 'cherry_pick';
+                      const pendingUsd = isCherryPick
+                        ? num(p.pending_income_usd)
+                        : num(p.pending_net_usd);
+                      if (pendingUsd == null || Math.abs(pendingUsd) < 0.001) return null;
+                      const pendingPct = isCherryPick
+                        ? num(p.pending_income_pct)
+                        : num(p.pending_net_pct);
+                      const isPositive = pendingUsd >= 0;
+                      return (
+                        <span style={{
+                          color: isPositive ? 'var(--green)' : 'var(--red)',
+                          fontFamily: 'var(--font-mono)',
+                          fontWeight: 600,
+                        }}>
+                          ⏳ {isPositive ? '+' : ''}{pendingPct != null ? pendingPct.toFixed(3) + '%' : ''}
+                          {' '}(~{isPositive ? '+' : ''}${Math.abs(pendingUsd).toFixed(2)})
+                        </span>
+                      );
+                    })()}
                   </div>
                   <span style={{
                     fontSize: 14, color: 'var(--text-muted)', opacity: 0.4,
