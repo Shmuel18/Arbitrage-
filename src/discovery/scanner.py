@@ -510,9 +510,12 @@ class Scanner:
         _tier_net = immediate_spread - total_cost_pct
         entry_tier: Optional[str] = None
         if _tier_net >= tp.min_funding_spread:
-            if price_spread_pct > Decimal("0"):
-                # Favorable price spread → TOP tier
+            if price_spread_pct >= _tier_net:
+                # Price spread >= net funding → TOP tier (meaningful price advantage)
                 entry_tier = EntryTier.TOP.value
+            elif price_spread_pct > Decimal("0"):
+                # Positive price spread but smaller than funding → MEDIUM
+                entry_tier = EntryTier.MEDIUM.value
             elif price_spread_pct >= -_tier_net:
                 # Neutral or slightly adverse (within funding amount) → MEDIUM
                 entry_tier = EntryTier.MEDIUM.value

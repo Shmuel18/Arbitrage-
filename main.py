@@ -26,6 +26,7 @@ from src.execution.controller import ExecutionController
 from src.risk.guard import RiskGuard
 from src.storage.redis_client import RedisClient
 from src.api.publisher import APIPublisher
+from src.discovery.calculator import calculate_funding_spread
 
 logger = get_logger("main")
 
@@ -208,7 +209,6 @@ async def main() -> None:
                 await publisher.publish_summary(balances, active_count)
                 
                 # Publish active positions details (with live spread)
-                from src.discovery.calculator import calculate_funding_spread
                 positions_data = []
                 for tid, trade in controller._active_trades.items():
                     pos_entry = {
@@ -324,9 +324,8 @@ async def main() -> None:
                         "trinity:pnl:timeseries", cutoff, float('inf'), withscores=True
                     )
                     if closed_pnl:
-                        for i in range(0, len(closed_pnl), 2):
-                            if i + 1 < len(closed_pnl):
-                                realized_pnl += float(closed_pnl[i])
+                        for member, _score in closed_pnl:
+                            realized_pnl += float(member)
                 except Exception:
                     pass
 
@@ -355,19 +354,18 @@ async def main() -> None:
                     )
                     data_points = []
                     if running_data:
-                        for i in range(0, len(running_data), 2):
-                            if i + 1 < len(running_data):
-                                try:
-                                    point = json.loads(running_data[i])
-                                    data_points.append({
-                                        "pnl": point.get("running", 0),
-                                        "cumulative_pnl": point.get("running", 0),
-                                        "unrealized": point.get("unrealized", 0),
-                                        "realized": point.get("realized", 0),
-                                        "timestamp": float(running_data[i + 1]),
-                                    })
-                                except Exception:
-                                    pass
+                        for member, score in running_data:
+                            try:
+                                point = json.loads(member)
+                                data_points.append({
+                                    "pnl": point.get("running", 0),
+                                    "cumulative_pnl": point.get("running", 0),
+                                    "unrealized": point.get("unrealized", 0),
+                                    "realized": point.get("realized", 0),
+                                    "timestamp": float(score),
+                                })
+                            except Exception:
+                                pass
                     pnl_payload = {
                         "data_points": data_points,
                         "total_pnl": running_pnl,

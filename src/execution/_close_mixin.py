@@ -132,14 +132,11 @@ class _CloseMixin:
             _long_net: float = 0.0
             _short_net: float = 0.0
             if _since_ms and long_adapter and short_adapter:
-                try:
-                    _real_funding_long, _real_funding_short = await asyncio.gather(
-                        long_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
-                        short_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
-                        return_exceptions=True,
-                    )
-                except Exception as _rfe:
-                    logger.debug(f"[{trade.symbol}] Funding reconcile gather failed: {_rfe}")
+                _real_funding_long, _real_funding_short = await asyncio.gather(
+                    long_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
+                    short_adapter.fetch_funding_history(trade.symbol, _since_ms, _until_ms),
+                    return_exceptions=True,
+                )
 
             _long_hist_ok = (
                 isinstance(_real_funding_long, dict)
@@ -407,12 +404,24 @@ class _CloseMixin:
         else:
             trade.state = TradeState.ERROR
             await self._persist_trade(trade)
+            # Free exchange locks so a single failed close doesn't block the whole bot.
+            self._deregister_trade(trade)
             logger.error(
-                f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED",
+                f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED "
+                f"(exchange locks released, cooldown applied)",
                 extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
             )
             cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
             await self._redis.set_cooldown(trade.symbol, cooldown_sec)
+            # Alert operator immediately
+            if self._publisher:
+                try:
+                    await self._publisher.push_alert(
+                        f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
+                        f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
+                    )
+                except Exception:
+                    pass  # best-effort; logging is the fallback
 
     async def _close_leg(
         self, adapter, exchange: str, symbol: str,
