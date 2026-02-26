@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSettings } from '../context/SettingsContext';
+import PositionDetailCard from './PositionDetailCard';
 
 interface PositionRow {
   id: string;
@@ -16,9 +17,23 @@ interface PositionRow {
   current_long_rate?: string | null;
   current_short_rate?: string | null;
   entry_price_long?: string | null;
+  entry_price_short?: string | null;
+  live_price_long?: string | null;
+  live_price_short?: string | null;
   next_funding_ms?: number | null;
   mode?: string;
   entry_tier?: string | null;
+  unrealized_pnl_pct?: string | null;
+  price_pnl_pct?: string | null;
+  funding_pnl_pct?: string | null;
+  fees_pct?: string | null;
+  entry_basis_pct?: string | null;
+  current_basis_pct?: string | null;
+  price_spread_pct?: string | null;
+  funding_collected_usd?: string | null;
+  fees_paid_total?: string | null;
+  funding_collections?: number | null;
+  profit_target_pct?: string | null;
   state: string;
 }
 
@@ -28,6 +43,11 @@ interface PositionsTableProps {
 
 const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   const { t } = useSettings();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const toggleExpand = (id: string) => {
+    setExpandedId(prev => prev === id ? null : id);
+  };
 
   const formatFunding = (rate?: string | null) => {
     if (!rate) return '--';
@@ -138,6 +158,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.qtyLS}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.sizeUsd}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.colEntryPct}</th>
+              <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.colPnl}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.colFundPct}</th>
               <th style={{ padding: '6px 8px', textAlign: 'right' }}>{t.nextPayout}</th>
               <th style={{ padding: '6px 8px', textAlign: 'center' }}>{t.state}</th>
@@ -153,7 +174,8 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
             ) : (
               positions.map((p) => {
                 return (
-                  <tr key={p.id} className="pos-row--active" style={{ lineHeight: '1.2' }}>
+                  <React.Fragment key={p.id}>
+                  <tr className="pos-row--active" style={{ lineHeight: '1.2', cursor: 'pointer' }} onClick={() => toggleExpand(p.id)} title={t.clickRowForDetails}>
                     <td style={{ padding: '5px 8px', fontWeight: 500 }} className="text-accent">
                       <div>{p.symbol}</div>
                       <div style={{ marginTop: 1 }}>{modeLabel(p.mode)}{tierBadge(p.entry_tier)}</div>
@@ -172,6 +194,11 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatSpread(p.entry_edge_pct)}
                     </td>
+                    <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem', fontWeight: 700,
+                      color: p.unrealized_pnl_pct ? (Number(p.unrealized_pnl_pct) >= 0 ? 'var(--green)' : 'var(--red)') : 'inherit'
+                    }} className="mono">
+                      {p.unrealized_pnl_pct ? `${Number(p.unrealized_pnl_pct) >= 0 ? '+' : ''}${Number(p.unrealized_pnl_pct).toFixed(3)}%` : '--'}
+                    </td>
                     <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: '0.8rem' }} className="mono">
                       {formatFunding(p.current_long_rate)}/{formatFunding(p.current_short_rate)}
                     </td>
@@ -182,6 +209,14 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {p.state}
                     </td>
                   </tr>
+                  {expandedId === p.id && (
+                    <tr>
+                      <td colSpan={9} style={{ padding: '0 8px 8px' }}>
+                        <PositionDetailCard position={p} onClose={() => setExpandedId(null)} />
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })
             )}

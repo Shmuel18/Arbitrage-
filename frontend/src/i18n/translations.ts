@@ -158,6 +158,7 @@ export interface Translations {
   // PositionsTable column headers
   colExchange: string;
   colEntryPct: string;
+  colPnl: string;
   colFundPct: string;
 
   // RightPanel column headers
@@ -167,6 +168,20 @@ export interface Translations {
 
   // RecentTradesPanel hints
   clickRowForDetails: string;
+
+  // PositionDetailCard
+  pdPrices: string;
+  pdFunding: string;
+  pdBasis: string;
+  pdEntry: string;
+  pdLive: string;
+  pdDelta: string;
+  pdTarget: string;
+  pdEntrySpread: string;
+  pdLiveSpread: string;
+  pdCollections: string;
+  pdTargetReached: string;
+  pdToTarget: string;
 }
 
 const en: Translations = {
@@ -315,6 +330,7 @@ const en: Translations = {
   // PositionsTable column headers
   colExchange: 'Ex',
   colEntryPct: 'Entry%',
+  colPnl: 'PnL%',
   colFundPct: 'Fund%',
 
   // RightPanel column headers
@@ -324,6 +340,20 @@ const en: Translations = {
 
   // RecentTradesPanel hints
   clickRowForDetails: 'Click row for details',
+
+  // PositionDetailCard
+  pdPrices: 'Prices',
+  pdFunding: 'Funding',
+  pdBasis: 'Basis',
+  pdEntry: 'Entry',
+  pdLive: 'Live',
+  pdDelta: 'Delta',
+  pdTarget: 'Target',
+  pdEntrySpread: 'Entry Spread',
+  pdLiveSpread: 'Live Spread',
+  pdCollections: 'Collections',
+  pdTargetReached: 'Reached!',
+  pdToTarget: 'to target',
 };
 
 const he: Translations = {
@@ -472,6 +502,7 @@ const he: Translations = {
   // PositionsTable column headers
   colExchange: 'בורסה',
   colEntryPct: '% כניסה',
+  colPnl: '% רוו"ה',
   colFundPct: '% מימון',
 
   // RightPanel column headers
@@ -481,6 +512,20 @@ const he: Translations = {
 
   // RecentTradesPanel hints
   clickRowForDetails: 'לחץ על שורה לפרטים',
+
+  // PositionDetailCard
+  pdPrices: 'מחירים',
+  pdFunding: 'מימון',
+  pdBasis: 'בסיס',
+  pdEntry: 'כניסה',
+  pdLive: 'עכשווי',
+  pdDelta: 'שינוי',
+  pdTarget: 'יעד',
+  pdEntrySpread: 'ספרד כניסה',
+  pdLiveSpread: 'ספרד נוכחי',
+  pdCollections: 'גביות',
+  pdTargetReached: 'הושג!',
+  pdToTarget: 'ליעד',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

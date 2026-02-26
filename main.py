@@ -254,6 +254,50 @@ async def main() -> None:
                             pos_entry["next_funding_ms"] = live_long["next_timestamp"]
                     except Exception as fr_err:
                         logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
+
+                    # ── Compute unrealized PnL % & detail-card fields ──
+                    try:
+                        _la = mgr.get(trade.long_exchange)
+                        _sa = mgr.get(trade.short_exchange)
+                        _lt = await _la.get_ticker(trade.symbol)
+                        _st = await _sa.get_ticker(trade.symbol)
+                        _lp = float(_lt.get("last") or _lt.get("close") or 0)
+                        _sp = float(_st.get("last") or _st.get("close") or 0)
+                        _elp = float(trade.entry_price_long or 0)
+                        _esp = float(trade.entry_price_short or 0)
+                        if _lp > 0 and _sp > 0 and _elp > 0 and _esp > 0:
+                            _notional = _elp * float(trade.long_qty)
+                            if _notional > 0:
+                                _long_pnl = (_lp - _elp) * float(trade.long_qty)
+                                _short_pnl = (_esp - _sp) * float(trade.short_qty)
+                                _price_pnl = _long_pnl + _short_pnl
+                                _fund_pnl = float(trade.funding_collected_usd or 0)
+                                _fees = float(trade.fees_paid_total or 0)
+                                _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
+                                _price_pnl_pct = _price_pnl / _notional * 100
+                                _fund_pnl_pct = _fund_pnl / _notional * 100
+                                _fees_pct = _fees / _notional * 100
+                                pos_entry["unrealized_pnl_pct"] = str(round(_total_pnl_pct, 4))
+                                pos_entry["price_pnl_pct"] = str(round(_price_pnl_pct, 4))
+                                pos_entry["funding_pnl_pct"] = str(round(_fund_pnl_pct, 4))
+                                pos_entry["fees_pct"] = str(round(_fees_pct, 4))
+                        # Live prices for detail card
+                        pos_entry["live_price_long"] = str(_lp) if _lp > 0 else None
+                        pos_entry["live_price_short"] = str(_sp) if _sp > 0 else None
+                        # Current basis: (live_long - live_short) / live_short × 100
+                        if _lp > 0 and _sp > 0:
+                            pos_entry["current_basis_pct"] = str(round((_lp - _sp) / _sp * 100, 4))
+                    except Exception:
+                        pass
+
+                    # ── Static trade fields for detail card ──
+                    pos_entry["entry_basis_pct"] = str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None
+                    pos_entry["price_spread_pct"] = str(trade.price_spread_pct) if trade.price_spread_pct is not None else None
+                    pos_entry["funding_collected_usd"] = str(trade.funding_collected_usd)
+                    pos_entry["fees_paid_total"] = str(trade.fees_paid_total) if trade.fees_paid_total is not None else None
+                    pos_entry["funding_collections"] = trade.funding_collections
+                    pos_entry["profit_target_pct"] = str(cfg.strategy.profit_target_pct)
+
                     positions_data.append(pos_entry)
                 await publisher.publish_positions(positions_data)
 
