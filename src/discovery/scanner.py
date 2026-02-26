@@ -534,13 +534,13 @@ class Scanner:
 
         # ── Gate: price spread too adverse for all tiers ──────────
         # When live prices are available and price spread exceeds tier_bad_max_adverse_spread,
-        # entry_tier stays None — reject immediately (comment "won't enter" is now enforced).
-        if entry_tier is None and _live_basis_available:
+        # entry_tier stays None — mark as display-only (will not be executed).
+        _tier_too_adverse = entry_tier is None and _live_basis_available
+        if _tier_too_adverse:
             logger.debug(
-                f"[{symbol}] Rejected: price spread {float(price_spread_pct):+.4f}% "
+                f"[{symbol}] Display-only: price spread {float(price_spread_pct):+.4f}% "
                 f"exceeds tier_bad_max_adverse_spread ({tp.tier_bad_max_adverse_spread}%)"
             )
-            return None
 
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
@@ -753,6 +753,10 @@ class Scanner:
                                     extra={
                                         "action": "cherry_pick_found", "symbol": symbol, "mode": "cherry_pick"},
                                 )
+
+        # ── Force disqualify if price spread is too adverse for any tier ──
+        if _tier_too_adverse:
+            qualified = False
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
         if not qualified and immediate_spread <= Decimal("0"):
