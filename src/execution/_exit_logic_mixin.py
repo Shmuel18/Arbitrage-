@@ -172,6 +172,32 @@ class _ExitLogicMixin:
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "funding_collected"},
             )
 
+            # ── NEGATIVE FUNDING GUARD ───────────────────────────────
+            # If the funding payment we just received was NEGATIVE (we paid
+            # instead of receiving), the trade direction is wrong. Exit
+            # immediately rather than holding 1.5h for a profit target that
+            # likely won't be reached.
+            if _net_usd < 0:
+                logger.warning(
+                    f"🚨 [{trade.symbol}] NEGATIVE funding ${_net_usd:.4f} — "
+                    f"direction was wrong! Exiting immediately.",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "negative_funding_exit",
+                    },
+                )
+                trade._exit_reason = "negative_funding"
+                _hold_min_neg = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=f"negative_funding_{_net_usd:.4f}",
+                    immediate_spread=Decimal(str(total_pnl_pct)),
+                    hold_min=_hold_min_neg,
+                )
+                await self._close_trade(trade)
+                return
+
         # ── Display current status ───────────────────────────────
         hold_min = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
         tier_tag = f" [{trade.entry_tier.upper()}]" if trade.entry_tier else ""
@@ -387,6 +413,31 @@ class _ExitLogicMixin:
         net_spread = immediate_spread - fees_pct
 
         qualifies = net_spread >= tp.min_funding_spread
+
+        # ── hold_max_wait_seconds: reject if next funding is too far away ──
+        # Staying exposed to price risk for hours while waiting for the next
+        # funding is not worth it. Only stay if the next payment is within
+        # hold_max_wait_seconds.
+        if qualifies and tp.hold_max_wait_seconds > 0:
+            now_ms = _time.time() * 1000
+            _ln_ts = long_funding.get("next_timestamp")
+            _sn_ts = short_funding.get("next_timestamp")
+            _next_ts = None
+            if _ln_ts is not None and _sn_ts is not None:
+                _next_ts = min(_ln_ts, _sn_ts)
+            elif _ln_ts is not None:
+                _next_ts = _ln_ts
+            elif _sn_ts is not None:
+                _next_ts = _sn_ts
+            if _next_ts is not None:
+                secs_until = (_next_ts - now_ms) / 1000
+                if secs_until > tp.hold_max_wait_seconds:
+                    qualifies = False
+                    logger.info(
+                        f"🔍 [{trade.symbol}] Next funding too far: "
+                        f"{int(secs_until)}s > hold_max_wait={tp.hold_max_wait_seconds}s — EXIT",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                    )
 
         _result = "✅ STAY" if qualifies else "❌ EXIT"
         logger.info(

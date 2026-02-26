@@ -77,6 +77,21 @@ class _MonitorMixin(_ExitLogicMixin):
         if upgrade_delta <= 0:
             return False
 
+        # ── Minimum hold time: never upgrade within first 3 minutes ──────────
+        # Prevents rapid churn where trades are opened and immediately closed
+        # for "better" opportunities before any value is captured.
+        _MIN_UPGRADE_HOLD_SECONDS = 180
+        if trade.opened_at:
+            held_secs = (datetime.now(timezone.utc) - trade.opened_at).total_seconds()
+            if held_secs < _MIN_UPGRADE_HOLD_SECONDS:
+                return False
+
+        # ── Never upgrade CHERRY_PICK trades ─────────────────────────────────
+        # Cherry picks have a planned exit_before timestamp; upgrading them
+        # defeats the purpose and risks missing the income payment.
+        if trade.mode == TradeMode.CHERRY_PICK:
+            return False
+
         # Get current trade's spread from cache (no REST call)
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
@@ -116,21 +131,47 @@ class _MonitorMixin(_ExitLogicMixin):
                     short_ms = trade.next_funding_short.timestamp() * 1000
                     if current_next_ts is None or short_ms < current_next_ts:
                         current_next_ts = short_ms
-            if current_next_ts is not None:
-                secs_to_funding = (current_next_ts - now_ms) / 1000
-                if 0 < secs_to_funding <= upgrade_funding_lock_secs:
-                    logger.info(
-                        f"🔒 Upgrade blocked for {trade.symbol}: "
-                        f"funding in {int(secs_to_funding)}s "
-                        f"(lock={upgrade_funding_lock_secs}s)",
-                        extra={
-                            "trade_id": trade.trade_id,
-                            "symbol": trade.symbol,
-                            "action": "upgrade_blocked_funding_lock",
-                            "secs_to_funding": int(secs_to_funding),
-                        },
-                    )
-                    return False
+            if current_next_ts is None:
+                # No funding timestamp available — default to BLOCKING upgrades.
+                # Without a timestamp we cannot verify it's safe to exit.
+                logger.info(
+                    f"🔒 Upgrade blocked for {trade.symbol}: "
+                    f"no funding timestamp available — defaulting to block",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "upgrade_blocked_no_timestamp",
+                    },
+                )
+                return False
+            secs_to_funding = (current_next_ts - now_ms) / 1000
+            if 0 < secs_to_funding <= upgrade_funding_lock_secs:
+                logger.info(
+                    f"🔒 Upgrade blocked for {trade.symbol}: "
+                    f"funding in {int(secs_to_funding)}s "
+                    f"(lock={upgrade_funding_lock_secs}s)",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "upgrade_blocked_funding_lock",
+                        "secs_to_funding": int(secs_to_funding),
+                    },
+                )
+                return False
+            # Also block if funding JUST fired (secs_to_funding <= 0) and
+            # the exit logic hasn't yet recorded the collection.
+            if secs_to_funding <= 0 and not trade._exit_check_active:
+                logger.info(
+                    f"🔒 Upgrade blocked for {trade.symbol}: "
+                    f"funding just fired ({int(secs_to_funding)}s ago) "
+                    f"but not yet recorded — waiting for exit logic",
+                    extra={
+                        "trade_id": trade.trade_id,
+                        "symbol": trade.symbol,
+                        "action": "upgrade_blocked_funding_just_fired",
+                    },
+                )
+                return False
         # ─────────────────────────────────────────────────────────────────────
 
         # Projected net for current trade: income spread minus round-trip fees.

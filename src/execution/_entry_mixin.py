@@ -147,6 +147,12 @@ class _EntryMixin:
         tier = opp.entry_tier
         tier_emoji = {"top": "🏆", "medium": "📊", "bad": "⚠️"}.get(tier or "", "")
 
+        # ── Minimum time-to-funding guard ────────────────────────────────
+        # Never enter if funding is < 120 seconds away. At that point the
+        # order placement + settlement overhead risks straddling the payment
+        # boundary, causing negative or missed funding.
+        _MIN_ENTRY_SECS_BEFORE_FUNDING = 120
+
         if tier == "top":
             # TOP tier: enter anytime — only ensure funding timestamp exists
             if primary_next_ms is None:
@@ -158,6 +164,12 @@ class _EntryMixin:
             if seconds_until <= 0:
                 logger.info(
                     f"⏳ Skipping {opp.symbol}: TOP tier but funding timestamp in the past"
+                )
+                return
+            if seconds_until < _MIN_ENTRY_SECS_BEFORE_FUNDING:
+                logger.info(
+                    f"⏳ Skipping {opp.symbol}: TOP tier but funding too close "
+                    f"({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
                 )
                 return
             logger.info(
@@ -173,11 +185,17 @@ class _EntryMixin:
                 )
                 return
             seconds_until = (primary_next_ms - now_ms) / 1000
-            if not (0 < seconds_until <= entry_offset):
-                logger.info(
-                    f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
-                    f"not in {entry_offset}s window. Next funding in {int(seconds_until/60)}min."
-                )
+            if not (_MIN_ENTRY_SECS_BEFORE_FUNDING < seconds_until <= entry_offset):
+                if seconds_until <= _MIN_ENTRY_SECS_BEFORE_FUNDING and seconds_until > 0:
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
+                        f"funding too close ({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
+                    )
+                else:
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
+                        f"not in {entry_offset}s window. Next funding in {int(seconds_until/60)}min."
+                    )
                 return
             logger.info(
                 f"{tier_emoji} [{opp.symbol}] {tier.upper()} tier — "
@@ -193,17 +211,46 @@ class _EntryMixin:
                 )
                 return
             seconds_until = (primary_next_ms - now_ms) / 1000
-            if not (0 < seconds_until <= entry_offset):
-                logger.info(
-                    f"⏳ Skipping {opp.symbol}: no tier, not in entry window. "
-                    f"Next funding in {int(seconds_until/60)}min."
-                )
+            if not (_MIN_ENTRY_SECS_BEFORE_FUNDING < seconds_until <= entry_offset):
+                if seconds_until <= _MIN_ENTRY_SECS_BEFORE_FUNDING and seconds_until > 0:
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: no tier — "
+                        f"funding too close ({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
+                    )
+                else:
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: no tier, not in entry window. "
+                        f"Next funding in {int(seconds_until/60)}min."
+                    )
                 return
 
         logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
         # NOTE: Basis Inversion Guard removed — the exit guard already ensures we exit
         # at entry_basis or better, so the entry ask/bid spread is neutral on round-trip.
         # Any bid-ask spread cost is already covered by fees_pct + slippage_buffer_pct.
+
+        # ── Rate direction re-verification ─────────────────────────────────
+        # Re-read live cached rates right before placing orders.
+        # If the income direction has flipped since the scanner evaluated,
+        # abort entry to avoid paying funding instead of receiving.
+        _verify_long = long_adapter.get_funding_rate_cached(opp.symbol) if long_adapter else None
+        _verify_short = short_adapter.get_funding_rate_cached(opp.symbol) if short_adapter else None
+        if _verify_long and _verify_short:
+            _vl_rate = Decimal(str(_verify_long["rate"]))
+            _vs_rate = Decimal(str(_verify_short["rate"]))
+            # At entry: long_rate < 0 means long receives, short_rate > 0 means short receives
+            _orig_long_income = opp.long_funding_rate < 0
+            _orig_short_income = opp.short_funding_rate > 0
+            _now_long_income = _vl_rate < 0
+            _now_short_income = _vs_rate > 0
+            if _orig_long_income != _now_long_income or _orig_short_income != _now_short_income:
+                logger.warning(
+                    f"🚫 [{opp.symbol}] Rate direction FLIPPED since scan — aborting entry! "
+                    f"Scan: L={float(opp.long_funding_rate)*100:+.4f}% S={float(opp.short_funding_rate)*100:+.4f}% "
+                    f"→ Now: L={float(_vl_rate)*100:+.4f}% S={float(_vs_rate)*100:+.4f}%",
+                    extra={"symbol": opp.symbol, "action": "rate_flip_abort"},
+                )
+                return
 
         # Acquire lock
         lock_key = f"trade:{opp.symbol}"
