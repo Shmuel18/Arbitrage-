@@ -33,6 +33,7 @@ logger = get_logger("scanner")
 
 _FUNDING_STALE_SEC = 3600
 _MIN_WINDOW_MINUTES = 30
+_MIN_CHERRY_GAP_MINUTES = 60  # income and cost must fire at least this far apart to qualify as cherry
 _TOP_OPPS_LOG_INTERVAL_SEC = 300
 
 
@@ -679,6 +680,17 @@ class Scanner:
                     mode = TradeMode.CHERRY_PICK
                     emoji = "🍒"
                     label = "CHERRY"
+                    # Verify cost doesn't fire at same time as income
+                    # (e.g., both exchanges share the same 8h UTC schedule)
+                    _income_next_ts = long_next if pnl["long_is_income"] else short_next
+                    _cost_next_ts = short_next if pnl["long_is_income"] else long_next
+                    if _income_next_ts and _cost_next_ts:
+                        _cherry_gap_min = abs(_cost_next_ts - _income_next_ts) / 60_000
+                        if _cherry_gap_min < _MIN_CHERRY_GAP_MINUTES:
+                            # Cost fires within gap of income — treat as NUTCRACKER
+                            mode = TradeMode.NUTCRACKER
+                            emoji = "🔨🥜"
+                            label = "NUTCRACKER"
             else:
                 mode = TradeMode.HOLD
                 emoji = "🤝"
@@ -755,6 +767,7 @@ class Scanner:
                         # Cost must be far enough away (>30 min)
                         # Income must arrive before cost
                         if (minutes_until_cost >= _MIN_WINDOW_MINUTES
+                                and (minutes_until_cost - minutes_until_income) >= _MIN_CHERRY_GAP_MINUTES
                                 and minutes_until_income < minutes_until_cost
                                 and minutes_until_income <= current_entry_window_minutes): # Use current_entry_window_minutes here as well for cherry_pick
                             # Single-payment cherry_pick: only the immediate income pulse counts.
