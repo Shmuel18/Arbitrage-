@@ -666,12 +666,14 @@ class Scanner:
             elif pnl["long_is_income"] or pnl["short_is_income"]:
                 # Is the COST side also imminent (fires within the entry window)?
                 # Yes → NUTCRACKER 🔨🥜: receive one side AND pay the other in same cycle.
-                # No  → CHERRY 🍒:    only receive this cycle, cost fires much later (silent).
-                #           No exit_before — NET over time is positive, just hold.
+                # No  → CHERRY 🍒:    only receive this cycle, cost fires much later.
+                #           Set exit_before so we exit BEFORE the cost side fires.
                 if pnl["long_is_income"]:
                     cost_imminent_now = short_mins is not None and short_mins <= current_entry_window_minutes
+                    _cost_next_ts_hold = short_next
                 else:
                     cost_imminent_now = long_mins is not None and long_mins <= current_entry_window_minutes
+                    _cost_next_ts_hold = long_next
                 if cost_imminent_now:
                     mode = TradeMode.NUTCRACKER
                     emoji = "🔨🥜"
@@ -680,6 +682,11 @@ class Scanner:
                     mode = TradeMode.CHERRY_PICK
                     emoji = "🍒"
                     label = "CHERRY"
+                    # Set exit_before: exit 2 minutes before cost side fires
+                    if _cost_next_ts_hold and _cost_next_ts_hold > now_ms:
+                        exit_before = datetime.fromtimestamp(
+                            (_cost_next_ts_hold - 120_000) / 1000, tz=timezone.utc
+                        )
                     # Verify cost doesn't fire at same time as income
                     # (e.g., both exchanges share the same 8h UTC schedule)
                     _income_next_ts = long_next if pnl["long_is_income"] else short_next
@@ -691,6 +698,7 @@ class Scanner:
                             mode = TradeMode.NUTCRACKER
                             emoji = "🔨🥜"
                             label = "NUTCRACKER"
+                            exit_before = None  # NUTCRACKER doesn't need exit_before
             else:
                 mode = TradeMode.HOLD
                 emoji = "🤝"

@@ -64,7 +64,7 @@ class _ExitLogicMixin:
                     f"exiting before costly payment at {trade.exit_before.strftime('%H:%M UTC')}",
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "exit_signal"},
                 )
-                trade._exit_reason = ExitReason.SPREAD_BELOW_THRESHOLD.value
+                trade._exit_reason = "cherry_hard_stop"
                 await self._close_trade(trade)
                 return
 
@@ -116,12 +116,17 @@ class _ExitLogicMixin:
             short_exit_time = trade.next_funding_short + timedelta(seconds=exit_offset)
             short_paid = now >= short_exit_time
 
-        # Record funding collection (once per cycle)
-        if (long_paid or short_paid) and not trade._exit_check_active:
+        # Record funding collection — track each side independently
+        # so staggered payments (cost side fires after income side)
+        # are properly detected instead of blocked by _exit_check_active.
+        long_just_paid = long_paid and not trade._funding_paid_long
+        short_just_paid = short_paid and not trade._funding_paid_short
+
+        if long_just_paid or short_just_paid:
             trade._exit_check_active = True
-            if long_paid:
+            if long_just_paid:
                 trade._funding_paid_long = True
-            if short_paid:
+            if short_just_paid:
                 trade._funding_paid_short = True
 
             # Track funding payment
@@ -129,12 +134,12 @@ class _ExitLogicMixin:
             _live_short = short_adapter.get_funding_rate_cached(trade.symbol)
 
             _lr = (
-                Decimal(str(_live_long["rate"])) if (_live_long and long_paid and "rate" in _live_long)
-                else (trade.long_funding_rate if long_paid else None)
+                Decimal(str(_live_long["rate"])) if (_live_long and long_just_paid and "rate" in _live_long)
+                else (trade.long_funding_rate if long_just_paid else None)
             )
             _sr = (
-                Decimal(str(_live_short["rate"])) if (_live_short and short_paid and "rate" in _live_short)
-                else (trade.short_funding_rate if short_paid else None)
+                Decimal(str(_live_short["rate"])) if (_live_short and short_just_paid and "rate" in _live_short)
+                else (trade.short_funding_rate if short_just_paid else None)
             )
 
             _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else 0
@@ -146,12 +151,12 @@ class _ExitLogicMixin:
             trade._funding_paid_at = now
 
             # Journal entries
-            if long_paid and _lr:
+            if long_just_paid and _lr:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.long_exchange, 'long',
                     rate=_lr, estimated_payment=_long_usd,
                 )
-            if short_paid and _sr:
+            if short_just_paid and _sr:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.short_exchange, 'short',
                     rate=_sr, estimated_payment=_short_usd,
@@ -173,14 +178,16 @@ class _ExitLogicMixin:
             )
 
             # ── NEGATIVE FUNDING GUARD ───────────────────────────────
-            # If the funding payment we just received was NEGATIVE (we paid
-            # instead of receiving), the trade direction is wrong. Exit
-            # immediately rather than holding 1.5h for a profit target that
-            # likely won't be reached.
-            if _net_usd < 0:
+            # Check CUMULATIVE funding, not just this payment.
+            # For CHERRY picks the cost side may fire AFTER income;
+            # for NUTCRACKERs with staggered payments, cumulative is
+            # positive when net direction is correct.
+            _cumulative = float(trade.funding_collected_usd)
+            if _cumulative < 0:
                 logger.warning(
-                    f"🚨 [{trade.symbol}] NEGATIVE funding ${_net_usd:.4f} — "
-                    f"direction was wrong! Exiting immediately.",
+                    f"🚨 [{trade.symbol}] NEGATIVE cumulative funding "
+                    f"${_cumulative:.4f} — direction is wrong! "
+                    f"Exiting immediately.",
                     extra={
                         "trade_id": trade.trade_id,
                         "symbol": trade.symbol,
@@ -191,7 +198,7 @@ class _ExitLogicMixin:
                 _hold_min_neg = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
                 self._journal.exit_decision(
                     trade.trade_id, trade.symbol,
-                    reason=f"negative_funding_{_net_usd:.4f}",
+                    reason=f"negative_funding_{_cumulative:.4f}",
                     immediate_spread=Decimal(str(total_pnl_pct)),
                     hold_min=_hold_min_neg,
                 )
@@ -366,12 +373,23 @@ class _ExitLogicMixin:
         # Funding P&L (accumulated)
         funding_pnl_pct = trade.funding_collected_usd / notional * Decimal("100") if trade.funding_collected_usd else Decimal("0")
 
-        # Fees (total paid)
+        # Fees (entry fees already paid)
         total_fees = trade.fees_paid_total or Decimal("0")
         fees_pct = total_fees / notional * Decimal("100") if total_fees else Decimal("0")
 
-        # Total P&L = price + funding - fees
-        total_pnl_pct = price_pnl_pct + funding_pnl_pct - fees_pct
+        # Estimate exit fees (not yet incurred, but will be paid when closing).
+        # Without this, the profit target fires ~0.2% too early, causing
+        # trades that look profitable to close at a loss after the real
+        # exit fees are charged.
+        exit_fees_est = Decimal("0")
+        if trade.long_taker_fee:
+            exit_fees_est += l_price * trade.long_qty * trade.long_taker_fee
+        if trade.short_taker_fee:
+            exit_fees_est += s_price * trade.short_qty * trade.short_taker_fee
+        exit_fees_pct = exit_fees_est / notional * Decimal("100") if exit_fees_est else Decimal("0")
+
+        # Total P&L = price + funding - entry_fees - estimated_exit_fees
+        total_pnl_pct = price_pnl_pct + funding_pnl_pct - fees_pct - exit_fees_pct
 
         return {
             "total_pnl_pct": total_pnl_pct,
