@@ -93,16 +93,21 @@ class Scanner:
                 # not high-spread opportunities whose payment is hours away.
                 _now_ms = time.time() * 1000
                 _one_hour_ms = 3600_000
+                _tier_rank = {"top": 3, "medium": 2, "bad": 1, "adverse": -1}
                 all_opps.sort(
                     key=lambda o: (
                         0 if o.entry_tier == "adverse" else 1,   # adverse entries go last
                         1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
+                        _tier_rank.get(o.entry_tier or "", 0),   # TOP tier ranked above MEDIUM/BAD/None
                         float(o.immediate_net_pct),
                     ),
                     reverse=True,
                 )
-                # Sort qualified by net_edge_pct for execution (includes funding income for cherry_pick)
-                qualified_opps.sort(key=lambda o: o.net_edge_pct, reverse=True)
+                # Sort qualified by tier first (TOP > MEDIUM > BAD > None), then net_edge_pct
+                qualified_opps.sort(
+                    key=lambda o: (_tier_rank.get(o.entry_tier or "", 0), float(o.net_edge_pct)),
+                    reverse=True,
+                )
 
                 # Display top 5: qualified first, then fill with display-only
                 display_qualified = [o for o in all_opps if o.qualified][:5]
