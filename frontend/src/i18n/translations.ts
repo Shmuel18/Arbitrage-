@@ -137,6 +137,12 @@ export interface Translations {
   nutcracker: string;
   hold: string;
 
+  // Tier Labels
+  tier: string;
+  tierTop: string;
+  tierMedium: string;
+  tierBad: string;
+
   // StatsCards sub-labels
   subTotalAcross: string;
   subProfitableSession: string;
@@ -288,6 +294,12 @@ const en: Translations = {
   nutcracker: 'NUTCRACKER',
   hold: 'HOLD',
 
+  // Tier Labels
+  tier: 'Tier',
+  tierTop: 'TOP',
+  tierMedium: 'MEDIUM',
+  tierBad: 'BAD',
+
   // StatsCards sub-labels
   subTotalAcross: 'Total across all exchanges',
   subProfitableSession: '▲ Profitable session',
@@ -438,6 +450,12 @@ const he: Translations = {
   pot: 'סיר דבש',
   nutcracker: 'מפצח אגוזים',
   hold: 'החזקה',
+
+  // Tier Labels
+  tier: 'דרגה',
+  tierTop: 'מוביל',
+  tierMedium: 'בינוני',
+  tierBad: 'חלש',
 
   // StatsCards sub-labels
   subTotalAcross: 'סה״כ בכל הבורסאות',

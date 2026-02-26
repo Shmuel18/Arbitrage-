@@ -231,6 +231,7 @@ async def main() -> None:
                         "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
                         "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
                         "next_funding_ms": None,
+                        "entry_tier": trade.entry_tier,
                     }
                     # Use cached funding rates to compute current spread (no REST)
                     try:

@@ -107,6 +107,28 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     );
   };
 
+  const tierBadge = (tier?: string | null) => {
+    if (!tier) return null;
+    const key = tier.toLowerCase();
+    let label = tier.toUpperCase();
+    let color = '#94a3b8';
+    let emoji = '';
+
+    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+
+    return (
+      <span style={{
+        background: color + '22', color, border: `1px solid ${color}55`,
+        borderRadius: 4, padding: '1px 8px', fontSize: 11, fontWeight: 700,
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>
+        {emoji}{label}
+      </span>
+    );
+  };
+
   // ── PnL values ──────────────────────────────────────────────────
   const feesNum = trade.fees_paid_total != null ? -Math.abs(Number(trade.fees_paid_total)) : null;
   const pricePnl  = trade.price_pnl ?? null;
@@ -184,6 +206,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
                 {trade.symbol}
               </span>
               {modeBadge(trade.mode)}
+              {tierBadge(trade.entry_tier)}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text-secondary)', fontSize: 13, fontWeight: 500 }}>
               <span className="mono">{trade.long_exchange?.toUpperCase()}</span>

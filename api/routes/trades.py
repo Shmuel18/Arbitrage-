@@ -75,6 +75,7 @@ async def get_trades(
                 'invested':               invested,
                 'mode':                   t.get('mode', 'hold'),
                 'exit_reason':            t.get('exit_reason'),
+                'entry_tier':             t.get('entry_tier'),
                 'funding_collections':    int(t.get('funding_collections') or 0),
                 'funding_collected_usd':  float(t.get('funding_collected_usd') or 0),
             }

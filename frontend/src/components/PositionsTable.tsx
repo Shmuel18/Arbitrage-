@@ -18,6 +18,7 @@ interface PositionRow {
   entry_price_long?: string | null;
   next_funding_ms?: number | null;
   mode?: string;
+  entry_tier?: string | null;
   state: string;
 }
 
@@ -82,6 +83,28 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     return <span className="pos-mode-badge pos-mode-badge--hold">{t.hold}</span>;
   };
 
+  const tierBadge = (tier?: string | null) => {
+    if (!tier) return null;
+    const key = tier.toLowerCase();
+    let label = tier.toUpperCase();
+    let color = '#94a3b8';
+    let emoji = '';
+
+    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+
+    return (
+      <span style={{
+        background: color + '18', color, border: `1px solid ${color}44`,
+        borderRadius: 4, padding: '0px 6px', fontSize: 10, fontWeight: 700,
+        letterSpacing: '0.06em', marginLeft: 4,
+      }}>
+        {emoji}{label}
+      </span>
+    );
+  };
+
   return (
     <div className="card" style={{ position: 'relative' }}>
       <div style={{
@@ -133,7 +156,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                   <tr key={p.id} className="pos-row--active" style={{ lineHeight: '1.2' }}>
                     <td style={{ padding: '5px 8px', fontWeight: 500 }} className="text-accent">
                       <div>{p.symbol}</div>
-                      <div style={{ marginTop: 1 }}>{modeLabel(p.mode)}</div>
+                      <div style={{ marginTop: 1 }}>{modeLabel(p.mode)}{tierBadge(p.entry_tier)}</div>
                     </td>
                     <td style={{ padding: '5px 8px', fontSize: '0.75rem' }} className="text-secondary">
                       {p.long_exchange?.slice(0,2).toUpperCase()}/{p.short_exchange?.slice(0,2).toUpperCase()}

@@ -59,6 +59,28 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
     return `${Math.floor(mins / 60)}h${Math.round(mins % 60) > 0 ? Math.round(mins % 60) + 'm' : ''}`;
   };
 
+  const tierBadge = (tier?: string | null) => {
+    if (!tier) return null;
+    const key = tier.toLowerCase();
+    let label = tier.toUpperCase();
+    let color = '#94a3b8';
+    let emoji = '';
+
+    if (key === 'top')    { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
+    if (key === 'medium') { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
+    if (key === 'bad')    { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
+
+    return (
+      <span style={{
+        background: color + '18', color, border: `1px solid ${color}44`,
+        borderRadius: 4, padding: '0px 6px', fontSize: 10, fontWeight: 700,
+        letterSpacing: '0.06em', marginLeft: 4,
+      }}>
+        {emoji}{label}
+      </span>
+    );
+  };
+
   return (
   <>
     <div className="card" style={{ position: 'relative' }}>
@@ -111,7 +133,10 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   style={{ cursor: 'pointer' }}
                   title="Click for trade details"
                 >
-                  <td className="font-semibold text-accent">{tr.symbol}</td>
+                  <td className="font-semibold text-accent">
+                    <span>{tr.symbol}</span>
+                    {tierBadge(tr.entry_tier)}
+                  </td>
                   <td>
                     {tr.long_exchange?.toUpperCase()} / {tr.short_exchange?.toUpperCase()}
                   </td>

@@ -69,6 +69,7 @@ export interface Trade {
   funding_collected_usd?: number | null;
   // exit metadata
   exit_reason?: string | null;
+  entry_tier?: string | null;
   hold_minutes?: number | null;
   // timestamps (raw)
   opened_at?: string | null;
