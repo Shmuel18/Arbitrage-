@@ -763,6 +763,18 @@ class Scanner:
                                     extra={
                                         "action": "cherry_pick_found", "symbol": symbol, "mode": "cherry_pick"},
                                 )
+                                # ── Assign entry_tier for cherry pick ──
+                                _cp_tier_net = cp_net
+                                entry_tier = None
+                                if _cp_tier_net >= tp.min_funding_spread:
+                                    if price_spread_pct >= _cp_tier_net:
+                                        entry_tier = EntryTier.TOP.value
+                                    elif price_spread_pct > Decimal("0"):
+                                        entry_tier = EntryTier.MEDIUM.value
+                                    elif price_spread_pct >= -_cp_tier_net:
+                                        entry_tier = EntryTier.MEDIUM.value
+                                    elif abs(price_spread_pct) <= tp.tier_bad_max_adverse_spread:
+                                        entry_tier = EntryTier.BAD.value
 
         # ── Force disqualify if price spread is too adverse for any tier ──
         if _tier_too_adverse:
