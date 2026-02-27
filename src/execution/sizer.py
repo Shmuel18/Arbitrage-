@@ -63,6 +63,25 @@ class PositionSizer:
 
         long_free = float(long_bal["free"])
         short_free = float(short_bal["free"])
+
+        # Minimum balance guard — don't enter if either exchange has less
+        # than $8 free.  Tiny balances lead to immediate liquidation risk
+        # exits (margin_ratio drops below safety threshold on the first
+        # adverse tick).
+        _MIN_BALANCE_USD = 8.0
+        if long_free < _MIN_BALANCE_USD:
+            logger.warning(
+                f"{opp.symbol}: Skipping — {opp.long_exchange} balance "
+                f"${long_free:.2f} < min ${_MIN_BALANCE_USD:.0f}"
+            )
+            return None
+        if short_free < _MIN_BALANCE_USD:
+            logger.warning(
+                f"{opp.symbol}: Skipping — {opp.short_exchange} balance "
+                f"${short_free:.2f} < min ${_MIN_BALANCE_USD:.0f}"
+            )
+            return None
+
         min_balance = min(long_free, short_free)
         notional = Decimal(str(min_balance * position_pct * lev))
 

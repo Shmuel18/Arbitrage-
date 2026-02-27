@@ -155,9 +155,10 @@ class TestPositionSizer:
 
     async def test_qty_minimum_is_one_lot(self):
         # Even if calculated qty is below one lot, result should be at least 1 lot
+        # Balance must be above $8 minimum guard
         sizer = PositionSizer(_make_config(position_size_pct=0.0001, leverage=1))
-        long_a = _mock_adapter(free=1.0, spec=_make_spec(lot_size="0.001"))
-        short_a = _mock_adapter(free=1.0, spec=_make_spec(lot_size="0.001"))
+        long_a = _mock_adapter(free=10.0, spec=_make_spec(lot_size="0.001"))
+        short_a = _mock_adapter(free=10.0, spec=_make_spec(lot_size="0.001"))
         result = await sizer.compute(_make_opp("50000"), long_a, short_a)
         assert result is not None
         qty, _, _, _ = result

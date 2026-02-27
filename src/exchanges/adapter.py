@@ -1282,54 +1282,108 @@ class ExchangeAdapter:
     async def _verify_fill_via_position(
         self, symbol: str, resolved_symbol: str, side: OrderSide,
         expected_native_qty: float, order_id: Optional[str] = None,
+        reduce_only: bool = False,
     ) -> float:
         """Fallback fill verification by checking actual position on the exchange.
 
         When fetchOrder() fails (e.g. Bybit "last 500 orders" error), we check
-        if a matching position exists. If a position in the expected direction
-        with the expected quantity exists, the order was filled.
+        if a matching position exists.
+
+        For ENTRY orders (reduce_only=False):
+          If a position in the expected direction exists → order was filled.
+
+        For CLOSE orders (reduce_only=True):
+          If the position is GONE (no position found) → close order filled.
+          We sent a reduce_only order, so absence of position = success.
 
         Returns filled quantity in NATIVE units (contracts), or 0.0 if unverifiable.
         """
         try:
             positions = await self._exchange.fetch_positions([resolved_symbol])
-            expected_side = "long" if side == OrderSide.BUY else "short"
 
-            for pos in positions:
-                amt = float(pos.get("contracts", 0) or 0)
-                if abs(amt) < 1e-12:
-                    continue
-                pos_side = (pos.get("side") or "").lower()
-                if pos_side not in ("long", "buy", "short", "sell"):
-                    pos_side = "long" if amt > 0 else "short"
-                else:
-                    pos_side = "long" if pos_side in ("long", "buy") else "short"
+            if reduce_only:
+                # For close orders: check that the position is gone or reduced.
+                # The order side is the OPPOSITE of the position side:
+                #   reduce_only SELL = closing a LONG
+                #   reduce_only BUY  = closing a SHORT
+                position_side = "long" if side == OrderSide.SELL else "short"
+                for pos in positions:
+                    amt = float(pos.get("contracts", 0) or 0)
+                    if abs(amt) < 1e-12:
+                        continue
+                    pos_side = (pos.get("side") or "").lower()
+                    if pos_side not in ("long", "buy", "short", "sell"):
+                        pos_side = "long" if amt > 0 else "short"
+                    else:
+                        pos_side = "long" if pos_side in ("long", "buy") else "short"
+                    if pos_side == position_side:
+                        # Position still exists — close order may not have filled
+                        remaining = abs(amt)
+                        if remaining >= expected_native_qty * 0.95:
+                            logger.warning(
+                                f"Close order NOT verified on {self.exchange_id}/{symbol}: "
+                                f"{position_side} position still has {remaining} contracts "
+                                f"(expected to close {expected_native_qty}). "
+                                f"order_id={order_id}",
+                                extra={"exchange": self.exchange_id, "symbol": symbol},
+                            )
+                            return 0.0
+                        else:
+                            # Position partially reduced
+                            closed_qty = expected_native_qty - remaining
+                            logger.warning(
+                                f"✅ Position-verified PARTIAL close on {self.exchange_id}/{symbol}: "
+                                f"{position_side} reduced from {expected_native_qty} to {remaining}. "
+                                f"order_id={order_id}",
+                                extra={"exchange": self.exchange_id, "symbol": symbol,
+                                       "action": "position_verified_fill"},
+                            )
+                            return closed_qty
 
-                if pos_side == expected_side:
-                    # Position exists in the expected direction — order was filled
-                    actual_qty = abs(amt)
-                    logger.warning(
-                        f"✅ Position-verified fill on {self.exchange_id}/{symbol}: "
-                        f"found {expected_side} position with {actual_qty} contracts "
-                        f"(expected {expected_native_qty}). "
-                        f"order_id={order_id} — fetchOrder() was unreliable.",
-                        extra={
-                            "exchange": self.exchange_id,
-                            "symbol": symbol,
-                            "action": "position_verified_fill",
-                        },
-                    )
-                    # Use the expected quantity (what we ordered) — the position
-                    # may include pre-existing qty, so clamp to what we requested
-                    return min(actual_qty, expected_native_qty)
+                # No position found in the expected direction → fully closed
+                logger.warning(
+                    f"✅ Position-verified CLOSE on {self.exchange_id}/{symbol}: "
+                    f"{position_side} position gone ({expected_native_qty} contracts closed). "
+                    f"order_id={order_id} — fetchOrder() was unreliable.",
+                    extra={"exchange": self.exchange_id, "symbol": symbol,
+                           "action": "position_verified_fill"},
+                )
+                return expected_native_qty
+            else:
+                # Entry order: check that position EXISTS
+                expected_side = "long" if side == OrderSide.BUY else "short"
+                for pos in positions:
+                    amt = float(pos.get("contracts", 0) or 0)
+                    if abs(amt) < 1e-12:
+                        continue
+                    pos_side = (pos.get("side") or "").lower()
+                    if pos_side not in ("long", "buy", "short", "sell"):
+                        pos_side = "long" if amt > 0 else "short"
+                    else:
+                        pos_side = "long" if pos_side in ("long", "buy") else "short"
 
-            logger.warning(
-                f"Order filled=0 after 3 re-fetches AND no matching position on "
-                f"{self.exchange_id}/{symbol} (order_id={order_id}) — "
-                f"genuinely unfilled or position already closed.",
-                extra={"exchange": self.exchange_id, "symbol": symbol},
-            )
-            return 0.0
+                    if pos_side == expected_side:
+                        actual_qty = abs(amt)
+                        logger.warning(
+                            f"✅ Position-verified fill on {self.exchange_id}/{symbol}: "
+                            f"found {expected_side} position with {actual_qty} contracts "
+                            f"(expected {expected_native_qty}). "
+                            f"order_id={order_id} — fetchOrder() was unreliable.",
+                            extra={
+                                "exchange": self.exchange_id,
+                                "symbol": symbol,
+                                "action": "position_verified_fill",
+                            },
+                        )
+                        return min(actual_qty, expected_native_qty)
+
+                logger.warning(
+                    f"Order filled=0 after 3 re-fetches AND no matching position on "
+                    f"{self.exchange_id}/{symbol} (order_id={order_id}) — "
+                    f"genuinely unfilled or position already closed.",
+                    extra={"exchange": self.exchange_id, "symbol": symbol},
+                )
+                return 0.0
         except Exception as e:
             logger.error(
                 f"Position-based fill verification failed on "
@@ -1403,10 +1457,16 @@ class ExchangeAdapter:
         # creating one-sided (unhedged) positions.
         if filled_native == 0 and order.get("id"):
             _resolved = self._resolve_symbol(req.symbol)
+            # Bybit: pass acknowledged=True to suppress "last 500 orders" warning
+            _fetch_params: Dict[str, Any] = {}
+            if self.exchange_id == "bybit":
+                _fetch_params["acknowledged"] = True
             for _attempt in range(1, 4):            # 3 attempts, 1s apart
                 try:
                     await asyncio.sleep(1)
-                    updated = await self._exchange.fetch_order(order["id"], _resolved)
+                    updated = await self._exchange.fetch_order(
+                        order["id"], _resolved, _fetch_params if _fetch_params else None,
+                    )
                     filled_native = float(updated.get("filled", 0) or 0)
                     if filled_native > 0:
                         order.update(updated)       # merge full fill details
@@ -1427,6 +1487,7 @@ class ExchangeAdapter:
                 # error. Fall back to checking actual positions to confirm fill.
                 filled_native = await self._verify_fill_via_position(
                     req.symbol, _resolved, req.side, native_qty, order.get("id"),
+                    reduce_only=req.reduce_only,
                 )
                 if filled_native > 0:
                     order["filled"] = filled_native  # will be overwritten below with base conversion
