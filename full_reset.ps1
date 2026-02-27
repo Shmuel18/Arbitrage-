@@ -9,7 +9,7 @@ Write-Host "========================================" -ForegroundColor Red
 Write-Host "   TRINITY BOT — FULL SYSTEM RESET"      -ForegroundColor Red
 Write-Host "========================================" -ForegroundColor Red
 Write-Host ""
-Write-Host "This will DELETE:" -ForegroundColor Yellow
+Write-Host 'This will DELETE:' -ForegroundColor Yellow
 Write-Host '  - All Redis keys (trinity:*)'
 Write-Host '  - All log files (logs/*.log, logs/*.jsonl)'
 Write-Host '  - Trade journal (logs/trade_journal.jsonl)'
@@ -107,6 +107,6 @@ Write-Host "========================================" -ForegroundColor Green
 Write-Host "   RESET COMPLETE — READY TO START"      -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "To start the bot:" -ForegroundColor White
+Write-Host 'To start the bot:' -ForegroundColor White
 Write-Host '  .\venv\Scripts\python.exe main.py' -ForegroundColor Yellow
 Write-Host ""
