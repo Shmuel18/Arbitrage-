@@ -45,6 +45,7 @@ class ExchangeAdapter:
         # Cached symbol list populated in connect(); avoids list() copy on every .symbols access
         self._symbols_list: Optional[List[str]] = None
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
+        self._last_clock_sync: float = 0.0  # epoch timestamp of last clock sync
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -84,6 +85,7 @@ class ExchangeAdapter:
         try:
             if hasattr(self._exchange, "load_time_difference"):
                 await self._exchange.load_time_difference()
+                self._last_clock_sync = _time.time()
                 logger.info(
                     f"{self.exchange_id}: clock offset synced "
                     f"(timeDifference={self._exchange.options.get('timeDifference', 0)}ms)",
@@ -413,6 +415,9 @@ class ExchangeAdapter:
     # Maximum plausible absolute funding rate per interval — configurable via config.yaml
     _DEFAULT_MAX_SANE_RATE = Decimal("0.10")
 
+    # Re-sync exchange clock offset every 5 minutes to prevent "timestamp ahead" errors
+    _CLOCK_RESYNC_INTERVAL = 300
+
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
         rate = Decimal(str(data.get("fundingRate", 0)))
@@ -734,6 +739,30 @@ class ExchangeAdapter:
             await self._exchange.close()
             logger.info(f"Disconnected from {self.exchange_id}",
                         extra={"exchange": self.exchange_id, "action": "disconnect"})
+
+    async def _maybe_resync_clock(self) -> None:
+        """Re-sync clock offset if stale (every 5 minutes).
+
+        Without periodic re-sync, long-running bots accumulate clock drift
+        which causes 'timestamp 1000ms ahead of server time' errors on
+        Binance/Bybit.
+        """
+        if not self._exchange or not hasattr(self._exchange, "load_time_difference"):
+            return
+        now = _time.time()
+        if now - self._last_clock_sync < self._CLOCK_RESYNC_INTERVAL:
+            return
+        try:
+            await self._exchange.load_time_difference()
+            self._last_clock_sync = now
+            offset = self._exchange.options.get("timeDifference", 0)
+            if abs(offset) > 500:
+                logger.info(
+                    f"{self.exchange_id}: clock re-synced (drift={offset}ms)",
+                    extra={"exchange": self.exchange_id},
+                )
+        except Exception as e:
+            logger.debug(f"{self.exchange_id}: clock re-sync failed: {e}")
 
     # ── Trading settings ─────────────────────────────────────────
 
@@ -1351,6 +1380,9 @@ class ExchangeAdapter:
             lot = float(spec.lot_size)
             native_qty = round(native_qty / lot) * lot
             native_qty = max(native_qty, lot)
+
+        # Re-sync clock if stale — prevents "timestamp ahead of server time"
+        await self._maybe_resync_clock()
 
         order = await self._exchange.create_order(
             symbol=self._resolve_symbol(req.symbol),

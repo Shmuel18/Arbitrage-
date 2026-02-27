@@ -267,17 +267,19 @@ class _EntryMixin:
 
             # Open both legs
 
-            # Pre-apply trading settings on BOTH exchanges OUTSIDE the order timeout.
+            # Pre-apply trading settings on BOTH exchanges CONCURRENTLY.
             # ensure_trading_settings (margin mode, leverage, position mode) can take
-            # 6-8s on slow exchanges (kucoin). Doing it inside _place_with_timeout
-            # ate most of the 10s order timeout, leaving <2s for the actual order.
-            await long_adapter.ensure_trading_settings(opp.symbol)
-            await short_adapter.ensure_trading_settings(opp.symbol)
+            # 6-8s on slow exchanges (kucoin). Running them in parallel saves up to
+            # 8 seconds of entry latency.
+            await asyncio.gather(
+                long_adapter.ensure_trading_settings(opp.symbol),
+                short_adapter.ensure_trading_settings(opp.symbol),
+            )
 
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)
-                logger.info(f"✅ Grace period activated for {opp.symbol} (30s delta skip)")
+                logger.info(f"✅ Grace period activated for {opp.symbol} (60s delta skip)")
             
             long_fill = await self._place_with_timeout(
                 long_adapter,

@@ -56,9 +56,9 @@ class RiskGuard:
         logger.info("Risk guard stopped")
 
     def mark_trade_opened(self, symbol: str) -> None:
-        """Mark symbol as having a recent trade - skip delta checks for 30s."""
+        """Mark symbol as having a recent trade - skip delta checks for 60s."""
         self._grace_timestamps[symbol] = time.time()
-        logger.debug(f"Grace period started for {symbol} (30s)")
+        logger.debug(f"Grace period started for {symbol} (60s)")
 
     # ── Fast loop (delta check) ──────────────────────────────────
 
@@ -82,6 +82,7 @@ class RiskGuard:
         leg because the SHORT leg's exchange API timed out).
         """
         delta_by_symbol: Dict[str, Decimal] = {}
+        total_abs_by_symbol: Dict[str, Decimal] = {}  # total absolute qty per symbol
         now = time.time()
         positions_by_symbol: Dict[str, list] = {}  # For detailed logging
         failed_exchanges: list[str] = []
@@ -98,6 +99,7 @@ class RiskGuard:
             for pos in positions:
                 signed = pos.quantity if pos.side == OrderSide.BUY else -pos.quantity
                 delta_by_symbol[pos.symbol] = delta_by_symbol.get(pos.symbol, Decimal(0)) + signed
+                total_abs_by_symbol[pos.symbol] = total_abs_by_symbol.get(pos.symbol, Decimal(0)) + abs(pos.quantity)
                 
                 if pos.symbol not in positions_by_symbol:
                     positions_by_symbol[pos.symbol] = []
@@ -113,17 +115,29 @@ class RiskGuard:
             )
             return
 
-        threshold = self._cfg.risk_limits.delta_threshold_pct / Decimal(100)
+        # delta_threshold_pct is now compared as a PERCENTAGE of average
+        # leg size, not as absolute coin quantity.  With the old code,
+        # threshold = 5.0/100 = 0.05 coins, which triggered false panics
+        # for any altcoin with quantity > 50 (virtually all of them).
+        threshold_pct = self._cfg.risk_limits.delta_threshold_pct  # e.g. 5.0 = 5%
 
         for symbol, net in delta_by_symbol.items():
-            # Skip symbols in grace period (30 seconds after trade opened)
+            # Skip symbols in grace period (60 seconds after trade opened)
             if symbol in self._grace_timestamps:
-                if now - self._grace_timestamps[symbol] < 30:
+                if now - self._grace_timestamps[symbol] < 60:
                     continue
                 else:
                     del self._grace_timestamps[symbol]
-            
-            if abs(net) > threshold:
+
+            total_abs = total_abs_by_symbol.get(symbol, Decimal(0))
+            if total_abs <= 0:
+                continue
+
+            # Average leg size = total_abs / 2 (long + short)
+            avg_leg = total_abs / 2
+            delta_pct = abs(net) / avg_leg * Decimal("100") if avg_leg > 0 else Decimal("0")
+
+            if delta_pct > threshold_pct:
                 # Log detailed position breakdown
                 pos_details = positions_by_symbol.get(symbol, [])
                 pos_breakdown = "; ".join(
@@ -131,8 +145,10 @@ class RiskGuard:
                     for eid, side, qty, _ in pos_details
                 )
                 logger.warning(
-                    f"Delta breach: {symbol} net={net} [threshold={threshold}] — Positions: {pos_breakdown}",
-                    extra={"symbol": symbol, "action": "delta_breach", "data": {"net": str(net)}},
+                    f"Delta breach: {symbol} net={net} ({float(delta_pct):.1f}% imbalance) "
+                    f"[threshold={float(threshold_pct)}%] — Positions: {pos_breakdown}",
+                    extra={"symbol": symbol, "action": "delta_breach",
+                           "data": {"net": str(net), "delta_pct": str(delta_pct)}},
                 )
                 if self._cfg.risk_guard.enable_panic_close:
                     # Only close on exchanges that actually hold positions
