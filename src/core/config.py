@@ -26,8 +26,8 @@ class RiskLimits(BaseModel):
 
 
 class TradingParams(BaseModel):
-    min_funding_spread: Decimal = Decimal("0.5")
-    min_immediate_spread: Decimal = Decimal("0.5")   # min IMMEDIATE spread (next payment)
+    min_funding_spread: Decimal = Decimal("0.7")
+    min_immediate_spread: Decimal = Decimal("0.7")   # min IMMEDIATE spread (next payment)
     min_net_pct: Decimal = Decimal("0.5")  # ← Requires 0.5% net profit (not 0.01%) after all fees & slippage
     max_slippage_pct: Decimal = Decimal("0.10")
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
@@ -52,7 +52,7 @@ class TradingParams(BaseModel):
     tier_top_anytime_price_spread: Decimal = Decimal("0.5")  # TOP tier: min favorable spread for anytime entry
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
-    post_funding_exit_pct: Decimal = Decimal("0.15")  # After funding collected, exit at this lower % to lock gains
+
     exit_timeout_hours: Decimal = Decimal("1.5")  # Hours after funding to wait for profit target
     exit_slippage_buffer_pct: Decimal = Decimal("0.2")  # Slippage buffer for exit calculation
     liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
