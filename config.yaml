@@ -11,8 +11,8 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_funding_spread: 0.7 # minimum gross funding-rate spread per 8h settlement (%)
-  min_immediate_spread: 0.7 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
+  min_funding_spread: 0.5 # minimum gross funding-rate spread per 8h settlement (%)
+  min_immediate_spread: 0.5 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
   min_net_pct: 0.01 # minimum net spread after fees (%) — safety floor
   max_slippage_pct: 0.10 # max price slippage to allow entry (%)
   slippage_buffer_pct: 0.015
@@ -35,7 +35,7 @@ trading_params:
   tier_bad_max_adverse_spread: 2.0 # BAD tier: max adverse price spread (%) to still enter
   tier_top_anytime_price_spread: 0.5 # TOP tier: min favorable spread (%) for anytime entry
   # Exit strategy
-  profit_target_pct: 0.7 # Exit at 0.7% profit on notional (= 0.5% net + 0.2% slippage buffer)
+  profit_target_pct: 0.5 # Exit at 0.5% profit on notional
 
   exit_timeout_hours: 1.5 # After funding, wait up to 1.5h for profit target before evaluating
   exit_slippage_buffer_pct: 0.2 # Slippage buffer for exits
