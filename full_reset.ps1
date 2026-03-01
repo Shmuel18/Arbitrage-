@@ -28,12 +28,13 @@ Write-Host ""
 # ── 1. Stop any running bot processes ─────────────────────────
 Write-Host '[1/5] Stopping any running Python bot processes...' -ForegroundColor Cyan
 $procs = Get-Process -Name python -ErrorAction SilentlyContinue |
-         Where-Object { $_.Path -like "*Arbitrage*" }
+Where-Object { $_.Path -like "*Arbitrage*" }
 if ($procs) {
     $procs | Stop-Process -Force -ErrorAction SilentlyContinue
     Write-Host "      Stopped $($procs.Count) process(es)" -ForegroundColor Green
     Start-Sleep -Seconds 2
-} else {
+}
+else {
     Write-Host '      No bot processes running' -ForegroundColor Gray
 }
 
@@ -73,7 +74,8 @@ if (Test-Path $logsDir) {
     if (-not $logFiles) {
         Write-Host '      No log files found' -ForegroundColor Gray
     }
-} else {
+}
+else {
     New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
     Write-Host '      Created empty logs/ directory' -ForegroundColor Gray
 }
@@ -97,7 +99,8 @@ Write-Host '[5/5] Pulling latest code from GitHub...' -ForegroundColor Cyan
 try {
     $pullOutput = git pull 2>&1 | Out-String
     Write-Host "      $($pullOutput.Trim())" -ForegroundColor Green
-} catch {
+}
+catch {
     Write-Host "      git pull failed: $_" -ForegroundColor Yellow
 }
 

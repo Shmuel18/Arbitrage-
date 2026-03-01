@@ -263,6 +263,33 @@ class _ExitLogicMixin:
             await self._close_trade(trade)
             return
 
+        # ── 3b. POST-FUNDING QUICK EXIT ──────────────────────────
+        # After funding is collected, the main edge is already captured.
+        # Use a much lower threshold to lock in gains before price
+        # volatility erodes them. The PnL already includes estimated
+        # exit fees, so any value above the threshold is real profit.
+        post_funding_target = tp.post_funding_exit_pct
+        if trade.funding_collections >= 1 and total_pnl_pct >= post_funding_target:
+            _reason = f"post_funding_exit_{float(total_pnl_pct):.4f}pct"
+            logger.info(
+                f"💰 Trade {trade.trade_id}{tier_tag}: POST-FUNDING EXIT — "
+                f"PnL={float(total_pnl_pct):+.4f}% >= {float(post_funding_target)}% threshold "
+                f"(collections={trade.funding_collections}, "
+                f"funding={float(funding_pnl_pct):+.4f}%, "
+                f"price={float(price_pnl_pct):+.4f}%) — "
+                f"locking in gains after {hold_min}min",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "post_funding_exit"},
+            )
+            trade._exit_reason = _reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
+
         # ── 4. TIME-BASED EXIT (after funding) ──────────────────
         # Only evaluate after funding has been collected
         if not (long_paid or short_paid):

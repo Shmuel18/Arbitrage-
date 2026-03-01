@@ -36,6 +36,7 @@ trading_params:
   tier_top_anytime_price_spread: 0.5 # TOP tier: min favorable spread (%) for anytime entry
   # Exit strategy
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional (= 0.5% net + 0.2% slippage buffer)
+  post_funding_exit_pct: 0.15 # After funding collected, exit at 0.15% to lock in gains quickly
   exit_timeout_hours: 1.5 # After funding, wait up to 1.5h for profit target before evaluating
   exit_slippage_buffer_pct: 0.2 # Slippage buffer for exits
   liquidation_safety_pct: 80.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)

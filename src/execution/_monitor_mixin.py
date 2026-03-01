@@ -34,18 +34,18 @@ logger = get_logger("execution")
 class _MonitorMixin(_ExitLogicMixin):
     async def _exit_monitor_loop(self) -> None:
         reconcile_counter = 0
-        balance_snapshot_counter = 0  # snapshot every 60 cycles (30min)
+        balance_snapshot_counter = 0  # snapshot every 180 cycles (30min)
         while self._running:
             try:
-                # ── Position reconciliation every ~2 min (4 × 30s) ──
+                # ── Position reconciliation every ~2 min (12 × 10s) ──
                 reconcile_counter += 1
-                if reconcile_counter >= 4:
+                if reconcile_counter >= 12:
                     reconcile_counter = 0
                     await self._reconcile_positions()
 
-                # ── Balance snapshot every ~30 min (60 × 30s) ──
+                # ── Balance snapshot every ~30 min (180 × 10s) ──
                 balance_snapshot_counter += 1
-                if balance_snapshot_counter >= 60:
+                if balance_snapshot_counter >= 180:
                     balance_snapshot_counter = 0
                     await self._journal_balance_snapshot()
 
@@ -61,7 +61,7 @@ class _MonitorMixin(_ExitLogicMixin):
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(10)
 
     async def _check_upgrade(self, trade: TradeRecord) -> bool:
         """Check if a significantly better opportunity exists.
