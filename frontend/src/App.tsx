@@ -84,6 +84,16 @@ function App() {
   // Ref tracks pnlHours so fetchAll always reads the latest value
   // without restarting the polling interval on every hour change.
   const pnlHoursRef = React.useRef(pnlHours);
+  // When user changes range, update ref AND trigger an immediate PnL fetch
+  // so the chart updates instantly instead of waiting up to 5s for next poll.
+  const handlePnlHoursChange = useCallback((hours: number) => {
+    setPnlHours(hours);
+    pnlHoursRef.current = hours;
+    // Fire-and-forget: fetch only PnL with new range, update state immediately
+    getPnL(hours).then(pnlRes => {
+      setData(prev => ({ ...prev, pnl: pnlRes }));
+    }).catch(() => {/* next poll will retry */});
+  }, []);
   React.useEffect(() => { pnlHoursRef.current = pnlHours; }, [pnlHours]);
   const [data, setData] = useState<FullData>({
     status: { bot_running: false, connected_exchanges: [], active_positions: 0, uptime: 0 },
@@ -254,7 +264,7 @@ function App() {
       <div className="App min-h-screen bg-slate-900">
         {/* RateBridge status beam — stretches full width at very top */}
         <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
-        <Dashboard data={data} pnlHours={pnlHours} onPnlHoursChange={setPnlHours} />
+        <Dashboard data={data} pnlHours={pnlHours} onPnlHoursChange={handlePnlHoursChange} />
       </div>
     </ErrorBoundary>
   );
