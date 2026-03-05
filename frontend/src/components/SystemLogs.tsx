@@ -37,11 +37,21 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
 
   const getLevelClass = (level: string) => {
     switch (level.toUpperCase()) {
-      case 'INFO': return 'log-info';
-      case 'SUCCESS': return 'log-success';
-      case 'WARNING': return 'log-warning';
-      case 'ERROR': return 'log-error';
+      case 'INFO': return 'nx-log-level--info';
+      case 'SUCCESS': return 'nx-log-level--success';
+      case 'WARNING': return 'nx-log-level--warning';
+      case 'ERROR': return 'nx-log-level--error';
       default: return '';
+    }
+  };
+
+  const getLevelColor = (level: string) => {
+    switch (level.toUpperCase()) {
+      case 'INFO': return '#60a5fa';
+      case 'SUCCESS': return 'var(--green)';
+      case 'WARNING': return 'var(--yellow)';
+      case 'ERROR': return 'var(--red)';
+      default: return 'var(--text-secondary)';
     }
   };
 
@@ -58,16 +68,18 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
       }} />
 
       <div className="flex justify-between items-center px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', gap: 12 }}>
-        <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.7 }}>
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-          </svg>
+        <div className="nx-section-header">
+          <div className="nx-section-header__icon" style={{ background: 'rgba(96,165,250,0.08)', borderColor: 'rgba(96,165,250,0.12)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
           {t.systemLogs}
         </div>
-        <div className="mono" style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.05em' }}>
-          {t.totalTradesLabel}: <span style={{ color: '#60a5fa' }}>{tradeCount}</span>
-          <span style={{ margin: '0 8px', opacity: 0.3 }}>|</span>
-          {t.winRate}: <span style={{ color: parseFloat(winRate) >= 50 ? 'var(--green)' : 'var(--red)' }}>{winRate}%</span>
+        <div className="nx-log-stats">
+          {t.totalTradesLabel}: <span className="nx-log-stat-value" style={{ color: '#60a5fa' }}>{tradeCount}</span>
+          <span style={{ opacity: 0.3 }}>|</span>
+          {t.winRate}: <span className="nx-log-stat-value" style={{ color: parseFloat(winRate) >= 50 ? 'var(--green)' : 'var(--red)' }}>{winRate}%</span>
         </div>
       </div>
 
@@ -76,9 +88,10 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
           <div className="text-muted text-sm">{t.waitingLogs}</div>
         ) : (
           logs.map((log, index) => (
-            <div key={index} className="log-entry mb-1">
-              <span className="log-timestamp">[{log.timestamp}]</span>
-              <span className={getLevelClass(log.level)}> {log.message}</span>
+            <div key={index} className="nx-log-entry mb-1">
+              <span className="nx-log-timestamp">[{log.timestamp}]</span>
+              <span className={`nx-log-level ${getLevelClass(log.level)}`}>{log.level}</span>
+              <span className="nx-log-message" style={{ color: getLevelColor(log.level) }}>{log.message}</span>
             </div>
           ))
         )}

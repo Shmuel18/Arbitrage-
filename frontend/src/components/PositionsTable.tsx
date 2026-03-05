@@ -148,9 +148,11 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           borderRadius: '14px 14px 0 0', zIndex: 1, pointerEvents: 'none',
         }} />
         <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-          </svg>
+          <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+          </div>
           {t.activePositions}
         </div>
         <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -169,14 +171,16 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
         borderRadius: '14px 14px 0 0', zIndex: 1, pointerEvents: 'none',
       }} />
       <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
+        <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        </div>
         {t.activePositions}
         <span className="xcard-live" style={{ marginLeft: 2 }}>
           <span className="xcard-live-dot" />LIVE
         </span>
-        <span style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+        <span className="nx-section-badge" style={{ marginLeft: 'auto' }}>
           {positions.length} position{positions.length !== 1 ? 's' : ''}
         </span>
       </div>
@@ -190,21 +194,14 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           const isProfit = pnlVal != null && pnlVal >= 0;
           const isExpanded = expandedId === p.id;
 
-          const glowColor = pnlVal == null ? 'rgba(148,163,184,0.06)' :
-            isProfit ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)';
-          const borderAccent = pnlVal == null ? 'var(--card-border)' :
-            isProfit ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)';
-
           return (
             <div
               key={p.id}
-              className="active-trade-card"
+              className={`active-trade-card nx-pos-card ${isProfit ? 'nx-pos-card--profit' : 'nx-pos-card--loss'}`}
               style={{
-                background: glowColor,
-                border: `1px solid ${borderAccent}`,
-                borderRadius: 12,
+                borderRadius: 14,
                 overflow: 'hidden',
-                transition: 'all 0.25s ease',
+                animationDelay: `${positions.indexOf(p) * 80}ms`,
               }}
             >
               {/* ── Top accent line ── */}
@@ -225,23 +222,16 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}>
+                      <span className="nx-pos-symbol">
                         {p.symbol.replace('/USDT:USDT', '')}
                       </span>
-                      <span style={{
-                        fontSize: 10, fontWeight: 600, color: 'var(--text-muted)',
-                        background: 'rgba(148,163,184,0.1)', borderRadius: 4, padding: '1px 6px',
-                        fontFamily: "'JetBrains Mono', monospace",
-                      }}>
+                      <span className="nx-pos-exchange-tag">
                         {p.long_exchange?.toUpperCase()} ↔ {p.short_exchange?.toUpperCase()}
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 2,
-                        fontSize: 9, fontWeight: 700, letterSpacing: '0.07em',
-                        padding: '1px 6px', borderRadius: 4, textTransform: 'uppercase',
-                        color: mode.color, background: mode.bg, border: `1px solid ${mode.border}`,
+                      <span className="nx-pos-mode-badge" style={{
+                        color: mode.color, background: mode.bg, borderColor: mode.border,
                       }}>
                         {mode.emoji} {mode.label}
                       </span>
@@ -267,11 +257,9 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
 
                   {/* Right: PnL big number */}
                   <div style={{ textAlign: 'end', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span className="mono" style={{
+                    <span className={`mono nx-pos-pnl ${isProfit ? 'nx-pos-pnl--positive' : 'nx-pos-pnl--negative'}`} style={{
                       fontSize: '1.5rem', fontWeight: 800,
-                      color: pnlColor(p.unrealized_pnl_pct),
                       lineHeight: 1.1,
-                      textShadow: isProfit ? '0 0 20px rgba(16,185,129,0.25)' : '0 0 20px rgba(239,68,68,0.25)',
                     }}>
                       {fmtPct(p.unrealized_pnl_pct)}
                     </span>
@@ -295,21 +283,9 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                         {progress.remaining <= 0 ? '✅ ' + t.pdTargetReached : `${progress.remaining.toFixed(3)}% ${t.pdToTarget}`}
                       </span>
                     </div>
-                    <div style={{
-                      height: 4, borderRadius: 2, background: 'rgba(148,163,184,0.12)',
-                      overflow: 'hidden', position: 'relative',
-                    }}>
-                      <div className="target-progress-fill" style={{
-                        position: 'absolute', top: 0, left: 0, bottom: 0,
+                    <div className="nx-pos-target-bar">
+                      <div className={`nx-pos-target-fill ${progress.progress >= 100 ? 'nx-pos-target-fill--complete' : progress.progress >= 60 ? 'nx-pos-target-fill--progress' : 'nx-pos-target-fill--early'}`} style={{
                         width: `${Math.min(100, progress.progress)}%`,
-                        borderRadius: 2,
-                        background: progress.progress >= 100
-                          ? 'linear-gradient(90deg, #10b981, #34d399)'
-                          : progress.progress >= 60
-                            ? 'linear-gradient(90deg, #eab308, #fbbf24)'
-                            : 'linear-gradient(90deg, #3b82f6, #60a5fa)',
-                        transition: 'width 0.6s cubic-bezier(0.4, 0, 0.2, 1)',
-                        boxShadow: progress.progress >= 100 ? '0 0 8px rgba(16,185,129,0.5)' : 'none',
                       }} />
                     </div>
                   </div>
@@ -321,46 +297,41 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                   gap: '0 4px', fontSize: '0.72rem',
                 }}>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                    <div className="nx-pos-stat-label">
                       {t.pricePnl}
                     </div>
-                    <div className="mono" style={{ fontWeight: 600, color: pnlColor(p.price_pnl_pct) }}>
+                    <div className="nx-pos-stat-value" style={{ color: pnlColor(p.price_pnl_pct) }}>
                       {fmtPct(p.price_pnl_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                    <div className="nx-pos-stat-label">
                       {t.fundingNetDetail}
                     </div>
-                    <div className="mono" style={{ fontWeight: 600, color: pnlColor(p.funding_pnl_pct) }}>
+                    <div className="nx-pos-stat-value" style={{ color: pnlColor(p.funding_pnl_pct) }}>
                       {fmtPct(p.funding_pnl_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                    <div className="nx-pos-stat-label">
                       {t.colEntryPct}
                     </div>
-                    <div className="mono" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                    <div className="nx-pos-stat-value" style={{ color: 'var(--text-primary)' }}>
                       {fmtPct(p.entry_edge_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.6rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                    <div className="nx-pos-stat-label">
                       {t.nextPayout}
                     </div>
-                    <div className="mono" style={{ fontWeight: 600, ...fundingCountdownStyle(p.next_funding_ms) }}>
+                    <div className="nx-pos-stat-value" style={{ ...fundingCountdownStyle(p.next_funding_ms) }}>
                       {formatCountdown(p.next_funding_ms)}
                     </div>
                   </div>
                 </div>
 
                 {/* ── Row 4: Mini info bar ── */}
-                <div style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  marginTop: 8, paddingTop: 8,
-                  borderTop: '1px solid rgba(148,163,184,0.08)',
-                  fontSize: '0.65rem', color: 'var(--text-muted)',
-                }}>
+                <div className="nx-pos-info-bar">
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                     <span>
                       {t.colFundPct}: <span className="mono" style={{ color: 'var(--text-secondary)' }}>

@@ -17,7 +17,7 @@ interface AnalyticsPanelProps {
 }
 
 const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange }) => {
-  const { t, theme } = useSettings();
+  const { t } = useSettings();
   const points = pnl?.data_points ?? [];
   const total = pnl?.total_pnl ?? 0;
   const unrealized = pnl?.unrealized_pnl ?? 0;
@@ -61,54 +61,55 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
         borderRadius: '14px 14px 0 0',
       }} />
 
-      <div className="flex justify-between items-center mb-4">
-        <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
-          </svg>
+      <div className="nx-analytics-header">
+        <div className="nx-section-header">
+          <div className="nx-section-header__icon" style={{ background: `${accentColor}14`, borderColor: `${accentColor}22` }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={accentColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+            </svg>
+          </div>
           {t.pnlChart}
         </div>
-        <div className="flex gap-5 items-center">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {(unrealized !== 0 || realized !== 0) && (
-            <div className="mono" style={{ fontSize: 11, opacity: 0.7, display: 'flex', gap: 10 }}>
-              <span style={{ color: 'var(--green)' }}>R {formatCurrency(realized)}</span>
-              <span style={{ color: unrealized >= 0 ? '#60a5fa' : 'var(--red)' }}>U {formatCurrency(unrealized)}</span>
+            <div className="nx-analytics-breakdown">
+              <span>
+                <span className="nx-analytics-breakdown__dot" style={{ background: 'var(--green)' }} />
+                R {formatCurrency(realized)}
+              </span>
+              <span>
+                <span className="nx-analytics-breakdown__dot" style={{ background: unrealized >= 0 ? '#60a5fa' : 'var(--red)' }} />
+                U {formatCurrency(unrealized)}
+              </span>
             </div>
           )}
-          <div className="mono" style={{ fontSize: 18, fontWeight: 700, color: total >= 0 ? 'var(--green)' : 'var(--red)', letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>
+          <div className={`nx-analytics-total ${total >= 0 ? 'nx-analytics-total--positive' : 'nx-analytics-total--negative'}`}>
             {formatCurrency(total)}
           </div>
         </div>
       </div>
 
-      <div className="flex justify-end gap-1 mb-4" style={{ fontSize: 10 }}>
-        {[
-          { label: '24h', value: 24 },
-          { label: '7d', value: 168 },
-          { label: '30d', value: 720 },
-          { label: '90d', value: 2160 },
-          { label: '180d', value: 4320 },
-        ].map((btn) => (
-          <button
-            key={btn.value}
-            onClick={() => onPnlHoursChange(btn.value)}
-            style={{
-              padding: '2px 8px',
-              borderRadius: 4,
-              border: '1px solid var(--card-border)',
-              background: pnlHours === btn.value ? 'var(--accent)' : 'transparent',
-              color: pnlHours === btn.value ? '#fff' : 'var(--text-muted)',
-              fontWeight: pnlHours === btn.value ? 700 : 400,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
-          >
-            {btn.label}
-          </button>
-        ))}
+      <div className="flex justify-end mb-4">
+        <div className="nx-time-pills">
+          {[
+            { label: '24h', value: 24 },
+            { label: '7d', value: 168 },
+            { label: '30d', value: 720 },
+            { label: '90d', value: 2160 },
+            { label: '180d', value: 4320 },
+          ].map((btn) => (
+            <button
+              key={btn.value}
+              className={`nx-time-btn ${pnlHours === btn.value ? 'nx-time-btn--active' : ''}`}
+              onClick={() => onPnlHoursChange(btn.value)}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="chart-area" style={{ position: 'relative', overflow: 'hidden' }}>
+      <div className="nx-chart-area">
         {values.length > 1 ? (
           <>
             <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">

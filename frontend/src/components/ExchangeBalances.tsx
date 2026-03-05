@@ -20,13 +20,15 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
       }} />
 
       <div className="card-header mb-4" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-            <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
-          </svg>
+        <div className="nx-section-header">
+          <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+            </svg>
+          </div>
           {t.exchangePortfolio}
         </div>
-        <span className="mono" style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>
+        <span className="nx-exch-total">
           {formatCurrency(total)}
         </span>
       </div>
@@ -34,24 +36,20 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
       {entries.length === 0 ? (
         <div className="text-muted text-sm">{t.noBalancesYet}</div>
       ) : (
-        <div className="space-y-2">
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
           {entries.map(([name, value]) => {
             const pct = total > 0 ? (value / total) * 100 : 0;
             return (
-              <div key={name}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.07em', color: 'var(--text-muted)', textTransform: 'uppercase' }}>{name}</span>
-                  <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>{formatCurrency(value)}</span>
+              <div key={name} className="nx-exch-item">
+                <div className="nx-exch-header">
+                  <span className="nx-exch-name">{name}</span>
+                  <div>
+                    <span className="nx-exch-value">{formatCurrency(value)}</span>
+                    <span className="nx-exch-pct">{pct.toFixed(1)}%</span>
+                  </div>
                 </div>
-                {/* Mini progress bar */}
-                <div style={{ height: 3, background: 'rgba(255,255,255,0.06)', borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${pct}%`,
-                    background: 'linear-gradient(90deg, #06b6d4, #3b82f6)',
-                    borderRadius: 4,
-                    transition: 'width 0.6s ease',
-                  }} />
+                <div className="nx-exch-bar">
+                  <div className="nx-exch-bar__fill" style={{ width: `${pct}%` }} />
                 </div>
               </div>
             );

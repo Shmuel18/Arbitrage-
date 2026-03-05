@@ -90,27 +90,31 @@ interface StatCardProps {
   sub?: string;
   subColor?: string;
   icon: React.ReactNode;
-  accentVar: string;        // CSS var name e.g. '--accent'
-  accentHex: string;        // for direct use
+  accentVar: string;
+  accentHex: string;
   trend?: 'up' | 'down' | 'neutral';
   live?: boolean;
+  idx?: number;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ label, value, sub, subColor, icon, accentVar, accentHex, trend, live }) => (
-  <div className="xcard" style={{ '--xcard-accent': accentHex } as React.CSSProperties}>
+const StatCard: React.FC<StatCardProps> = ({ label, value, sub, subColor, icon, accentHex, trend, live, idx = 0 }) => (
+  <div
+    className="xcard nx-xcard"
+    style={{ '--xcard-accent': accentHex, animationDelay: `${idx * 60}ms` } as React.CSSProperties}
+  >
     <div className="xcard-top">
       <div className="xcard-icon" style={{ color: accentHex }}>
         {icon}
       </div>
       {live && <span className="xcard-live"><span className="xcard-live-dot" />LIVE</span>}
       {!live && trend && (
-        <span className="xcard-trend" style={{ color: trend === 'up' ? 'var(--green)' : trend === 'down' ? 'var(--red)' : 'var(--text-muted)' }}>
+        <span className="nx-xcard-trend" style={{ color: trend === 'up' ? 'var(--green)' : trend === 'down' ? 'var(--red)' : 'var(--text-muted)' }}>
           {trend === 'up' ? <ArrowUp /> : trend === 'down' ? <ArrowDown /> : null}
         </span>
       )}
     </div>
     <div className="xcard-label">{label}</div>
-    <div className="xcard-value">{value}</div>
+    <div className="xcard-value nx-xcard-value">{value}</div>
     {sub && (
       <div className="xcard-sub" style={{ color: subColor ?? 'var(--text-muted)' }}>
         {sub}

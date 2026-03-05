@@ -13,28 +13,6 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
   const { t } = useSettings();
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
-  const formatPrice = (value?: string | null) => {
-    if (!value) return '--';
-    const n = Number(value);
-    if (Number.isNaN(n)) return '--';
-    return formatCurrency(n);
-  };
-
-  const formatFunding = (value?: string | null) => {
-    if (!value) return '--';
-    const n = Number(value);
-    if (Number.isNaN(n)) return '--';
-    return formatCurrency(n);
-  };
-
-  const formatRate = (value?: string | null) => {
-    if (!value) return '--';
-    const n = Number(value);
-    if (Number.isNaN(n)) return '--';
-    const pct = Math.abs(n) <= 1 ? n * 100 : n;
-    return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
-  };
-
   const formatDate = (value?: string | null) => {
     if (!value) return '--';
     try {
@@ -49,9 +27,9 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
   };
 
   const formatPnl = (v?: number | null) => {
-    if (v == null) return '--';
+    if (v == null) return <span style={{ color: 'var(--text-muted)' }}>--</span>;
     const s = formatCurrency(v);
-    return <span style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{s}</span>;
+    return <span className={`nx-trades-pnl ${v >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>{s}</span>;
   };
 
   const formatDuration = (mins?: number | null) => {
@@ -72,12 +50,14 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
         zIndex: 1, pointerEvents: 'none',
       }} />
       <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-          <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
-        </svg>
+        <div className="nx-section-header__icon" style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.12)' }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/>
+          </svg>
+        </div>
         {t.last10Trades}
         {trades.length > 0 && (
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+          <span className="nx-section-badge" style={{ marginLeft: 'auto' }}>
             {t.clickRowForDetails}
           </span>
         )}
@@ -117,33 +97,34 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                 return (
                 <tr
                   key={tr.id}
+                  className="nx-trades-row"
                   onClick={() => setSelectedTrade(tr)}
-                  style={{ cursor: 'pointer' }}
+                  style={{ animationDelay: `${trades.indexOf(tr) * 50}ms` }}
                   title="Click for trade details"
                 >
                   <td style={{ overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', overflow: 'hidden' }}>
-                      <span className="font-semibold text-accent" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <span className="nx-trades-symbol" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {tr.symbol.replace('/USDT:USDT', '').replace('/USDT', '')}
                       </span>
                       {tierBadge(tr.entry_tier)}
                     </div>
                   </td>
                   <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    <span style={{ fontSize: 11 }}>
+                    <span className="nx-trades-exchange">
                       {tr.long_exchange?.toUpperCase()} → {tr.short_exchange?.toUpperCase()}
                     </span>
                   </td>
                   <td className="text-end mono">{formatPnl(tr.total_pnl)}</td>
                   <td className="text-end mono">
-                    <span style={{ color: fundingNet >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}>
+                    <span className={`nx-trades-funding ${fundingNet >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>
                       {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
                     </span>
                   </td>
-                  <td className="text-end text-secondary" style={{ whiteSpace: 'nowrap' }}>
+                  <td className="text-end nx-trades-duration" style={{ whiteSpace: 'nowrap' }}>
                     {formatDuration(tr.hold_minutes)}
                   </td>
-                  <td className="text-end text-secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                  <td className="text-end nx-trades-date" style={{ whiteSpace: 'nowrap' }}>
                     {formatDate(tr.closed_at)}
                   </td>
                 </tr>

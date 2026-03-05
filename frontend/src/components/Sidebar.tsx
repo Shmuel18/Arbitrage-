@@ -21,9 +21,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-logo">
+      <div className="sidebar-logo nx-sidebar-logo">
         <img src="/logo.png" alt="RateBridge" className="sidebar-logo-img" />
-        <h1>RATEBRIDGE</h1>
+        <h1 className="nx-sidebar-title">RATEBRIDGE</h1>
         <span>{t.arbitrageEngine}</span>
       </div>
 
@@ -31,7 +31,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
         {navItems.map((item) => (
           <button
             key={item.id}
-            className={`sidebar-nav-item${activeSection === item.id ? ' active' : ''}`}
+            className={`sidebar-nav-item nx-nav-item${activeSection === item.id ? ' active' : ''}`}
             onClick={() => onNavigate(item.id)}
           >
             <span className="nav-icon">{item.icon}</span>
