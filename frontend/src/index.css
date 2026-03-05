@@ -1678,5 +1678,487 @@ code, .mono {
 [data-theme="light"] .pos-mode-badge--mixed  { background: rgba(234, 179, 8, 0.07); }
 [data-theme="light"] .pos-mode-badge--hold   { background: rgba(34, 197, 94, 0.07); }
 
+/* ══════════════════════════════════════════════════════════════════
+   NX TABLE — Next-level Opportunities Table
+   ══════════════════════════════════════════════════════════════════ */
 
+/* ── Row entrance animation ─────────────────────────────────────── */
+@keyframes nx-row-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
+@keyframes nx-dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.45); }
+  50%      { box-shadow: 0 0 0 4px rgba(16,185,129,0); }
+}
+
+@keyframes nx-scan-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  50%      { transform: scale(1.6); opacity: 0; }
+}
+
+@keyframes nx-urgent-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+/* ── Card wrapper ────────────────────────────────────────────── */
+.nx-opp-card {
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+.nx-opp-card__glow {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent 5%,
+    rgba(16,185,129,0.6) 30%,
+    rgba(6,182,212,0.4) 70%,
+    transparent 95%
+  );
+  border-radius: 14px 14px 0 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ── Header ──────────────────────────────────────────────────── */
+.nx-opp-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(6,12,24,0.5);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.nx-opp-header__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nx-opp-header__icon {
+  opacity: 0.85;
+  filter: drop-shadow(0 0 4px rgba(16,185,129,0.3));
+}
+
+/* ── Table base overrides ────────────────────────────────────── */
+.nx-table {
+  border-spacing: 0 1px;
+}
+
+[data-theme="dark"] .nx-table thead th {
+  background: rgba(6,12,24,0.85);
+  color: #4b6a8f;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(96,165,250,0.06);
+  position: relative;
+}
+
+/* subtle header bottom gradient line */
+[data-theme="dark"] .nx-table thead th::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(96,165,250,0.12), transparent);
+}
+
+/* ── Rows ────────────────────────────────────────────────────── */
+.nx-row {
+  animation: nx-row-enter 0.35s ease-out both;
+}
+
+[data-theme="dark"] .nx-row {
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+[data-theme="dark"] .nx-row:hover {
+  background: rgba(96,165,250,0.045) !important;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(96,165,250,0.08),
+    0 2px 12px rgba(0,0,0,0.2);
+}
+
+.nx-row--dimmed {
+  opacity: 0.38;
+  transition: opacity 0.2s ease;
+}
+
+.nx-row--dimmed:hover {
+  opacity: 0.6;
+}
+
+/* ── Pair cell ────────────────────────────────────────────────── */
+.nx-cell-pair {
+  min-width: 100px;
+}
+
+.nx-pair-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nx-pair-symbol {
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+[data-theme="dark"] .nx-pair-symbol {
+  background: linear-gradient(135deg, #e2e8f0, #94a3b8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.nx-pair-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  margin-inline-start: 16px;
+}
+
+.nx-price-spread {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* ── Status dot ──────────────────────────────────────────────── */
+.nx-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nx-dot--live {
+  background: var(--green);
+  box-shadow: 0 0 6px rgba(16,185,129,0.5);
+  animation: nx-dot-pulse 2s ease-in-out infinite;
+}
+
+.nx-dot--dim {
+  background: #475569;
+  opacity: 0.5;
+}
+
+/* ── Bridge / exchanges ──────────────────────────────────────── */
+.nx-cell-bridge {
+  white-space: nowrap;
+}
+
+.nx-bridge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.nx-bridge__exch {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  transition: color 0.15s ease;
+}
+
+.nx-bridge__exch--earn {
+  color: var(--green);
+  text-shadow: 0 0 8px rgba(16,185,129,0.25);
+}
+
+.nx-arrow {
+  font-size: 8px;
+  font-weight: 700;
+  margin-inline-start: 1px;
+}
+
+.nx-arrow--up {
+  color: var(--green);
+}
+
+.nx-arrow--down {
+  color: #475569;
+  opacity: 0.55;
+}
+
+.nx-bridge__line {
+  width: 18px;
+  height: 2px;
+  background: linear-gradient(90deg, #10b981, #06b6d4);
+  border-radius: 2px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.nx-bridge__dot {
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.nx-bridge__dot--left {
+  left: -1px;
+  background: #10b981;
+  box-shadow: 0 0 4px rgba(16,185,129,0.4);
+}
+
+.nx-bridge__dot--right {
+  right: -1px;
+  background: #06b6d4;
+  box-shadow: 0 0 4px rgba(6,182,212,0.4);
+}
+
+/* ── Rate cells ──────────────────────────────────────────────── */
+.nx-cell-rate {
+  font-size: 11.5px !important;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* ── Spread pill ─────────────────────────────────────────────── */
+.nx-cell-spread {
+  padding-inline-end: 10px !important;
+}
+
+.nx-spread-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.04);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.nx-row--qualified .nx-spread-pill {
+  background: rgba(16,185,129,0.06);
+  border-color: rgba(16,185,129,0.12);
+}
+
+/* ── Net value — emphasized ──────────────────────────────────── */
+.nx-cell-net {
+  padding-inline-end: 10px !important;
+}
+
+.nx-net-value {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.nx-row--qualified .nx-net-value {
+  text-shadow: 0 0 10px currentColor;
+}
+
+/* ── Mode badge pills ────────────────────────────────────────── */
+.nx-cell-mode {
+  padding: 8px 10px !important;
+}
+
+.nx-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.nx-mode-badge__icon {
+  font-size: 11px;
+}
+
+.nx-mode-badge--hold {
+  color: #64748b;
+  background: rgba(100,116,139,0.08);
+  border-color: rgba(100,116,139,0.15);
+}
+
+/* ── Funding countdown cells ─────────────────────────────────── */
+.nx-cell-funding {
+  padding: 6px 12px !important;
+}
+
+.nx-funding-pair {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+
+.nx-funding-divider {
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--card-border), transparent);
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+.nx-funding-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 52px;
+}
+
+.nx-funding-cell__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nx-funding-cell__exch {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #4b6a8f;
+  letter-spacing: 0.04em;
+}
+
+.nx-funding-cell__interval {
+  font-size: 9px;
+  color: #334155;
+  font-weight: 500;
+}
+
+.nx-funding-cell__time {
+  font-size: 11px;
+  font-weight: 500;
+  color: #475569;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease;
+}
+
+.nx-funding-cell__time--near {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.nx-funding-cell__time--urgent {
+  color: #10b981;
+  font-weight: 700;
+  animation: nx-urgent-blink 1.5s ease-in-out infinite;
+  text-shadow: 0 0 6px rgba(16,185,129,0.35);
+}
+
+/* Micro progress bar under countdown */
+.nx-funding-cell__bar {
+  width: 100%;
+  height: 2px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.nx-funding-cell__bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 1s linear, background 0.3s ease;
+}
+
+/* ── Separator row ───────────────────────────────────────────── */
+.nx-separator-row td {
+  padding: 0 !important;
+  border-bottom: none !important;
+}
+
+.nx-separator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+}
+
+.nx-separator__line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(96,165,250,0.12), transparent);
+}
+
+.nx-separator__label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #3d5577;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ── Empty state — scanning ──────────────────────────────────── */
+.nx-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 60px 20px;
+  color: #4b6a8f;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  position: relative;
+}
+
+.nx-empty-state__pulse {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid rgba(16,185,129,0.3);
+  position: relative;
+}
+
+.nx-empty-state__pulse::before,
+.nx-empty-state__pulse::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(16,185,129,0.15);
+  animation: nx-scan-pulse 2.5s ease-out infinite;
+}
+
+.nx-empty-state__pulse::after {
+  animation-delay: 1.25s;
+}
+
+/* ── RTL support ─────────────────────────────────────────────── */
+[dir="rtl"] .nx-bridge__dot--left  { left: auto; right: -1px; }
+[dir="rtl"] .nx-bridge__dot--right { right: auto; left: -1px; }
+
+[dir="rtl"] .nx-pair-meta {
+  margin-inline-start: 16px;
+  margin-inline-end: 0;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .nx-bridge__line { width: 12px; }
+  .nx-funding-pair { gap: 6px; }
+  .nx-mode-badge { font-size: 9px; padding: 2px 7px; }
+}

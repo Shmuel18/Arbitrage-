@@ -33,6 +33,13 @@ interface RightPanelProps {
   status?: { min_funding_spread?: number; [key: string]: any } | null;
 }
 
+/* ── Mode badge config ────────────────────────────────────────── */
+const MODE_MAP: Record<string, { icon: string; label: string; color: string; bg: string }> = {
+  cherry_pick: { icon: '🍒', label: 'CHERRY',     color: '#f97316', bg: 'rgba(249,115,22,0.12)' },
+  nutcracker:  { icon: '🥜', label: 'NUTCRACKER',  color: '#eab308', bg: 'rgba(234,179,8,0.10)' },
+  pot:         { icon: '🍯', label: 'POT',         color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+};
+
 const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, status }) => {
   const thresholdPct = status?.min_funding_spread != null
     ? `${status.min_funding_spread}%`
@@ -41,37 +48,33 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
   const opps = useMemo(() => opportunities?.opportunities ?? [], [opportunities]);
   const count = opportunities?.count ?? 0;
 
-  const formatFunding = (rate: number) => {
-    // Raw rates are decimals (e.g. 0.003 = 0.3%), multiply by 100
+  const formatFunding = (rate: number): string => {
     const pct = Math.abs(rate) <= 1 ? rate * 100 : rate;
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
-  const formatSpread = (pct: number) => {
-    // funding_spread_pct is already in % (e.g. 0.46 = 0.46%)
+  const formatSpread = (pct: number): string => {
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
   const formatCountdown = sharedCountdown;
 
-  // Long side: negative rate → we earn (green), positive → we pay (red)
   const getLongRateStyle = (rate: number): React.CSSProperties => {
     if (rate < 0) return { color: 'var(--green)' };
     if (rate > 0) return { color: 'var(--red)' };
     return { color: 'var(--text-muted)' };
   };
 
-  // Short side: positive rate → we earn (green), negative → we pay (red)
   const getShortRateStyle = (rate: number): React.CSSProperties => {
     if (rate > 0) return { color: 'var(--green)' };
     if (rate < 0) return { color: 'var(--red)' };
     return { color: 'var(--text-muted)' };
   };
 
-  const getSpreadStyle = (pct: number): React.CSSProperties => {
-    if (pct > 0) return { color: 'var(--green)' };
-    if (pct < 0) return { color: 'var(--red)' };
-    return { color: 'var(--text-muted)' };
+  const getSpreadColor = (pct: number): string => {
+    if (pct > 0) return 'var(--green)';
+    if (pct < 0) return 'var(--red)';
+    return 'var(--text-muted)';
   };
 
   const tierBadge = (tier?: string | null) => <TierBadge tier={tier} t={t} />;
@@ -79,6 +82,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
   const aboveThreshold = useMemo(() => opps.filter(o => o.qualified !== false), [opps]);
   const belowThreshold = useMemo(() => opps.filter(o => o.qualified === false), [opps]);
 
+  /* ── Funding countdown cell with progress indicator ────────── */
   const renderFundingCell = (
     exchange: string,
     nextMs: number | null | undefined,
@@ -86,64 +90,85 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
   ) => {
     const now = Date.now();
     const diff = nextMs ? nextMs - now : null;
-    const isUrgent = diff !== null && diff < 900000; // < 15 min
+    const isUrgent = diff !== null && diff < 900000;
+    const isNear   = diff !== null && diff < 3600000;
     const countdown = formatCountdown(nextMs);
+
+    // Progress: how far into the funding interval we are (0 → just reset, 1 → imminent)
+    const progress = diff !== null
+      ? Math.max(0, Math.min(1, 1 - diff / (intervalHours * 3600000)))
+      : 0;
+    const barColor = isUrgent ? '#10b981' : isNear ? '#f59e0b' : '#334155';
+
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 500 }}>
+      <div className="nx-funding-cell">
+        <div className="nx-funding-cell__header">
+          <span className="nx-funding-cell__exch">
             {exchange.toUpperCase().slice(0, 3)}
           </span>
-          <span style={{ fontSize: 10, color: '#4b6080' }}>({intervalHours}h)</span>
+          <span className="nx-funding-cell__interval">
+            {intervalHours}h
+          </span>
         </div>
-        <div style={{
-          fontSize: 11,
-          fontWeight: isUrgent ? 700 : 400,
-          color: isUrgent ? 'var(--green)' : diff !== null && diff < 3600000 ? '#f59e0b' : 'var(--text-muted)',
-          fontFamily: 'var(--font-mono)',
-        }}>
-          ⏱ {countdown}
+        <div className={`nx-funding-cell__time ${isUrgent ? 'nx-funding-cell__time--urgent' : isNear ? 'nx-funding-cell__time--near' : ''}`}>
+          {countdown}
+        </div>
+        <div className="nx-funding-cell__bar">
+          <div
+            className="nx-funding-cell__bar-fill"
+            style={{ width: `${progress * 100}%`, background: barColor }}
+          />
         </div>
       </div>
     );
   };
 
-  const renderRow = (opp: Opportunity, _i: number, dimmed: boolean) => {
+  /* ── Mode badge pill ───────────────────────────────────────── */
+  const renderModeBadge = (mode: string) => {
+    const cfg = MODE_MAP[mode];
+    if (!cfg) {
+      return <span className="nx-mode-badge nx-mode-badge--hold">HOLD</span>;
+    }
+    return (
+      <span className="nx-mode-badge" style={{
+        color: cfg.color,
+        background: cfg.bg,
+        borderColor: cfg.color + '33',
+      }}>
+        <span className="nx-mode-badge__icon">{cfg.icon}</span>
+        {cfg.label}
+      </span>
+    );
+  };
+
+  /* ── Single row ─────────────────────────────────────────────── */
+  const renderRow = (opp: Opportunity, idx: number, dimmed: boolean) => {
     const immediateSpread = opp.immediate_spread_pct ?? 0;
     const longRate  = opp.long_rate  ?? 0;
     const shortRate = opp.short_rate ?? 0;
-    const longIsIncome  = longRate  < 0;   // long on negative rate → we get paid
-    const shortIsIncome = shortRate > 0;   // short on positive rate → we get paid
-    const rowStyle: React.CSSProperties = dimmed ? { opacity: 0.45 } : {};
-    const rowClass = dimmed ? '' : 'opp-row--qualified bridge-flow-active';
-
-    const earnBadge = (isIncome: boolean) => (
-      <span style={{
-        fontSize: 9,
-        fontWeight: 700,
-        letterSpacing: '0.05em',
-        color: isIncome ? 'var(--green)' : 'var(--text-muted)',
-        opacity: isIncome ? 1 : 0.55,
-        marginInlineStart: 3,
-      }}>
-        {isIncome ? '▲' : '▼'}
-      </span>
-    );
+    const longIsIncome  = longRate  < 0;
+    const shortIsIncome = shortRate > 0;
+    const rowClass = dimmed
+      ? 'nx-row nx-row--dimmed'
+      : 'nx-row nx-row--qualified opp-row--qualified bridge-flow-active';
 
     const stableKey = `${opp.symbol}_${opp.long_exchange}_${opp.short_exchange}`;
     return (
-      <tr key={stableKey} style={rowStyle} className={rowClass}>
-        <td>
-          <div>
-            {!dimmed && <span style={{ color: 'var(--green)', marginInlineEnd: 6, fontSize: 10 }}>●</span>}
-            {dimmed && <span style={{ color: 'var(--text-muted)', marginInlineEnd: 6, fontSize: 10 }}>○</span>}
-            <span className="font-semibold text-accent">{opp.symbol}</span>
+      <tr
+        key={stableKey}
+        className={rowClass}
+        style={{ animationDelay: `${idx * 35}ms` }}
+      >
+        {/* ── Symbol + tier + price spread ── */}
+        <td className="nx-cell-pair">
+          <div className="nx-pair-main">
+            <span className={dimmed ? 'nx-dot nx-dot--dim' : 'nx-dot nx-dot--live'} />
+            <span className="nx-pair-symbol">{opp.symbol}</span>
           </div>
-          <div style={{ marginTop: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div className="nx-pair-meta">
             {tierBadge(opp.entry_tier)}
             {opp.price_spread_pct != null && (
-              <span style={{
-                fontSize: 9, fontFamily: 'var(--font-mono)',
+              <span className="nx-price-spread" style={{
                 color: opp.price_spread_pct >= 0 ? 'var(--green)' : 'var(--red)',
               }}>
                 P:{opp.price_spread_pct >= 0 ? '+' : ''}{opp.price_spread_pct.toFixed(2)}%
@@ -151,56 +176,71 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
             )}
           </div>
         </td>
-        <td>
-          <span className="bridge-connector">
-            <span style={{
-              color: longIsIncome ? 'var(--green)' : '#94a3b8',
-              fontWeight: 700,
-              fontSize: 11,
-            }}>
+
+        {/* ── Exchange bridge ── */}
+        <td className="nx-cell-bridge">
+          <div className="nx-bridge">
+            <span className={`nx-bridge__exch ${longIsIncome ? 'nx-bridge__exch--earn' : ''}`}>
               {opp.long_exchange?.toUpperCase().slice(0, 3)}
-              {earnBadge(longIsIncome)}
+              <span className={longIsIncome ? 'nx-arrow nx-arrow--up' : 'nx-arrow nx-arrow--down'}>
+                {longIsIncome ? '▲' : '▼'}
+              </span>
             </span>
-            <span className="bridge-connector-line" />
-            <span style={{
-              color: shortIsIncome ? 'var(--green)' : '#94a3b8',
-              fontWeight: 700,
-              fontSize: 11,
-            }}>
+            <span className="nx-bridge__line">
+              <span className="nx-bridge__dot nx-bridge__dot--left" />
+              <span className="nx-bridge__dot nx-bridge__dot--right" />
+            </span>
+            <span className={`nx-bridge__exch ${shortIsIncome ? 'nx-bridge__exch--earn' : ''}`}>
               {opp.short_exchange?.toUpperCase().slice(0, 3)}
-              {earnBadge(shortIsIncome)}
+              <span className={shortIsIncome ? 'nx-arrow nx-arrow--up' : 'nx-arrow nx-arrow--down'}>
+                {shortIsIncome ? '▲' : '▼'}
+              </span>
             </span>
-          </span>
+          </div>
         </td>
-        <td className="text-end mono" style={getLongRateStyle(longRate)}>
+
+        {/* ── Funding rates ── */}
+        <td className="text-end mono nx-cell-rate" style={getLongRateStyle(longRate)}>
           {formatFunding(longRate)}
         </td>
-        <td className="text-end mono" style={getShortRateStyle(shortRate)}>
+        <td className="text-end mono nx-cell-rate" style={getShortRateStyle(shortRate)}>
           {formatFunding(shortRate)}
         </td>
-        <td className="text-end mono font-semibold" style={getSpreadStyle(immediateSpread)}>
-          {formatSpread(immediateSpread)}
+
+        {/* ── Funding spread — pill highlight ── */}
+        <td className="text-end mono nx-cell-spread">
+          <span
+            className="nx-spread-pill"
+            style={{ color: getSpreadColor(immediateSpread) }}
+          >
+            {formatSpread(immediateSpread)}
+          </span>
         </td>
-        <td className="text-end mono" style={getSpreadStyle(opp.net_pct ?? 0)}>
-          {opp.net_pct != null ? formatSpread(opp.net_pct) : '--'}
+
+        {/* ── Net profit — emphasized ── */}
+        <td className="text-end mono nx-cell-net">
+          <span
+            className="nx-net-value"
+            style={{ color: getSpreadColor(opp.net_pct ?? 0) }}
+          >
+            {opp.net_pct != null ? formatSpread(opp.net_pct) : '--'}
+          </span>
         </td>
-        <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
-          {opp.mode === 'cherry_pick'
-            ? <span style={{ color: '#f97316' }}>🍒 CHERRY</span>
-            : opp.mode === 'nutcracker'
-            ? <span style={{ color: '#eab308' }}>🔨🥜 NUTCRACKER</span>
-            : opp.mode === 'pot'
-            ? <span style={{ color: '#22c55e' }}>🍯 POT</span>
-            : <span style={{ color: '#94a3b8' }}>HOLD</span>}
+
+        {/* ── Mode badge ── */}
+        <td className="text-end nx-cell-mode">
+          {renderModeBadge(opp.mode)}
         </td>
-        <td style={{ padding: '4px 12px' }}>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+
+        {/* ── Funding countdown ── */}
+        <td className="nx-cell-funding">
+          <div className="nx-funding-pair">
             {renderFundingCell(
               opp.long_exchange ?? '',
               opp.long_next_funding_ms,
               opp.long_interval_hours ?? 8,
             )}
-            <div style={{ width: 1, background: 'var(--card-border)', alignSelf: 'stretch' }} />
+            <div className="nx-funding-divider" />
             {renderFundingCell(
               opp.short_exchange ?? '',
               opp.short_next_funding_ms,
@@ -212,34 +252,38 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     );
   };
 
+  /* ── Card + table ──────────────────────────────────────────── */
   return (
-    <div className="card flex flex-col" style={{ position: 'relative' }}>
-      <div style={{
-        position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-        background: 'linear-gradient(90deg, transparent, rgba(16,185,129,0.5), transparent)',
-        borderRadius: '14px 14px 0 0',
-        zIndex: 1, pointerEvents: 'none',
-      }} />
-      <div className="card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-        </svg>
-        <span>{t.liveOpportunities}</span>
-        <span className="card-header-muted">({count})</span>
+    <div className="card nx-opp-card flex flex-col" style={{ position: 'relative' }}>
+      {/* Accent top glow */}
+      <div className="nx-opp-card__glow" />
+
+      {/* Header */}
+      <div className="nx-opp-header card-header px-5 py-4 border-b" style={{ borderColor: 'var(--card-border)' }}>
+        <div className="nx-opp-header__left">
+          <svg className="nx-opp-header__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+            <polyline points="16 7 22 7 22 13" />
+          </svg>
+          <span>{t.liveOpportunities}</span>
+          <span className="card-header-muted">({count})</span>
+        </div>
         {count > 0 && (
-          <span className="xcard-live" style={{ marginLeft: 2 }}>
+          <span className="xcard-live" style={{ marginInlineStart: 'auto' }}>
             <span className="xcard-live-dot" />LIVE
           </span>
         )}
       </div>
 
+      {/* Table */}
       <div className="flex-1 overflow-auto scrollbar-thin">
         {opps.length === 0 ? (
-          <div className="flex items-center justify-center py-12 text-muted text-sm mono">
-            {t.scanning}
+          <div className="nx-empty-state">
+            <div className="nx-empty-state__pulse" />
+            <span>{t.scanning}</span>
           </div>
         ) : (
-          <table className="corp-table">
+          <table className="corp-table nx-table">
             <thead>
               <tr>
                 <th>{t.pair}</th>
@@ -255,9 +299,15 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
             <tbody>
               {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
-                <tr>
-                  <td colSpan={8} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
-                    ── {t.belowThresholdLabel} ({thresholdPct}) ──
+                <tr className="nx-separator-row">
+                  <td colSpan={8}>
+                    <div className="nx-separator">
+                      <span className="nx-separator__line" />
+                      <span className="nx-separator__label">
+                        {t.belowThresholdLabel} ({thresholdPct})
+                      </span>
+                      <span className="nx-separator__line" />
+                    </div>
                   </td>
                 </tr>
               )}
