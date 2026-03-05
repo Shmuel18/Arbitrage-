@@ -11,8 +11,8 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_funding_spread: 0.1 # minimum gross funding-rate spread per 8h settlement (%)
-  min_immediate_spread: 0.1 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
+  min_funding_spread: 0.2 # minimum gross funding-rate spread per 8h settlement (%)
+  min_immediate_spread: 0.2 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
   min_net_pct: 0.01 # minimum net spread after fees (%) — safety floor
   max_slippage_pct: 0.10 # max price slippage to allow entry (%)
   slippage_buffer_pct: 0.015

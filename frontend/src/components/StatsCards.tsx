@@ -142,87 +142,98 @@ const StatsCards: React.FC<StatsCardsProps> = ({
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
   return (
-    <div className="xcards-grid">
-      <StatCard
-        label={t.totalBalance}
-        value={fmt(totalBalance)}
-        sub={t.subTotalAcross}
-        icon={<IconWallet />}
-        accentVar="--accent"
-        accentHex="#3b82f6"
-        trend="neutral"
-        live
-      />
-      <StatCard
-        label={t.dailyPnl}
-        value={fmt(dailyPnl)}
-        sub={dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession}
-        subColor={dailyPnl >= 0 ? 'var(--green)' : 'var(--red)'}
-        icon={<IconTrendUp />}
-        accentVar="--green"
-        accentHex={dailyPnl >= 0 ? '#10b981' : '#ef4444'}
-        trend={dailyPnl >= 0 ? 'up' : 'down'}
-      />
-      <StatCard
-        label={t.activeTrades}
-        value={String(activeTrades)}
-        sub={activeTrades > 0 ? `${activeTrades} ${t.subPositionsOpen}` : t.subNoPositions}
-        icon={<IconActivity />}
-        accentVar="--teal"
-        accentHex="#06b6d4"
-        trend={activeTrades > 0 ? 'up' : 'neutral'}
-        live={activeTrades > 0}
-      />
-      <StatCard
-        label={t.systemStatus}
-        value={systemRunning ? t.running : t.stopped}
-        sub={systemRunning ? t.subScanningMarkets : t.subBotIdle}
-        subColor={systemRunning ? 'var(--green)' : 'var(--text-muted)'}
-        icon={<IconShield />}
-        accentVar="--purple"
-        accentHex={systemRunning ? '#8b5cf6' : '#6b7280'}
-        trend={systemRunning ? 'up' : 'neutral'}
-        live={systemRunning}
-      />
-      <StatCard
-        label={t.allTimePnl}
-        value={fmt(allTimePnl)}
-        sub={t.subCumulativePnl}
-        subColor={allTimePnl >= 0 ? 'var(--green)' : 'var(--red)'}
-        icon={<IconBarChart />}
-        accentVar="--accent"
-        accentHex="#3b82f6"
-        trend={allTimePnl >= 0 ? 'up' : 'down'}
-      />
-      <StatCard
-        label={t.winRate}
-        value={fmtPct(winRate)}
-        sub={`${Math.round(winRate * totalTrades)} / ${totalTrades} trades`}
-        subColor={winRate >= 0.6 ? 'var(--green)' : winRate >= 0.4 ? 'var(--yellow)' : 'var(--red)'}
-        icon={<IconTarget />}
-        accentVar="--green"
-        accentHex={winRate >= 0.6 ? '#10b981' : '#f59e0b'}
-        trend={winRate >= 0.5 ? 'up' : 'down'}
-      />
-      <StatCard
-        label={t.avgPnlStat}
-        value={fmt(avgPnl)}
-        sub={t.subPerClosedTrade}
-        subColor={avgPnl >= 0 ? 'var(--green)' : 'var(--red)'}
-        icon={<IconZap />}
-        accentVar="--teal"
-        accentHex="#06b6d4"
-        trend={avgPnl >= 0 ? 'up' : 'down'}
-      />
-      <StatCard
-        label={t.totalTradesLabel}
-        value={String(totalTrades)}
-        sub={t.subAllTimeExec}
-        icon={<IconLayers />}
-        accentVar="--purple"
-        accentHex="#8b5cf6"
-        trend={totalTrades > 0 ? 'up' : 'neutral'}
-      />
+    <div className="nx-stats-layout">
+      {/* ── Primary hero row ───────────────────── */}
+      <div className="xcards-grid xcards-grid--primary">
+        <StatCard
+          label={t.totalBalance}
+          value={fmt(totalBalance)}
+          sub={t.subTotalAcross}
+          icon={<IconWallet />}
+          accentVar="--accent"
+          accentHex="#3b82f6"
+          trend="neutral"
+          live
+        />
+        <StatCard
+          label={t.dailyPnl}
+          value={fmt(dailyPnl)}
+          sub={dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession}
+          subColor={dailyPnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          icon={<IconTrendUp />}
+          accentVar="--green"
+          accentHex={dailyPnl >= 0 ? '#10b981' : '#ef4444'}
+          trend={dailyPnl >= 0 ? 'up' : 'down'}
+        />
+        <StatCard
+          label={t.activeTrades}
+          value={String(activeTrades)}
+          sub={activeTrades > 0 ? `${activeTrades} ${t.subPositionsOpen}` : t.subNoPositions}
+          icon={<IconActivity />}
+          accentVar="--teal"
+          accentHex="#06b6d4"
+          trend={activeTrades > 0 ? 'up' : 'neutral'}
+          live={activeTrades > 0}
+        />
+        <StatCard
+          label={t.systemStatus}
+          value={systemRunning ? t.running : t.stopped}
+          sub={systemRunning ? t.subScanningMarkets : t.subBotIdle}
+          subColor={systemRunning ? 'var(--green)' : 'var(--text-muted)'}
+          icon={<IconShield />}
+          accentVar="--purple"
+          accentHex={systemRunning ? '#8b5cf6' : '#6b7280'}
+          trend={systemRunning ? 'up' : 'neutral'}
+          live={systemRunning}
+        />
+      </div>
+
+      {/* ── Secondary stats row ────────────────── */}
+      <div className="xcards-grid xcards-grid--secondary">
+        <StatCard
+          label={t.allTimePnl}
+          value={fmt(allTimePnl)}
+          sub={t.subCumulativePnl}
+          subColor={allTimePnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          icon={<IconBarChart />}
+          accentVar="--accent"
+          accentHex="#3b82f6"
+          trend={allTimePnl >= 0 ? 'up' : 'down'}
+          idx={4}
+        />
+        <StatCard
+          label={t.winRate}
+          value={fmtPct(winRate)}
+          sub={`${Math.round(winRate * totalTrades)} / ${totalTrades} trades`}
+          subColor={winRate >= 0.6 ? 'var(--green)' : winRate >= 0.4 ? 'var(--yellow)' : 'var(--red)'}
+          icon={<IconTarget />}
+          accentVar="--green"
+          accentHex={winRate >= 0.6 ? '#10b981' : '#f59e0b'}
+          trend={winRate >= 0.5 ? 'up' : 'down'}
+          idx={5}
+        />
+        <StatCard
+          label={t.avgPnlStat}
+          value={fmt(avgPnl)}
+          sub={t.subPerClosedTrade}
+          subColor={avgPnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          icon={<IconZap />}
+          accentVar="--teal"
+          accentHex="#06b6d4"
+          trend={avgPnl >= 0 ? 'up' : 'down'}
+          idx={6}
+        />
+        <StatCard
+          label={t.totalTradesLabel}
+          value={String(totalTrades)}
+          sub={t.subAllTimeExec}
+          icon={<IconLayers />}
+          accentVar="--purple"
+          accentHex="#8b5cf6"
+          trend={totalTrades > 0 ? 'up' : 'neutral'}
+          idx={7}
+        />
+      </div>
     </div>
   );
 };

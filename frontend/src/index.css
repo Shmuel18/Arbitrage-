@@ -306,6 +306,38 @@ code, .mono {
   border-top: 1px solid var(--nav-border);
 }
 
+.nx-sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nx-sidebar-version {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--nav-text);
+  opacity: 0.4;
+  text-transform: uppercase;
+}
+
+/* ── Nav item icon styling ── */
+.sidebar-nav-item .nav-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  opacity: 0.65;
+  transition: opacity 0.2s ease, color 0.2s ease;
+}
+
+.sidebar-nav-item:hover .nav-icon,
+.sidebar-nav-item.active .nav-icon {
+  opacity: 1;
+}
+
 /* ── Main content ── */
 .main-content {
   flex: 1;
@@ -900,10 +932,41 @@ code, .mono {
 /* ══════════════════════════════════════════
    EXCHANGE-GRADE STAT CARDS (xcards)
    ══════════════════════════════════════════ */
+
+/* ── Two-tier stats layout ── */
+.nx-stats-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .xcards-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
+}
+
+/* Secondary row: compact height */
+.xcards-grid--secondary .xcard {
+  padding: 14px 18px 12px;
+}
+
+.xcards-grid--secondary .xcard-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.xcards-grid--secondary .xcard-value {
+  font-size: 20px;
+}
+
+.xcards-grid--secondary .xcard-label {
+  font-size: 9.5px;
+}
+
+.xcards-grid--secondary .xcard::after {
+  height: 50px;
 }
 
 .xcard {
@@ -2901,3 +2964,600 @@ code, .mono {
   background: rgba(0,0,0,0.02);
   border-color: rgba(0,0,0,0.04);
 }
+/* ══════════════════════════════════════════════════════════════════
+   V3 VISUAL UPGRADE — Enhanced light mode, animations, polish
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Light mode: sidebar enhanced ─────────────────────────────── */
+[data-theme="light"] .sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4ff 100%);
+  border-right: 1px solid rgba(37, 99, 235, 0.06);
+  box-shadow: 2px 0 30px rgba(37, 99, 235, 0.05), inset -1px 0 0 rgba(37, 99, 235, 0.04);
+}
+
+[data-theme="light"] .sidebar-nav-item {
+  color: #64748b;
+  font-weight: 500;
+}
+
+[data-theme="light"] .sidebar-nav-item .nav-icon {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .sidebar-nav-item:hover {
+  background: rgba(37, 99, 235, 0.05);
+  color: #1e40af;
+}
+
+[data-theme="light"] .sidebar-nav-item:hover .nav-icon {
+  color: #3b82f6;
+}
+
+[data-theme="light"] .sidebar-nav-item.active {
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.12), rgba(99, 102, 241, 0.08));
+  color: #1d4ed8;
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.12);
+  border-color: rgba(37, 99, 235, 0.12);
+}
+
+[data-theme="light"] .sidebar-nav-item.active .nav-icon {
+  color: #2563eb;
+}
+
+[data-theme="light"] .sidebar-logo h1 {
+  background: linear-gradient(135deg, #1e40af 0%, #4f46e5 50%, #06b6d4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+[data-theme="light"] .sidebar-logo span {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .nx-sidebar-version {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .nx-nav-item::before {
+  background: linear-gradient(180deg, #2563eb, #06b6d4);
+}
+
+/* ── Light mode: content area glass depth ─────────────────────── */
+[data-theme="light"] .content-area {
+  background:
+    radial-gradient(ellipse 60% 40% at 0% 0%, rgba(37, 99, 235, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(6, 182, 212, 0.03) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 30% at 50% 50%, rgba(99, 102, 241, 0.02) 0%, transparent 60%),
+    linear-gradient(170deg, #f7f8fc 0%, #eef1f8 55%, #e9ecf5 100%);
+  background-image:
+    none,
+    radial-gradient(ellipse 60% 40% at 0% 0%, rgba(37, 99, 235, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(6, 182, 212, 0.03) 0%, transparent 55%),
+    linear-gradient(170deg, #f7f8fc 0%, #eef1f8 55%, #e9ecf5 100%);
+}
+
+/* ── Light mode: cards — refined glass ────────────────────────── */
+[data-theme="light"] .card,
+[data-theme="light"] .logs-container {
+  background: rgba(255, 255, 255, 0.97) !important;
+  backdrop-filter: blur(16px) saturate(120%) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(120%) !important;
+  border: 1px solid rgba(37, 99, 235, 0.065) !important;
+  box-shadow:
+    0 0 0 0.5px rgba(37, 99, 235, 0.035),
+    0 1px 3px rgba(0, 0, 0, 0.025),
+    0 6px 24px rgba(37, 99, 235, 0.04),
+    0 20px 48px rgba(37, 99, 235, 0.015) !important;
+}
+
+[data-theme="light"] .card:hover {
+  border-color: rgba(37, 99, 235, 0.14) !important;
+  box-shadow:
+    0 0 0 0.5px rgba(37, 99, 235, 0.06),
+    0 4px 12px rgba(0, 0, 0, 0.04),
+    0 12px 40px rgba(37, 99, 235, 0.07),
+    0 32px 64px rgba(37, 99, 235, 0.02) !important;
+  transform: translateY(-1px);
+}
+
+/* ── Light mode: card accent top line ─────────────────────────── */
+[data-theme="light"] .card::before,
+[data-theme="light"] .logs-container::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent 5%, rgba(37, 99, 235, 0.2) 35%, rgba(6, 182, 212, 0.15) 65%, transparent 95%);
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 1;
+}
+
+/* ── Light mode: xcards — crisp white with colored elevation ──── */
+[data-theme="light"] .xcard {
+  background: rgba(255, 255, 255, 0.98) !important;
+  border: 1px solid rgba(37, 99, 235, 0.06) !important;
+  backdrop-filter: blur(12px) !important;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.04),
+    0 6px 24px color-mix(in srgb, var(--xcard-accent, #3b82f6) 7%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.015) !important;
+}
+
+[data-theme="light"] .xcard:hover {
+  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 22%, transparent) !important;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.04),
+    0 0 0 1px color-mix(in srgb, var(--xcard-accent, #3b82f6) 10%, transparent),
+    0 12px 36px color-mix(in srgb, var(--xcard-accent, #3b82f6) 12%, transparent),
+    0 24px 56px color-mix(in srgb, var(--xcard-accent, #3b82f6) 04%, transparent) !important;
+  transform: translateY(-2px);
+}
+
+[data-theme="light"] .xcard::before { opacity: 0.65; }
+[data-theme="light"] .xcard::after  { opacity: 0.25; }
+
+/* ── Light mode: xcard icon backgrounds ──────────────────────── */
+[data-theme="light"] .xcard-icon {
+  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 8%, white);
+  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 15%, transparent);
+}
+
+/* ── Light mode: tables — more depth ─────────────────────────── */
+[data-theme="light"] .corp-table thead th {
+  background: linear-gradient(180deg, #f8f9fb 0%, #f0f2f8 100%);
+  color: #475569;
+  border-bottom: 1.5px solid rgba(37, 99, 235, 0.07);
+  font-weight: 800;
+}
+
+[data-theme="light"] .corp-table tbody td {
+  color: #334155;
+}
+
+[data-theme="light"] .corp-table tbody tr:nth-child(even) {
+  background: rgba(37, 99, 235, 0.012);
+}
+
+[data-theme="light"] .corp-table tbody tr:hover {
+  background: rgba(37, 99, 235, 0.035) !important;
+}
+
+/* ── Light mode: top bar keeps dark glass (professional contrast) ── */
+[data-theme="light"] .top-bar {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.97), rgba(15, 23, 42, 0.94));
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 4px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* ── Light mode: position cards ──────────────────────────────── */
+[data-theme="light"] .nx-pos-card {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(37, 99, 235, 0.06) !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.035), 0 8px 24px rgba(37, 99, 235, 0.04);
+}
+
+[data-theme="light"] .nx-pos-card:hover {
+  border-color: rgba(37, 99, 235, 0.12) !important;
+  box-shadow: 0 8px 36px rgba(37, 99, 235, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04) !important;
+  transform: translateY(-2px) !important;
+}
+
+[data-theme="light"] .nx-pos-card--profit {
+  border-color: rgba(16, 185, 129, 0.12) !important;
+}
+
+[data-theme="light"] .nx-pos-card--loss {
+  border-color: rgba(239, 68, 68, 0.12) !important;
+}
+
+[data-theme="light"] .nx-pos-symbol {
+  color: #0f172a;
+}
+
+[data-theme="light"] .nx-pos-exchange-tag {
+  color: #475569;
+  background: rgba(37, 99, 235, 0.05);
+  border-color: rgba(37, 99, 235, 0.08);
+}
+
+/* ── Light mode: PnL text shadow adjustments ─────────────────── */
+[data-theme="light"] .nx-pos-pnl--positive {
+  text-shadow: 0 0 16px rgba(16, 185, 129, 0.2);
+}
+
+[data-theme="light"] .nx-pos-pnl--negative {
+  text-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
+}
+
+[data-theme="light"] .nx-trades-pnl--positive {
+  text-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
+}
+
+[data-theme="light"] .nx-trades-pnl--negative {
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.15);
+}
+
+/* ── Light mode: analytics ───────────────────────────────────── */
+[data-theme="light"] .nx-analytics-total--positive {
+  text-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+}
+
+[data-theme="light"] .nx-analytics-total--negative {
+  text-shadow: 0 0 20px rgba(239, 68, 68, 0.2);
+}
+
+[data-theme="light"] .nx-chart-area {
+  background: linear-gradient(180deg, #f9fafb 0%, #f3f5fa 100%);
+  border-color: rgba(37, 99, 235, 0.05);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .nx-chart-area::before {
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.08), transparent);
+}
+
+/* ── Light mode: time pills ──────────────────────────────────── */
+[data-theme="light"] .nx-time-pills {
+  background: rgba(37, 99, 235, 0.03);
+  border-color: rgba(37, 99, 235, 0.06);
+}
+
+[data-theme="light"] .nx-time-btn {
+  color: #64748b;
+}
+
+[data-theme="light"] .nx-time-btn:hover {
+  background: rgba(37, 99, 235, 0.06);
+  color: #2563eb;
+}
+
+[data-theme="light"] .nx-time-btn--active {
+  background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 12px rgba(37, 99, 235, 0.25);
+}
+
+/* ── Light mode: exchange balances ───────────────────────────── */
+[data-theme="light"] .nx-exch-name {
+  color: #475569;
+}
+
+[data-theme="light"] .nx-exch-bar {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+[data-theme="light"] .nx-exch-bar__fill {
+  background: linear-gradient(90deg, #06b6d4, #3b82f6, #6366f1);
+  box-shadow: 0 0 6px rgba(37, 99, 235, 0.2);
+}
+
+[data-theme="light"] .nx-exch-total {
+  color: #1e40af;
+  text-shadow: none;
+}
+
+/* ── Light mode: logs ────────────────────────────────────────── */
+[data-theme="light"] .nx-log-entry:hover {
+  background: rgba(37, 99, 235, 0.025);
+}
+
+[data-theme="light"] .nx-log-timestamp {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .nx-log-level--info {
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+  border-color: rgba(37, 99, 235, 0.1);
+}
+
+[data-theme="light"] .nx-log-level--success {
+  color: #059669;
+  background: rgba(5, 150, 105, 0.06);
+  border-color: rgba(5, 150, 105, 0.12);
+}
+
+[data-theme="light"] .nx-log-level--warning {
+  color: #d97706;
+  background: rgba(217, 119, 6, 0.06);
+  border-color: rgba(217, 119, 6, 0.12);
+}
+
+[data-theme="light"] .nx-log-level--error {
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.1);
+}
+
+[data-theme="light"] .nx-log-message {
+  color: #334155;
+}
+
+/* ── Light mode: opportunities table ─────────────────────────── */
+[data-theme="light"] .nx-opp-header {
+  background: rgba(248, 250, 255, 0.8);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+[data-theme="light"] .nx-opp-card__glow {
+  background: linear-gradient(90deg,
+    transparent 5%,
+    rgba(16, 185, 129, 0.4) 30%,
+    rgba(6, 182, 212, 0.3) 70%,
+    transparent 95%
+  );
+}
+
+[data-theme="light"] .nx-table thead th {
+  background: linear-gradient(180deg, #f8f9fb 0%, #f0f2f8 100%);
+  color: #475569;
+  font-weight: 800;
+}
+
+[data-theme="light"] .nx-table thead th::after {
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.08), transparent);
+}
+
+[data-theme="light"] .nx-row:hover {
+  background: rgba(37, 99, 235, 0.03) !important;
+}
+
+[data-theme="light"] .nx-pair-symbol {
+  color: #0f172a;
+  background: none;
+  -webkit-text-fill-color: #0f172a;
+}
+
+[data-theme="light"] .nx-bridge__exch {
+  color: #64748b;
+}
+
+[data-theme="light"] .nx-bridge__exch--earn {
+  color: #059669;
+  text-shadow: none;
+}
+
+[data-theme="light"] .nx-spread-pill {
+  background: rgba(37, 99, 235, 0.025);
+  border-color: rgba(37, 99, 235, 0.06);
+}
+
+[data-theme="light"] .nx-row--qualified .nx-spread-pill {
+  background: rgba(16, 185, 129, 0.04);
+  border-color: rgba(16, 185, 129, 0.1);
+}
+
+[data-theme="light"] .nx-row--qualified .nx-net-value {
+  text-shadow: none;
+}
+
+[data-theme="light"] .nx-separator__line {
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.08), transparent);
+}
+
+[data-theme="light"] .nx-separator__label {
+  color: #94a3b8;
+}
+
+[data-theme="light"] .nx-funding-cell__exch {
+  color: #64748b;
+}
+
+[data-theme="light"] .nx-funding-cell__time {
+  color: #475569;
+}
+
+[data-theme="light"] .nx-funding-cell__bar {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+[data-theme="light"] .nx-empty-state {
+  color: #94a3b8;
+}
+
+/* ── Light mode: bridge flow row ─────────────────────────────── */
+[data-theme="light"] .opp-row--qualified {
+  background: linear-gradient(90deg,
+    rgba(16, 185, 129, 0.06) 0%,
+    rgba(37, 99, 235, 0.015) 60%,
+    transparent 100%
+  );
+  border-left: 2px solid rgba(16, 185, 129, 0.5);
+}
+
+[data-theme="light"] .bridge-flow-active {
+  background: linear-gradient(90deg,
+    rgba(16, 185, 129, 0.055) 0%,
+    rgba(37, 99, 235, 0.015) 60%,
+    transparent 100%
+  ) !important;
+  border-left-color: rgba(16, 185, 129, 0.6);
+}
+
+/* ── Light mode: status beam ─────────────────────────────────── */
+[data-theme="light"] .status-beam--running {
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.45), 0 0 16px rgba(6, 182, 212, 0.2);
+}
+
+/* ── Light mode: buttons ─────────────────────────────────────── */
+[data-theme="light"] .btn-primary {
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+}
+
+[data-theme="light"] .btn-primary:hover {
+  box-shadow: 0 4px 18px rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+}
+
+/* ── Light mode: mode badges deeper color ────────────────────── */
+[data-theme="light"] .nx-mode-badge {
+  border-width: 1px;
+}
+
+/* ── Light mode: section header icons ────────────────────────── */
+[data-theme="light"] .nx-section-header__icon {
+  background: rgba(37, 99, 235, 0.055);
+  border-color: rgba(37, 99, 235, 0.08);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.06);
+}
+
+[data-theme="light"] .nx-section-badge {
+  background: rgba(37, 99, 235, 0.025);
+  border-color: rgba(37, 99, 235, 0.06);
+  color: #64748b;
+}
+
+/* ── Light mode: trade detail modal ──────────────────────────── */
+[data-theme="light"] .nx-trades-row:hover {
+  background: rgba(16, 185, 129, 0.03) !important;
+}
+
+[data-theme="light"] .nx-trades-symbol {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+[data-theme="light"] .nx-trades-exchange {
+  color: #64748b;
+}
+
+/* ── Light mode: scrollbar refined ───────────────────────────── */
+[data-theme="light"] .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: rgba(37, 99, 235, 0.12);
+  border-radius: 10px;
+}
+
+[data-theme="light"] .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: rgba(37, 99, 235, 0.22);
+}
+
+/* ── Light mode: active trade card glass ─────────────────────── */
+[data-theme="light"] .active-trade-card {
+  background: rgba(255, 255, 255, 0.96) !important;
+}
+
+[data-theme="light"] .active-trade-card:hover {
+  box-shadow: 0 6px 24px rgba(37, 99, 235, 0.06), 0 2px 6px rgba(0, 0, 0, 0.04);
+}
+
+/* ── Light mode: target progress bar ─────────────────────────── */
+[data-theme="light"] .nx-pos-target-bar {
+  background: rgba(37, 99, 235, 0.04);
+}
+
+/* ── Light mode: logo watermark ──────────────────────────────── */
+[data-theme="light"] .logo-watermark {
+  opacity: 0.02;
+  filter: grayscale(0.4);
+}
+
+/* ── Light mode: info pills ──────────────────────────────────── */
+[data-theme="light"] .nx-info-pill {
+  /* top bar stays dark, pills stay light-on-dark */
+}
+
+/* ── Light mode: input styling ───────────────────────────────── */
+[data-theme="light"] .input {
+  background: #fff;
+  border-color: rgba(37, 99, 235, 0.12);
+}
+
+[data-theme="light"] .input:focus {
+  border-color: rgba(37, 99, 235, 0.4);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.06), 0 0 8px rgba(37, 99, 235, 0.04);
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   V3 MICRO-INTERACTIONS — Refined hover & transition polish
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── Smooth page-wide transitions ────────────────────────────── */
+.card, .xcard, .nx-pos-card, .active-trade-card, .logs-container {
+  transition:
+    border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    background 0.3s ease;
+}
+
+/* ── Stat card icon pulse on hover ───────────────────────────── */
+.xcard:hover .xcard-icon {
+  animation: nx-icon-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes nx-icon-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/* ── Subtle hover glow for position cards ────────────────────── */
+.nx-pos-card::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--accent) 2%, transparent) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.nx-pos-card:hover::after {
+  opacity: 1;
+}
+
+/* ── Better focus-visible outlines ───────────────────────────── */
+.sidebar-nav-item:focus-visible,
+.nx-topbar-btn:focus-visible,
+.nx-time-btn:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Responsive secondary stats row ──────────────────────────── */
+@media (max-width: 1280px) {
+  .xcards-grid--secondary .xcard-value { font-size: 17px; }
+}
+
+@media (max-width: 1024px) {
+  .xcards-grid--primary,
+  .xcards-grid--secondary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .xcards-grid--primary,
+  .xcards-grid--secondary {
+    grid-template-columns: 1fr;
+  }
+  .xcards-grid--secondary .xcard-value { font-size: 20px; }
+}
+
+/* ── Staggered grid entrance ─────────────────────────────────── */
+@keyframes nx-grid-enter {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(1) { animation-delay: 0ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(2) { animation-delay: 60ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(3) { animation-delay: 120ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(4) { animation-delay: 180ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(1) { animation-delay: 220ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(2) { animation-delay: 280ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(3) { animation-delay: 340ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(4) { animation-delay: 400ms; }
