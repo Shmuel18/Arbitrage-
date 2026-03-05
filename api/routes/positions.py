@@ -33,6 +33,10 @@ async def get_positions():
         
         positions = json.loads(positions_data)
         
+        # Normalize: if stored as dict with "positions" key, extract the list
+        if isinstance(positions, dict):
+            positions = positions.get("positions", [])
+        
         return {
             "positions": positions,
             "count": len(positions),

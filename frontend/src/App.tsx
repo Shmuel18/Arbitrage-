@@ -117,8 +117,36 @@ function App() {
         getPositions(),
         pnlPromise,
         dailyPnlPromise,
-        getTrades(10),
+        getTrades(20),
       ]);
+
+      // ── Defensive positions extraction (handle both array & dict) ──
+      const extractPositions = (): PositionRow[] => {
+        if (posRes.status !== 'fulfilled') return [];
+        const raw = posRes.value;
+        if (!raw) return [];
+        // API returns { positions: [...] } — extract the array
+        const arr = raw.positions;
+        if (Array.isArray(arr)) return arr as PositionRow[];
+        // Fallback: raw itself might be an array
+        if (Array.isArray(raw)) return raw as unknown as PositionRow[];
+        return [];
+      };
+
+      // ── Defensive trades extraction ──
+      const extractTrades = (): Trade[] => {
+        if (tradesRes.status !== 'fulfilled') return [];
+        const raw = tradesRes.value;
+        if (!raw) return [];
+        const arr = raw.trades;
+        if (Array.isArray(arr)) return arr;
+        if (Array.isArray(raw)) return raw as unknown as Trade[];
+        return [];
+      };
+
+      const httpPositions = extractPositions();
+      const httpTrades = extractTrades();
+
       setData(prev => ({
         ...prev,
         status: statusRes.status === 'fulfilled' ? statusRes.value : prev.status,
@@ -126,18 +154,16 @@ function App() {
         opportunities: oppRes.status === 'fulfilled' ? oppRes.value as OpportunitySet : prev.opportunities,
         logs: logsRes.status === 'fulfilled' ? (logsRes.value.logs || []) : prev.logs,
         summary: summRes.status === 'fulfilled' && summRes.value?.total_trades != null ? summRes.value : prev.summary,
-        positions: posRes.status === 'fulfilled' ? (posRes.value.positions || []) as PositionRow[] : prev.positions,
+        positions: httpPositions.length > 0 ? httpPositions : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         dailyPnl: dailyPnlRes.status === 'fulfilled' ? (dailyPnlRes.value.total_pnl || 0) : prev.dailyPnl,
         lastFetchedAt: Date.now(),
         tradesLoaded: true,
         trades: (() => {
-          if (tradesRes.status !== 'fulfilled') return prev.trades;
-          const newT = tradesRes.value.trades || [];
-          if (newT.length === 0) return prev.trades;
+          if (httpTrades.length === 0) return prev.trades;
           const prevIds = prev.trades.map((t: Trade) => t.id).join(',');
-          const newIds = newT.map((t: Trade) => t.id).join(',');
-          return prevIds === newIds ? prev.trades : newT;
+          const newIds = httpTrades.map((t: Trade) => t.id).join(',');
+          return prevIds === newIds ? prev.trades : httpTrades;
         })(),
       }));
     } catch (error) {
@@ -180,12 +206,19 @@ function App() {
             return prevKey === newKey ? prev.opportunities : d.opportunities;
           })();
 
-          // ── Positions: only swap when set of IDs changes ─────────────────────
+          // ── Positions: defensively extract array, swap when IDs change ───
           const newPositions = (() => {
-            if (!Array.isArray(d.positions)) return prev.positions;
+            // Handle both array and dict-wrapped formats
+            let posArr: PositionRow[] | null = null;
+            if (Array.isArray(d.positions)) {
+              posArr = d.positions;
+            } else if (d.positions && typeof d.positions === 'object' && Array.isArray((d.positions as any).positions)) {
+              posArr = (d.positions as any).positions;
+            }
+            if (!posArr || posArr.length === 0) return prev.positions;
             const prevKey = prev.positions.map((p: PositionRow) => p.id || p.symbol || '').join(',');
-            const newKey  = d.positions.map((p: PositionRow) => p.id || p.symbol || '').join(',');
-            return prevKey === newKey ? prev.positions : d.positions;
+            const newKey  = posArr.map((p: PositionRow) => p.id || p.symbol || '').join(',');
+            return prevKey === newKey ? prev.positions : posArr;
           })();
 
           // ── Trades: only swap when IDs change (prevents flicker) ─────────────
@@ -196,6 +229,9 @@ function App() {
             const newIds  = t.map((x: Trade) => x.id).join(',');
             return prevIds === newIds ? prev.trades : t;
           })();
+
+          // ── Mark tradesLoaded when WS delivers trades ────────────────────────
+          const wsTradesLoaded = newTrades.length > 0 ? true : prev.tradesLoaded;
 
           // ── Logs: only swap when newest message changed ──────────────────────
           const newLogs = (() => {
@@ -219,7 +255,8 @@ function App() {
             newPnl          === prev.pnl &&
             newLogs         === prev.logs &&
             newPositions    === prev.positions &&
-            newTrades       === prev.trades
+            newTrades       === prev.trades &&
+            wsTradesLoaded  === prev.tradesLoaded
           ) return prev;
 
           // Note: lastFetchedAt is intentionally NOT updated here.
@@ -235,6 +272,7 @@ function App() {
             logs:          newLogs,
             positions:     newPositions,
             trades:        newTrades,
+            tradesLoaded:  wsTradesLoaded,
           };
         });
       } else if (msg.type === 'status_update') {

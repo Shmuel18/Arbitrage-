@@ -289,11 +289,16 @@ async def broadcast_updates():
 
                 summary = await summary_task
 
+                # ── Normalize positions to always be a flat list ──────
+                positions_parsed = json.loads(positions_data) if positions_data else []
+                if isinstance(positions_parsed, dict):
+                    positions_parsed = positions_parsed.get("positions", [])
+
                 update = {
                     "type": "full_update",
                     "data": {
                         "status": json.loads(status_data) if status_data else None,
-                        "positions": json.loads(positions_data) if positions_data else [],
+                        "positions": positions_parsed,
                         "balances": json.loads(balances_data) if balances_data else None,
                         "opportunities": json.loads(opportunities_data) if opportunities_data else None,
                         "summary": summary,
