@@ -843,26 +843,13 @@ class Scanner:
             # Lightweight display-only candidate (no API calls for balance/ticker)
             min_interval = min(long_interval, short_interval)
             immediate_net = immediate_spread - total_cost_pct
-            # Projected net: income sides only (nutcracker assumption — exit before cost fires).
-            # This is what the trade WOULD earn over one funding cycle, regardless of the
-            # 15-min entry window. Keeps Net column meaningful all hour long.
-            projected_income_pct = Decimal("0")
-            if long_is_income:
-                projected_income_pct += abs(long_rate) * Decimal("100")
-            if short_is_income:
-                projected_income_pct += abs(short_rate) * Decimal("100")
-            projected_net_pct = projected_income_pct - total_cost_pct
-            # hourly rate based on projected net (no 8h normalization)
-            hourly_rate = projected_net_pct / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
-            # Correct display mode based on which sides are income AND timing.
-            # (mode may still be default "hold" if hold_qualified was False before mode-assignment)
-            # NUTCRACKER: one income, one cost, but cost fires within the income interval
-            # (receive AND pay in the same cycle → net earn, but not a pure cherry-pick).
-            # CHERRY: one income, cost fires AFTER the income interval completes.
+
+            # ── Determine display mode FIRST (needed for accurate net) ────
+            # (mode may still be default "hold" if hold_qualified was False
+            #  before mode-assignment in the qualified block above)
             if pnl["both_income"]:
                 mode = TradeMode.POT
             elif pnl["long_is_income"] and not pnl["short_is_income"]:
-                # Cost = short side; income interval = long_interval
                 cost_mins_disp = short_mins
                 income_interval_mins = long_interval * 60
                 if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
@@ -870,13 +857,34 @@ class Scanner:
                 else:
                     mode = TradeMode.CHERRY_PICK
             elif pnl["short_is_income"] and not pnl["long_is_income"]:
-                # Cost = long side; income interval = short_interval
                 cost_mins_disp = long_mins
                 income_interval_mins = short_interval * 60
                 if cost_mins_disp is not None and cost_mins_disp < income_interval_mins:
                     mode = TradeMode.NUTCRACKER
                 else:
                     mode = TradeMode.CHERRY_PICK
+
+            # ── Projected net: accurate per-mode calculation ──────
+            # Income = sum of income-side rates
+            projected_income_pct = Decimal("0")
+            if long_is_income:
+                projected_income_pct += abs(long_rate) * Decimal("100")
+            if short_is_income:
+                projected_income_pct += abs(short_rate) * Decimal("100")
+
+            # NUTCRACKER: both sides fire in the same cycle — must deduct
+            # cost payment to show realistic net (previously only income
+            # was counted, inflating Net by the cost-side amount).
+            projected_cost_pct = Decimal("0")
+            if mode == TradeMode.NUTCRACKER:
+                if not long_is_income:
+                    projected_cost_pct += abs(long_rate) * Decimal("100")
+                if not short_is_income:
+                    projected_cost_pct += abs(short_rate) * Decimal("100")
+
+            projected_net_pct = projected_income_pct - projected_cost_pct - total_cost_pct
+            # hourly rate based on projected net (no 8h normalization)
+            hourly_rate = projected_net_pct / Decimal(str(min_interval)) if min_interval > 0 else Decimal("0")
             return OpportunityCandidate(
                 symbol=symbol,
                 long_exchange=long_eid,

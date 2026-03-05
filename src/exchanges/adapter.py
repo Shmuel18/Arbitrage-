@@ -634,7 +634,7 @@ class ExchangeAdapter:
     async def _batch_funding_poll_loop(self, symbols: List[str]) -> None:
         """Periodically fetch ALL funding rates in one batch API call.
         Also refreshes Binance funding intervals every 30 minutes."""
-        poll_interval = 30  # seconds between batch refreshes
+        poll_interval = 15  # seconds between batch refreshes (single API call, safe for all batch exchanges)
         interval_refresh_every = 1800  # re-fetch funding intervals every 30 min
         consecutive_failures = 0
         last_interval_refresh = _time.time()
@@ -741,11 +741,11 @@ class ExchangeAdapter:
     async def _price_poll_loop(self, symbols: List[str]) -> None:
         """Periodically batch-fetch ticker prices as markPrice fallback.
         
-        Runs every 30 seconds. Provides real prices for exchanges that don't
+        Runs every 15 seconds. Provides real prices for exchanges that don't
         include markPrice in their funding rate response (e.g. KuCoin).
         Stores: markPrice from ticker → last traded price → skips if nothing available.
         """
-        poll_interval = 30
+        poll_interval = 15
         while True:
             try:
                 resolved = [self._resolve_symbol(s) for s in symbols]

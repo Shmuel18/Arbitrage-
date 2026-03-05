@@ -11,8 +11,8 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_funding_spread: 0.5 # minimum gross funding-rate spread per 8h settlement (%)
-  min_immediate_spread: 0.5 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
+  min_funding_spread: 0.3 # minimum gross funding-rate spread per 8h settlement (%)
+  min_immediate_spread: 0.3 # minimum IMMEDIATE spread (next payment) — no "inflated 8h" tricks
   min_net_pct: 0.01 # minimum net spread after fees (%) — safety floor
   max_slippage_pct: 0.10 # max price slippage to allow entry (%)
   slippage_buffer_pct: 0.015
@@ -45,13 +45,13 @@ execution:
   concurrent_opportunities: 3
   order_timeout_ms: 10000
   batch_scan_concurrent: true
-  scan_parallelism: 10
+  scan_parallelism: 20
 
 risk_guard:
   fast_loop_interval_sec: 5
   deep_loop_interval_sec: 60
   enable_panic_close: true
-  scanner_interval_sec: 10
+  scanner_interval_sec: 5
 
 exchanges:
   enabled:
