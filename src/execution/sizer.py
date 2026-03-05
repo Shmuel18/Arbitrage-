@@ -48,7 +48,7 @@ class PositionSizer:
         long_bal = await long_adapter.get_balance()
         short_bal = await short_adapter.get_balance()
 
-        position_pct = float(self._cfg.risk_limits.position_size_pct)
+        position_pct = Decimal(str(self._cfg.risk_limits.position_size_pct))
 
         long_exc_cfg = self._cfg.exchanges.get(opp.long_exchange)
         short_exc_cfg = self._cfg.exchanges.get(opp.short_exchange)
@@ -61,14 +61,14 @@ class PositionSizer:
             )
             lev = min(lev, lev_short)
 
-        long_free = float(long_bal["free"])
-        short_free = float(short_bal["free"])
+        long_free = Decimal(str(long_bal["free"]))
+        short_free = Decimal(str(short_bal["free"]))
 
         # Minimum balance guard — don't enter if either exchange has less
         # than $8 free.  Tiny balances lead to immediate liquidation risk
         # exits (margin_ratio drops below safety threshold on the first
         # adverse tick).
-        _MIN_BALANCE_USD = 8.0
+        _MIN_BALANCE_USD = Decimal("8")
         if long_free < _MIN_BALANCE_USD:
             logger.warning(
                 f"{opp.symbol}: Skipping — {opp.long_exchange} balance "
@@ -83,13 +83,13 @@ class PositionSizer:
             return None
 
         min_balance = min(long_free, short_free)
-        notional = Decimal(str(min_balance * position_pct * lev))
+        notional = min_balance * position_pct * lev
 
         logger.info(
             f"{opp.symbol}: Sizing — "
             f"L={opp.long_exchange}=${long_free:.2f} S={opp.short_exchange}=${short_free:.2f} "
             f"min_bal=${min_balance:.2f} × {int(position_pct*100)}% × {lev}x = "
-            f"${float(notional):.2f} notional"
+            f"${notional:.2f} notional"
         )
 
         if notional <= 0:
@@ -99,22 +99,24 @@ class PositionSizer:
         long_spec = await long_adapter.get_instrument_spec(opp.symbol)
         short_spec = await short_adapter.get_instrument_spec(opp.symbol)
 
-        long_cs = float(long_spec.contract_size) if long_spec and long_spec.contract_size else 1.0
-        short_cs = float(short_spec.contract_size) if short_spec and short_spec.contract_size else 1.0
-        long_lot_base = (float(long_spec.lot_size) * long_cs) if long_spec else 0.001
-        short_lot_base = (float(short_spec.lot_size) * short_cs) if short_spec else 0.001
+        _ONE = Decimal("1")
+        _FALLBACK_LOT = Decimal("0.001")
+        long_cs = Decimal(str(long_spec.contract_size)) if long_spec and long_spec.contract_size else _ONE
+        short_cs = Decimal(str(short_spec.contract_size)) if short_spec and short_spec.contract_size else _ONE
+        long_lot_base = (Decimal(str(long_spec.lot_size)) * long_cs) if long_spec else _FALLBACK_LOT
+        short_lot_base = (Decimal(str(short_spec.lot_size)) * short_cs) if short_spec else _FALLBACK_LOT
         lot = max(long_lot_base, short_lot_base)
 
-        qty_float = float(notional / opp.reference_price)
-        steps = int(qty_float / lot)
-        qty_rounded = round(steps * lot, 8)
+        qty_raw = notional / opp.reference_price
+        steps = int(qty_raw / lot)
+        qty_rounded = Decimal(str(round(float(steps * lot), 8)))
         qty_rounded = max(qty_rounded, lot)
-        order_qty = Decimal(str(qty_rounded))
+        order_qty = qty_rounded
 
         logger.info(
             f"{opp.symbol}: Qty — "
-            f"notional=${float(notional):.2f} / ${float(opp.reference_price):.4f} = "
-            f"{qty_float:.4f} tokens, lot_base={lot} "
+            f"notional=${notional:.2f} / ${opp.reference_price:.4f} = "
+            f"{qty_raw:.4f} tokens, lot_base={lot} "
             f"(L:{long_lot_base}/S:{short_lot_base}), "
             f"L_cs={long_cs} S_cs={short_cs}, order_qty={order_qty}"
         )

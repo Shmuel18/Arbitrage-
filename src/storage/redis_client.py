@@ -40,7 +40,10 @@ class RedisClient:
     async def health_check(self) -> bool:
         try:
             return bool(await self._client.ping())
-        except Exception:
+        except Exception as exc:
+            # Health check failures are expected during reconnects;
+            # callers retry automatically.
+            logger.debug(f"Redis health check failed: {exc}")
             return False
 
     # ── Generic passthroughs (API publisher support) ────────────

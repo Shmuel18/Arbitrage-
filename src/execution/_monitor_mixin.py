@@ -100,7 +100,8 @@ class _MonitorMixin(_ExitLogicMixin):
             short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
             if not long_funding or not short_funding:
                 return False
-        except Exception:
+        except Exception as exc:
+            logger.debug(f"Upgrade check: failed to read cached funding for {trade.symbol}: {exc}")
             return False
 
         # ── Funding-proximity lock ────────────────────────────────────────────

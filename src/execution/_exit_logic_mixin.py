@@ -30,6 +30,8 @@ from src.core.contracts import ExitReason, TradeMode, TradeRecord
 from src.core.logging import get_logger
 from src.discovery.calculator import calculate_fees
 
+_ZERO = Decimal("0")
+
 if TYPE_CHECKING:
     pass  # all attribute access via self (mixin pattern)
 
@@ -149,12 +151,12 @@ class _ExitLogicMixin:
                 else (trade.short_funding_rate if short_just_paid else None)
             )
 
-            _long_usd = float((trade.entry_price_long or Decimal('0')) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else 0
-            _short_usd = float((trade.entry_price_short or Decimal('0')) * trade.short_qty * (Decimal(str(_sr or 0)))) if _sr else 0
+            _long_usd = ((trade.entry_price_long or _ZERO) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else _ZERO
+            _short_usd = ((trade.entry_price_short or _ZERO) * trade.short_qty * (Decimal(str(_sr or 0)))) if _sr else _ZERO
             _net_usd = _long_usd + _short_usd
 
             trade.funding_collections += 1
-            trade.funding_collected_usd += Decimal(str(_net_usd))
+            trade.funding_collected_usd += _net_usd
             trade._funding_paid_at = now
 
             # Journal entries

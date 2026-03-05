@@ -42,7 +42,10 @@ async def lifespan(app: FastAPI):
     analytics.set_redis_client(redis_client)
     
     # Start background task for broadcasting updates
-    asyncio.create_task(broadcast_updates())
+    _broadcast_task = asyncio.create_task(
+        broadcast_updates(), name="broadcast_updates"
+    )
+    _broadcast_task.add_done_callback(_task_done_handler)
     
     yield
     
@@ -50,6 +53,14 @@ async def lifespan(app: FastAPI):
     print("🛑 Shutting down Trinity Bot API...")
     if redis_client:
         await redis_client.disconnect()
+
+
+def _task_done_handler(t: asyncio.Task) -> None:
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        print(f"Task {t.get_name()} failed: {exc}")
 
 
 app = FastAPI(
@@ -234,7 +245,10 @@ async def broadcast_updates():
                 )
 
                 # Summary needs its own sequential reads (zrange) — run in parallel with trades
-                summary_task = asyncio.create_task(_compute_summary(rc))
+                summary_task = asyncio.create_task(
+                    _compute_summary(rc), name="_compute_summary"
+                )
+                summary_task.add_done_callback(_task_done_handler)
 
                 # Build proper pnl structure from closed trades (last 24h)
                 pnl_struct = None
