@@ -3,10 +3,17 @@ Exit-decision mixin — tier-aware profit-target exit strategy.
 
 Exit rules (in priority order):
   1. LIQUIDATION SAFETY: if either side approaches liquidation -> exit immediately
-  2. PROFIT TARGET:      0.7% profit on notional (= 0.5% net + 0.2% slippage buffer) -> exit
+  2. PROFIT TARGET:      profit_target_pct on notional -> exit
   3. CHERRY_PICK HARD:   exit BEFORE costly funding payment
-  4. TIME-BASED:         if 1.5h after funding payment and no profit target met:
-                         check if next funding qualifies -> yes=stay, no=exit
+  4. TIME-BASED:         if exit_timeout_hours after funding payment and no profit
+                         target met, check if NEXT IMMINENT funding qualifies
+                         using the SAME entry-window rules as the scanner
+                         (max_entry_window_minutes).  If yes → stay, else → exit.
+
+IMPORTANT: The bot always evaluates only the NEXT upcoming funding payment.
+Both at entry (scanner) AND while holding (exit logic), the decision is based
+solely on the imminent payment within max_entry_window_minutes.  The bot never
+stays in a trade waiting hours for a distant payment.
 
 Do NOT import this module directly; _MonitorMixin inherits from it,
 and ExecutionController inherits from _MonitorMixin.
@@ -403,10 +410,15 @@ class _ExitLogicMixin:
     # ── Next Funding Check ───────────────────────────────────────
 
     async def _next_funding_qualifies(self, trade: TradeRecord, long_adapter, short_adapter) -> bool:
-        """Check if the NEXT funding cycle still has profitable conditions.
+        """Check if the NEXT IMMINENT funding payment justifies staying.
 
-        Returns True if the spread from the next funding payment
-        would still be above min_funding_spread after fees.
+        Applies the SAME entry-window rules as the scanner:
+          1. Classify each side as income or cost
+          2. Check if any INCOME side fires within max_entry_window_minutes
+          3. Compute imminent net spread (income minus cost that also fires)
+          4. Net must exceed min_funding_spread after fees
+
+        This ensures the bot never waits hours for a distant payment.
         """
         tp = self._cfg.trading_params
 
@@ -418,50 +430,80 @@ class _ExitLogicMixin:
         long_rate = Decimal(str(long_funding["rate"]))
         short_rate = Decimal(str(short_funding["rate"]))
 
-        # Immediate spread from next cycle's rates
-        immediate_spread = (-long_rate + short_rate) * Decimal("100")
+        # ── Entry window (same as scanner) ───────────────────────
+        entry_window_min = float(tp.max_entry_window_minutes)
+        now_ms = _time.time() * 1000
 
-        # Fees
+        long_next_ts = long_funding.get("next_timestamp")
+        short_next_ts = short_funding.get("next_timestamp")
+
+        # Classify each side: income or cost?
+        long_is_income = long_rate < 0   # long on negative → we get paid
+        short_is_income = short_rate > 0  # short on positive → we get paid
+
+        # Minutes until each side's next funding
+        long_mins = (long_next_ts - now_ms) / 60_000 if (long_next_ts and long_next_ts > now_ms) else None
+        short_mins = (short_next_ts - now_ms) / 60_000 if (short_next_ts and short_next_ts > now_ms) else None
+
+        # Is each income side within the entry window?
+        long_imminent = long_is_income and long_mins is not None and long_mins <= entry_window_min
+        short_imminent = short_is_income and short_mins is not None and short_mins <= entry_window_min
+
+        # ── Gate: at least one INCOME side must be imminent ──────
+        if not (long_imminent or short_imminent):
+            _next_income_mins = None
+            if long_is_income and long_mins is not None:
+                _next_income_mins = long_mins
+            if short_is_income and short_mins is not None:
+                if _next_income_mins is None or short_mins < _next_income_mins:
+                    _next_income_mins = short_mins
+            logger.info(
+                f"🔍 [{trade.symbol}] Next income payment too far: "
+                f"{int(_next_income_mins)}min" if _next_income_mins is not None else "unknown"
+                f" > entry_window={int(entry_window_min)}min — EXIT",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return False
+
+        # ── Compute imminent spread (income minus cost within window) ──
+        _HUNDRED = Decimal("100")
+        imminent_income_pct = Decimal("0")
+        imminent_cost_pct = Decimal("0")
+        if long_imminent:
+            imminent_income_pct += abs(long_rate) * _HUNDRED
+        if short_imminent:
+            imminent_income_pct += abs(short_rate) * _HUNDRED
+        # Cost sides that also fire within the window
+        if not long_is_income and long_mins is not None and long_mins <= entry_window_min:
+            imminent_cost_pct += abs(long_rate) * _HUNDRED
+        if not short_is_income and short_mins is not None and short_mins <= entry_window_min:
+            imminent_cost_pct += abs(short_rate) * _HUNDRED
+        imminent_spread_pct = imminent_income_pct - imminent_cost_pct
+
+        # ── Fees ─────────────────────────────────────────────────
         long_spec = long_adapter.get_cached_instrument_spec(trade.symbol)
         short_spec = short_adapter.get_cached_instrument_spec(trade.symbol)
         if not long_spec or not short_spec:
             return False
 
         fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        net_spread = immediate_spread - fees_pct
+        # We're already in the trade so entry fees are sunk.
+        # Only exit fees matter, but for consistency with the scanner's
+        # qualification gate we compare imminent spread vs min_funding_spread.
+        net_spread = imminent_spread_pct - fees_pct
 
         qualifies = net_spread >= tp.min_funding_spread
 
-        # ── hold_max_wait_seconds: reject if next funding is too far away ──
-        # Staying exposed to price risk for hours while waiting for the next
-        # funding is not worth it. Only stay if the next payment is within
-        # hold_max_wait_seconds.
-        if qualifies and tp.hold_max_wait_seconds > 0:
-            now_ms = _time.time() * 1000
-            _ln_ts = long_funding.get("next_timestamp")
-            _sn_ts = short_funding.get("next_timestamp")
-            _next_ts = None
-            if _ln_ts is not None and _sn_ts is not None:
-                _next_ts = min(_ln_ts, _sn_ts)
-            elif _ln_ts is not None:
-                _next_ts = _ln_ts
-            elif _sn_ts is not None:
-                _next_ts = _sn_ts
-            if _next_ts is not None:
-                secs_until = (_next_ts - now_ms) / 1000
-                if secs_until > tp.hold_max_wait_seconds:
-                    qualifies = False
-                    logger.info(
-                        f"🔍 [{trade.symbol}] Next funding too far: "
-                        f"{int(secs_until)}s > hold_max_wait={tp.hold_max_wait_seconds}s — EXIT",
-                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                    )
-
         _result = "✅ STAY" if qualifies else "❌ EXIT"
+        _income_detail = []
+        if long_imminent:
+            _income_detail.append(f"L({trade.long_exchange})={float(long_rate)*100:+.4f}% in {int(long_mins)}min")
+        if short_imminent:
+            _income_detail.append(f"S({trade.short_exchange})={float(short_rate)*100:+.4f}% in {int(short_mins)}min")
         logger.info(
-            f"🔍 [{trade.symbol}] Next funding check: "
-            f"L={float(long_rate)*100:+.4f}% S={float(short_rate)*100:+.4f}% "
-            f"→ spread={float(immediate_spread):.4f}% net={float(net_spread):.4f}% "
+            f"🔍 [{trade.symbol}] Next funding check (entry_window={int(entry_window_min)}min): "
+            f"{' | '.join(_income_detail)} "
+            f"→ imminent_spread={float(imminent_spread_pct):.4f}% net={float(net_spread):.4f}% "
             f"(need {float(tp.min_funding_spread)}%) → {_result}",
             extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
         )

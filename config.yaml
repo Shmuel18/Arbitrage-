@@ -39,7 +39,7 @@ trading_params:
 
   exit_timeout_hours: 1.5 # After funding, wait up to 1.5h for profit target before evaluating
   exit_slippage_buffer_pct: 0.2 # Slippage buffer for exits
-  liquidation_safety_pct: 80.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)
+  liquidation_safety_pct: 5.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)
 
 execution:
   concurrent_opportunities: 3
