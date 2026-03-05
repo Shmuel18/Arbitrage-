@@ -10,23 +10,20 @@ Safety features:
 from __future__ import annotations
 
 import asyncio
-import json
 import signal
 import sys
-from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import uvicorn
 
 from src.core.config import init_config
 from src.core.logging import get_logger
+from src.core.status_publisher import StatusPublisher
 from src.discovery.scanner import Scanner
 from src.exchanges.adapter import ExchangeManager
 from src.execution.controller import ExecutionController
 from src.risk.guard import RiskGuard
 from src.storage.redis_client import RedisClient
 from src.api.publisher import APIPublisher
-from src.discovery.calculator import calculate_funding_spread
 
 logger = get_logger("main")
 
@@ -174,231 +171,8 @@ async def main() -> None:
     )
     
     # ── Run status publisher in background ─────────────────────────
-    async def publish_status_loop():
-        """Publish bot status + balances + summary to Redis every 5 seconds"""
-        while not shutdown_event.is_set():
-            try:
-                # Get real active positions count
-                active_count = len(controller._active_trades)
-                
-                # Publish bot status
-                await publisher.publish_status(
-                    running=True,
-                    exchanges=cfg.enabled_exchanges,
-                    positions_count=active_count,
-                    min_funding_spread=float(cfg.trading_params.min_funding_spread),
-                )
-                
-                # Fetch and publish real balances
-                balances = {}
-                for eid in cfg.enabled_exchanges:
-                    adapter = mgr.get(eid)
-                    if adapter:
-                        try:
-                            bal = await adapter.get_balance()
-                            total_val = bal.get("total")
-                            if isinstance(total_val, dict):
-                                total_val = total_val.get("USDT")
-                            if total_val is None:
-                                total_val = bal.get("free", 0)
-                            balances[eid] = float(total_val or 0)
-                        except Exception:
-                            balances[eid] = 0.0
-                
-                await publisher.publish_balances(balances)
-                await publisher.publish_summary(balances, active_count)
-                
-                # Publish active positions details (with live spread)
-                positions_data = []
-                for tid, trade in controller._active_trades.items():
-                    pos_entry = {
-                        "id": trade.trade_id,
-                        "symbol": trade.symbol,
-                        "long_exchange": trade.long_exchange,
-                        "short_exchange": trade.short_exchange,
-                        "long_qty": str(trade.long_qty),
-                        "short_qty": str(trade.short_qty),
-                        "entry_edge_pct": str(trade.entry_edge_pct),
-                        "long_funding_rate": str(trade.long_funding_rate) if trade.long_funding_rate is not None else None,
-                        "short_funding_rate": str(trade.short_funding_rate) if trade.short_funding_rate is not None else None,
-                        "mode": trade.mode,
-                        "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
-                        "state": trade.state.value,
-                        "immediate_spread_pct": None,
-                        "current_spread_pct": None,
-                        "current_long_rate": None,
-                        "current_short_rate": None,
-                        "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
-                        "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
-                        "next_funding_ms": None,
-                        "entry_tier": trade.entry_tier,
-                    }
-                    # Use cached funding rates to compute current spread (no REST)
-                    try:
-                        long_ad = mgr.get(trade.long_exchange)
-                        short_ad = mgr.get(trade.short_exchange)
-                        live_long = long_ad.get_funding_rate_cached(trade.symbol)
-                        live_short = short_ad.get_funding_rate_cached(trade.symbol)
-                        if not live_long or not live_short:
-                            raise ValueError("no cached rate")
-                        spread_info = calculate_funding_spread(
-                            live_long["rate"], live_short["rate"],
-                            long_interval_hours=live_long.get("interval_hours", 8),
-                            short_interval_hours=live_short.get("interval_hours", 8),
-                        )
-                        pos_entry["immediate_spread_pct"] = str(spread_info["immediate_spread_pct"])
-                        pos_entry["current_spread_pct"] = str(spread_info["funding_spread_pct"])
-                        pos_entry["current_long_rate"] = str(live_long["rate"])
-                        pos_entry["current_short_rate"] = str(live_short["rate"])
-                        if live_long.get("next_timestamp"):
-                            pos_entry["next_funding_ms"] = live_long["next_timestamp"]
-                        # ── Pending funding estimate ──
-                        try:
-                            _lr = float(live_long["rate"])
-                            _sr = float(live_short["rate"])
-                            _notional = float(trade.entry_price_long or 0) * float(trade.long_qty or 0)
-                            if _notional > 0:
-                                # Income: long earns when rate<0, short earns when rate>0
-                                _income = _notional * max(0.0, -_lr) + _notional * max(0.0, _sr)
-                                # Cost: long pays when rate>0, short pays when rate<0
-                                _cost = _notional * max(0.0, _lr) + _notional * max(0.0, -_sr)
-                                pos_entry["pending_income_usd"] = str(round(_income, 4))
-                                pos_entry["pending_income_pct"] = str(round(_income / _notional * 100, 4))
-                                pos_entry["pending_net_usd"] = str(round(_income - _cost, 4))
-                                pos_entry["pending_net_pct"] = str(round((_income - _cost) / _notional * 100, 4))
-                        except Exception:
-                            pass
-                    except Exception as fr_err:
-                        logger.debug(f"Live spread fetch failed for {trade.symbol}: {fr_err}")
-
-                    # ── Compute unrealized PnL % & detail-card fields ──
-                    try:
-                        _la = mgr.get(trade.long_exchange)
-                        _sa = mgr.get(trade.short_exchange)
-                        _lt = await _la.get_ticker(trade.symbol)
-                        _st = await _sa.get_ticker(trade.symbol)
-                        _lp = float(_lt.get("last") or _lt.get("close") or 0)
-                        _sp = float(_st.get("last") or _st.get("close") or 0)
-                        _elp = float(trade.entry_price_long or 0)
-                        _esp = float(trade.entry_price_short or 0)
-                        if _lp > 0 and _sp > 0 and _elp > 0 and _esp > 0:
-                            _notional = _elp * float(trade.long_qty)
-                            if _notional > 0:
-                                _long_pnl = (_lp - _elp) * float(trade.long_qty)
-                                _short_pnl = (_esp - _sp) * float(trade.short_qty)
-                                _price_pnl = _long_pnl + _short_pnl
-                                _fund_pnl = float(trade.funding_collected_usd or 0)
-                                _fees = float(trade.fees_paid_total or 0)
-                                _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
-                                _price_pnl_pct = _price_pnl / _notional * 100
-                                _fund_pnl_pct = _fund_pnl / _notional * 100
-                                _fees_pct = _fees / _notional * 100
-                                pos_entry["unrealized_pnl_pct"] = str(round(_total_pnl_pct, 4))
-                                pos_entry["price_pnl_pct"] = str(round(_price_pnl_pct, 4))
-                                pos_entry["funding_pnl_pct"] = str(round(_fund_pnl_pct, 4))
-                                pos_entry["fees_pct"] = str(round(_fees_pct, 4))
-                        # Live prices for detail card
-                        pos_entry["live_price_long"] = str(_lp) if _lp > 0 else None
-                        pos_entry["live_price_short"] = str(_sp) if _sp > 0 else None
-                        # Current basis: (live_long - live_short) / live_short × 100
-                        if _lp > 0 and _sp > 0:
-                            pos_entry["current_basis_pct"] = str(round((_lp - _sp) / _sp * 100, 4))
-                    except Exception:
-                        pass
-
-                    # ── Static trade fields for detail card ──
-                    pos_entry["entry_basis_pct"] = str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None
-                    pos_entry["price_spread_pct"] = str(trade.price_spread_pct) if trade.price_spread_pct is not None else None
-                    pos_entry["funding_collected_usd"] = str(trade.funding_collected_usd)
-                    pos_entry["fees_paid_total"] = str(trade.fees_paid_total) if trade.fees_paid_total is not None else None
-                    pos_entry["funding_collections"] = trade.funding_collections
-                    pos_entry["profit_target_pct"] = str(cfg.trading_params.profit_target_pct)
-
-                    positions_data.append(pos_entry)
-                await publisher.publish_positions(positions_data)
-
-                # ── Compute & publish running PnL (unrealized + realized) ──
-                unrealized_pnl = 0.0
-                for tid, trade in controller._active_trades.items():
-                    try:
-                        la = mgr.get(trade.long_exchange)
-                        sa = mgr.get(trade.short_exchange)
-                        long_positions = await la.get_positions(trade.symbol)
-                        short_positions = await sa.get_positions(trade.symbol)
-                        for pos in long_positions:
-                            unrealized_pnl += float(pos.unrealized_pnl)
-                        for pos in short_positions:
-                            unrealized_pnl += float(pos.unrealized_pnl)
-                    except Exception:
-                        pass
-
-                # Read realized PnL from closed trades
-                realized_pnl = 0.0
-                try:
-                    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
-                    closed_pnl = await redis._client.zrangebyscore(
-                        "trinity:pnl:timeseries", cutoff, float('inf'), withscores=True
-                    )
-                    if closed_pnl:
-                        for member, _score in closed_pnl:
-                            realized_pnl += float(member)
-                except Exception:
-                    pass
-
-                running_pnl = realized_pnl + unrealized_pnl
-                ts_now = datetime.now(timezone.utc).timestamp()
-
-                # Write running PnL snapshot for chart (every cycle = ~5s)
-                try:
-                    pnl_snapshot = json.dumps({"running": running_pnl, "unrealized": unrealized_pnl, "realized": realized_pnl})
-                    await redis._client.zadd(
-                        "trinity:pnl:running",
-                        {pnl_snapshot: ts_now},
-                    )
-                    # Trim old entries (keep last 24h)
-                    cutoff_trim = ts_now - 86400
-                    await redis._client.zremrangebyscore("trinity:pnl:running", 0, cutoff_trim)
-                except Exception:
-                    pass
-
-                # Publish PnL data for frontend (via Redis key for WebSocket + HTTP)
-                try:
-                    # Build data points from running PnL snapshots
-                    cutoff_24h = (datetime.now(timezone.utc) - timedelta(hours=24)).timestamp()
-                    running_data = await redis._client.zrangebyscore(
-                        "trinity:pnl:running", cutoff_24h, float('inf'), withscores=True
-                    )
-                    data_points = []
-                    if running_data:
-                        for member, score in running_data:
-                            try:
-                                point = json.loads(member)
-                                data_points.append({
-                                    "pnl": point.get("running", 0),
-                                    "cumulative_pnl": point.get("running", 0),
-                                    "unrealized": point.get("unrealized", 0),
-                                    "realized": point.get("realized", 0),
-                                    "timestamp": float(score),
-                                })
-                            except Exception:
-                                pass
-                    pnl_payload = {
-                        "data_points": data_points,
-                        "total_pnl": running_pnl,
-                        "unrealized_pnl": unrealized_pnl,
-                        "realized_pnl": realized_pnl,
-                        "count": len(data_points),
-                    }
-                    await redis.set("trinity:pnl:latest", json.dumps(pnl_payload))
-                except Exception as pnl_err:
-                    logger.debug(f"PnL publish error: {pnl_err}")
-                
-                await asyncio.sleep(5)
-            except Exception as e:
-                logger.error(f"Error publishing status: {e}")
-                await asyncio.sleep(1)
-    
-    status_task = asyncio.create_task(publish_status_loop(), name="status_publisher")
+    status_pub = StatusPublisher(cfg, mgr, controller, redis, publisher, shutdown_event)
+    status_task = asyncio.create_task(status_pub.run(), name="status_publisher")
 
     logger.info("Bot is running — press Ctrl+C to stop")
     await shutdown_event.wait()

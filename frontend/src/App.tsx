@@ -81,6 +81,10 @@ export interface FullData {
 
 function App() {
   const [pnlHours, setPnlHours] = useState<number>(24);
+  // Ref tracks pnlHours so fetchAll always reads the latest value
+  // without restarting the polling interval on every hour change.
+  const pnlHoursRef = React.useRef(pnlHours);
+  React.useEffect(() => { pnlHoursRef.current = pnlHours; }, [pnlHours]);
   const [data, setData] = useState<FullData>({
     status: { bot_running: false, connected_exchanges: [], active_positions: 0, uptime: 0 },
     balances: null, opportunities: null, summary: null, pnl: null, dailyPnl: 0,
@@ -90,8 +94,9 @@ function App() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const pnlPromise = getPnL(pnlHours);
-      const dailyPnlPromise = pnlHours === 24 ? pnlPromise : getPnL(24);
+      const hours = pnlHoursRef.current;
+      const pnlPromise = getPnL(hours);
+      const dailyPnlPromise = hours === 24 ? pnlPromise : getPnL(24);
 
       const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, dailyPnlRes, tradesRes] = await Promise.allSettled([
         getStatus(),
@@ -128,7 +133,7 @@ function App() {
     } catch (error) {
       console.error('Error fetching data:', error);
     }
-  }, [pnlHours]);
+  }, []); // no deps — pnlHours read via ref to avoid interval restart
 
   useEffect(() => {
     connectWebSocket((raw) => {
@@ -143,7 +148,8 @@ function App() {
               d.status.bot_running === prev.status.bot_running &&
               d.status.active_positions === prev.status.active_positions &&
               d.status.uptime === prev.status.uptime &&
-              JSON.stringify(d.status.connected_exchanges) === JSON.stringify(prev.status.connected_exchanges)
+              d.status.connected_exchanges.length === prev.status.connected_exchanges.length &&
+              d.status.connected_exchanges.every((e, i) => e === prev.status.connected_exchanges[i])
             ) return prev.status;
             return d.status;
           })();

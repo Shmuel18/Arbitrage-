@@ -11,7 +11,8 @@ import logging
 import time as _time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional
 
 import ccxt.pro as ccxtpro
 
@@ -35,6 +36,7 @@ class ExchangeAdapter:
         # Symbol mapping: normalized (USDT) → original exchange symbol (e.g. USD for Kraken)
         self._symbol_map: Dict[str, str] = {}
         self._ws_tasks: List = []  # Track running WebSocket tasks
+        self._rest_semaphore = asyncio.Semaphore(10)  # Limit concurrent REST calls per exchange
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
@@ -46,6 +48,37 @@ class ExchangeAdapter:
         self._symbols_list: Optional[List[str]] = None
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
         self._last_clock_sync: float = 0.0  # epoch timestamp of last clock sync
+
+    # ── Supervised task (auto-restart on crash) ──────────────────
+
+    def _create_supervised_task(self, coro_factory, *, name: str = "supervised"):
+        """Create a background task that auto-restarts on unexpected failure.
+        
+        *coro_factory* is a zero-arg callable that returns a new coroutine
+        each time (e.g. ``lambda: self._batch_funding_poll_loop(syms)``).
+        CancelledError exits cleanly. All other exceptions trigger a delayed
+        restart with exponential back-off (capped at 60 s).
+        """
+        async def _supervisor():
+            backoff = 5
+            while True:
+                try:
+                    await coro_factory()
+                    return  # coroutine exited normally
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    logger.error(
+                        f"[{self.exchange_id}] Supervised task '{name}' crashed: {exc}. "
+                        f"Restarting in {backoff}s",
+                        extra={"exchange": self.exchange_id, "action": "task_restart"},
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+
+        task = asyncio.create_task(_supervisor(), name=f"{self.exchange_id}-{name}")
+        self._ws_tasks.append(task)
+        return task
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -313,21 +346,27 @@ class ExchangeAdapter:
                 f"Starting funding rate BATCH polling for {len(eligible)} symbols",
                 extra={"exchange": self.exchange_id, "action": "ws_start"},
             )
-            task = asyncio.create_task(self._batch_funding_poll_loop(eligible))
-            self._ws_tasks.append(task)
+            self._create_supervised_task(
+                lambda syms=eligible: self._batch_funding_poll_loop(syms),
+                name="batch-funding-poll",
+            )
         else:
             # Batch not supported (e.g. KuCoin) — single task, sequential with semaphore
             logger.info(
                 f"Starting funding rate SEQUENTIAL polling for {len(eligible)} symbols",
                 extra={"exchange": self.exchange_id, "action": "ws_start"},
             )
-            task = asyncio.create_task(self._sequential_funding_poll_loop(eligible))
-            self._ws_tasks.append(task)
+            self._create_supervised_task(
+                lambda syms=eligible: self._sequential_funding_poll_loop(syms),
+                name="sequential-funding-poll",
+            )
 
         # Always start price poll loop — provides markPrice fallback for exchanges
         # that don't include markPrice in their funding rate API response (e.g. KuCoin)
-        price_task = asyncio.create_task(self._price_poll_loop(eligible))
-        self._ws_tasks.append(price_task)
+        self._create_supervised_task(
+            lambda syms=eligible: self._price_poll_loop(syms),
+            name="price-poll",
+        )
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket.
@@ -582,8 +621,8 @@ class ExchangeAdapter:
                     data = await self._exchange.fetch_funding_rate(self._resolve_symbol(sym))
                     self._update_funding_cache(sym, data)
                     count += 1
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[{self.exchange_id}] Funding warm-up failed for {sym}: {exc}")
 
         await asyncio.gather(*[_fetch_one(s) for s in symbols], return_exceptions=True)
         logger.info(
@@ -655,8 +694,8 @@ class ExchangeAdapter:
                             data = await self._exchange.fetch_funding_rate(self._resolve_symbol(sym))
                             self._update_funding_cache(sym, data)
                             count += 1
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(f"[{self.exchange_id}] Sequential funding fetch failed for {sym}: {exc}")
 
                 await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
                 if count == 0 and symbols:
@@ -910,10 +949,12 @@ class ExchangeAdapter:
         )
 
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:
-        return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
+        async with self._rest_semaphore:
+            return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
 
     async def get_funding_rate(self, symbol: str) -> Dict[str, Any]:
-        data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
+        async with self._rest_semaphore:
+            data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
         interval_hours = self._get_funding_interval(symbol, data)
         # Prefer nextFundingTimestamp (future payment) over fundingTimestamp (current/past)
         next_ts = data.get("nextFundingTimestamp") or data.get("fundingTimestamp")
@@ -1131,7 +1172,8 @@ class ExchangeAdapter:
     # ── Account ──────────────────────────────────────────────────
 
     async def get_balance(self) -> Dict[str, Any]:
-        bal = await self._exchange.fetch_balance()
+        async with self._rest_semaphore:
+            bal = await self._exchange.fetch_balance()
         # Try USDT first, fall back to USD (e.g. Kraken Futures settles in USD)
         usdt = bal.get("USDT", {})
         if not usdt.get("total"):
@@ -1237,7 +1279,8 @@ class ExchangeAdapter:
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
-                raw = await self._exchange.fetch_positions(symbols)
+                async with self._rest_semaphore:
+                    raw = await self._exchange.fetch_positions(symbols)
                 break
             except Exception as e:
                 last_err = e
@@ -1548,8 +1591,13 @@ class ExchangeManager:
     def get(self, exchange_id: str) -> ExchangeAdapter:
         return self._adapters[exchange_id]
 
-    def all(self) -> Dict[str, ExchangeAdapter]:
-        return dict(self._adapters)
+    def all(self) -> Mapping[str, ExchangeAdapter]:
+        """Return a read-only view of the internal adapters dict.
+        
+        Uses ``MappingProxyType`` — zero-copy, prevents accidental mutation
+        by callers while avoiding a full dict copy every 5-second status cycle.
+        """
+        return MappingProxyType(self._adapters)
 
     async def connect_all(self) -> None:
         for adapter in self._adapters.values():
@@ -1579,5 +1627,5 @@ class ExchangeManager:
         for adapter in self._adapters.values():
             try:
                 await adapter.disconnect()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"Disconnect failed for {adapter.exchange_id}: {exc}")

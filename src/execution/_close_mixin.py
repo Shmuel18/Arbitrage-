@@ -55,15 +55,15 @@ class _CloseMixin:
                     t = await long_adapter.get_ticker(trade.symbol)
                     trade.exit_price_long = Decimal(str(t.get("last", 0)))
                     logger.info(f"[{trade.symbol}] Long exit price from ticker: {trade.exit_price_long}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[{trade.symbol}] Long exit price ticker fetch failed: {exc}")
             if trade.exit_price_short is None and short_adapter:
                 try:
                     t = await short_adapter.get_ticker(trade.symbol)
                     trade.exit_price_short = Decimal(str(t.get("last", 0)))
                     logger.info(f"[{trade.symbol}] Short exit price from ticker: {trade.exit_price_short}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[{trade.symbol}] Short exit price ticker fetch failed: {exc}")
 
             # Use stored taker fees as fallback for extract_fee
             fallback_long = trade.long_taker_fee
@@ -246,8 +246,8 @@ class _CloseMixin:
                 if short_adapter:
                     _sf = short_adapter.get_funding_rate_cached(trade.symbol)
                     exit_funding_short_rate = _sf.get("rate") if _sf else None
-            except Exception:
-                pass  # best-effort
+            except Exception as exc:
+                logger.debug(f"Exit funding rate fetch failed for {trade.symbol}: {exc}")
 
             _exit_reason = trade._exit_reason or ExitReason.SPREAD_BELOW_THRESHOLD
             entry_lr = float(trade.long_funding_rate or 0) * 100
@@ -356,9 +356,12 @@ class _CloseMixin:
             try:
                 pnl_value = float(total_pnl)
                 ts = datetime.now(timezone.utc).timestamp()
-                await self._redis._client.zadd(
+                # Use JSON member with trade_id to avoid dedup when two trades
+                # close with identical PnL values (sorted-set members must be unique).
+                member = json.dumps({"trade_id": trade.trade_id, "pnl": pnl_value})
+                await self._redis.zadd(
                     "trinity:pnl:timeseries",
-                    {str(pnl_value): ts},
+                    {member: ts},
                 )
             except Exception as pnl_err:
                 logger.debug(f"Failed to publish PnL data: {pnl_err}")
@@ -420,8 +423,8 @@ class _CloseMixin:
                         f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
                         f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
                     )
-                except Exception:
-                    pass  # best-effort; logging is the fallback
+                except Exception as exc:
+                    logger.debug(f"Error-state alert publish failed: {exc}")
 
     async def _close_leg(
         self, adapter, exchange: str, symbol: str,
@@ -467,8 +470,8 @@ class _CloseMixin:
                     if p:
                         trade.exit_price_long = Decimal(str(p))
                         logger.info(f"[{trade.symbol}] Manual-close long exit price from ticker: {trade.exit_price_long}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[{trade.symbol}] Manual-close long ticker failed: {exc}")
                 if trade.exit_price_long is None:
                     mp = long_adapter.get_mark_price(trade.symbol)
                     if mp:
@@ -482,8 +485,8 @@ class _CloseMixin:
                     if p:
                         trade.exit_price_short = Decimal(str(p))
                         logger.info(f"[{trade.symbol}] Manual-close short exit price from ticker: {trade.exit_price_short}")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"[{trade.symbol}] Manual-close short ticker failed: {exc}")
                 if trade.exit_price_short is None:
                     mp = short_adapter.get_mark_price(trade.symbol)
                     if mp:

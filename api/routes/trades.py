@@ -3,7 +3,7 @@ Trades History API Routes
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Optional
 
@@ -13,10 +13,11 @@ def set_redis_client(client):
     global redis_client
     redis_client = client
 
-router = APIRouter()
+router = APIRouter(redirect_slashes=False)
 
 
 @router.get("/")
+@router.get("")
 async def get_trades(
     limit: int = Query(100, ge=1, le=1000),
     hours: Optional[int] = Query(None, ge=1, le=168)
@@ -31,17 +32,14 @@ async def get_trades(
         
         # Calculate time range
         if hours:
-            cutoff_time = (datetime.utcnow() - timedelta(hours=hours)).timestamp()
-            trades_data = await redis_client._client.zrangebyscore(
+            cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
+            trades_data = await redis_client.zrangebyscore(
                 trades_key, 
                 cutoff_time, 
-                float('inf'), 
-                start=0, 
-                num=limit,
-                withscores=False
+                float('inf'),
             )
         else:
-            trades_data = await redis_client._client.zrange(trades_key, -limit, -1, withscores=False)
+            trades_data = await redis_client.zrange(trades_key, -limit, -1)
         
         if not trades_data:
             return {"trades": [], "count": 0}
@@ -85,7 +83,7 @@ async def get_trades(
         return {
             "trades": trades,
             "count": len(trades),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -107,7 +105,7 @@ async def get_trade_stats():
         
         # Get stats from Redis
         stats_key = "trinity:stats"
-        stats_data = await redis_client._client.get(stats_key)
+        stats_data = await redis_client.get(stats_key)
         
         if not stats_data:
             return {

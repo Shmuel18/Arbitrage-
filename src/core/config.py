@@ -82,7 +82,7 @@ class ExchangeConfig(BaseModel):
     api_secret: Optional[str] = None
     api_passphrase: Optional[str] = None
     testnet: bool = False
-    leverage: Optional[int] = None
+    leverage: Optional[int] = Field(default=None, ge=1, le=125)
     margin_mode: Optional[str] = None
     position_mode: Optional[str] = None
 

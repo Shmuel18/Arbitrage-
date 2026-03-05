@@ -2,7 +2,7 @@
 Trinity Bot API - Main FastAPI Application
 """
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 import os
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from api.routes import positions, trades, controls, analytics
@@ -56,7 +56,8 @@ app = FastAPI(
     title="Trinity Bot API",
     description="Real-time arbitrage bot monitoring and control",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 # CORS middleware — restrict to known origins; falls back to ["*"] if env not set
@@ -83,7 +84,7 @@ async def get_opportunities():
     try:
         if not redis_client:
             return {"opportunities": [], "count": 0}
-        data = await redis_client._client.get("trinity:opportunities")
+        data = await redis_client.get("trinity:opportunities")
         if data:
             return json.loads(data)
         return {"opportunities": [], "count": 0}
@@ -98,7 +99,7 @@ async def get_balances():
     try:
         if not redis_client:
             return {"balances": {}, "total": 0}
-        data = await redis_client._client.get("trinity:balances")
+        data = await redis_client.get("trinity:balances")
         if data:
             return json.loads(data)
         return {"balances": {}, "total": 0}
@@ -113,7 +114,7 @@ async def get_logs(limit: int = 50):
     try:
         if not redis_client:
             return {"logs": []}
-        raw_logs = await redis_client._client.lrange("trinity:logs", 0, limit - 1)
+        raw_logs = await redis_client.lrange("trinity:logs", 0, limit - 1)
         logs = [json.loads(log) for log in raw_logs]
         return {"logs": logs}
     except Exception as e:
@@ -131,7 +132,7 @@ async def root():
         "status": "online",
         "service": "Trinity Bot API",
         "version": "1.0.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -147,7 +148,7 @@ async def get_status():
         
         # Get status from Redis
         status_key = "trinity:status"
-        status = await redis_client._client.get(status_key)
+        status = await redis_client.get(status_key)
         
         if status:
             return json.loads(status)
@@ -177,23 +178,23 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
-async def _compute_summary(client) -> dict:
+async def _compute_summary(rc) -> dict:
     """Compute accurate summary from trade history (same logic as HTTP endpoint)."""
     base = {"total_pnl": 0, "total_trades": 0, "win_rate": 0,
             "active_positions": 0, "uptime_hours": 0,
             "all_time_pnl": 0, "avg_pnl": 0}
     try:
-        summary_data = await client.get("trinity:summary")
+        summary_data = await rc.get("trinity:summary")
         if summary_data:
             base.update(json.loads(summary_data))
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Summary fetch error: {exc}")
     # Compute accurate stats from closed trade history
     all_time_pnl = 0.0
     trade_count = 0
     winning = 0
     try:
-        trades_raw = await client.zrange("trinity:trades:history", 0, -1)
+        trades_raw = await rc.zrange("trinity:trades:history", 0, -1)
         for t in trades_raw:
             td = json.loads(t)
             pnl = float(td.get('total_pnl', 0))
@@ -201,8 +202,8 @@ async def _compute_summary(client) -> dict:
             trade_count += 1
             if pnl > 0:
                 winning += 1
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"Trade history fetch error: {exc}")
     base['all_time_pnl'] = round(all_time_pnl, 4)
     base['avg_pnl'] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0
     base['total_trades'] = trade_count
@@ -212,23 +213,34 @@ async def _compute_summary(client) -> dict:
 
 async def broadcast_updates():
     """Background task to broadcast updates to all connected clients"""
+    import time as _time  # import once at top of function, not inside loop
+
     while True:
         try:
             if manager.active_connections and redis_client:
-                # Gather all data
-                status_data = await redis_client._client.get("trinity:status")
-                positions_data = await redis_client._client.get("trinity:positions")
-                balances_data = await redis_client._client.get("trinity:balances")
-                opportunities_data = await redis_client._client.get("trinity:opportunities")
-                summary = await _compute_summary(redis_client._client)
-                logs_data = await redis_client._client.lrange("trinity:logs", 0, 19)
-                pnl_latest = await redis_client._client.get("trinity:pnl:latest")
+                rc = redis_client  # local alias
+
+                # ── Parallel Redis reads (single round of awaits) ────────
+                (
+                    status_data, positions_data, balances_data,
+                    opportunities_data, logs_data, pnl_latest,
+                ) = await asyncio.gather(
+                    rc.get("trinity:status"),
+                    rc.get("trinity:positions"),
+                    rc.get("trinity:balances"),
+                    rc.get("trinity:opportunities"),
+                    rc.lrange("trinity:logs", 0, 19),
+                    rc.get("trinity:pnl:latest"),
+                )
+
+                # Summary needs its own sequential reads (zrange) — run in parallel with trades
+                summary_task = asyncio.create_task(_compute_summary(rc))
+
                 # Build proper pnl structure from closed trades (last 24h)
                 pnl_struct = None
                 try:
-                    import time as _time
                     cutoff = _time.time() - 86400
-                    trades_raw = await redis_client._client.zrangebyscore(
+                    trades_raw = await rc.zrangebyscore(
                         "trinity:trades:history", cutoff, float('inf'), withscores=True
                     )
                     dp = []
@@ -241,13 +253,13 @@ async def broadcast_updates():
                         dp.append({"pnl": pnl_val, "cumulative_pnl": cumulative, "timestamp": float(ts), "symbol": t.get('symbol', '?')})
                     unrealized = float(json.loads(pnl_latest).get('unrealized_pnl', 0)) if pnl_latest else 0.0
                     pnl_struct = {"data_points": dp, "total_pnl": cumulative + unrealized, "realized_pnl": cumulative, "unrealized_pnl": unrealized}
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"PnL structure build error: {exc}")
 
                 # Build normalized trades list for frontend
                 trades_list = []
                 try:
-                    recent_raw = await redis_client._client.zrange("trinity:trades:history", -20, -1, withscores=False)
+                    recent_raw = await rc.zrange("trinity:trades:history", -20, -1)
                     for item in reversed(recent_raw):
                         t = json.loads(item)
                         invested = float(t.get('invested') or 0)
@@ -272,8 +284,10 @@ async def broadcast_updates():
                             'funding_collections': int(t.get('funding_collections') or 0),
                             'funding_collected_usd': float(t.get('funding_collected_usd') or 0),
                         })
-                except Exception:
-                    pass
+                except Exception as exc:
+                    print(f"Trades list build error: {exc}")
+
+                summary = await summary_task
 
                 update = {
                     "type": "full_update",
@@ -287,7 +301,7 @@ async def broadcast_updates():
                         "logs": [json.loads(l) for l in logs_data] if logs_data else [],
                         "trades": trades_list,
                     },
-                    "timestamp": datetime.utcnow().isoformat()
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
                 await manager.broadcast(json.dumps(update))
             
@@ -306,6 +320,9 @@ if os.path.exists(_build_dir):
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):
         """Catch-all: serve React app for client-side routing"""
+        # Never intercept API or WebSocket routes
+        if full_path == "api" or full_path.startswith("api/") or full_path.startswith("ws"):
+            raise HTTPException(status_code=404, detail="Not found")
         file_path = os.path.join(_build_dir, full_path)
         if os.path.exists(file_path) and os.path.isfile(file_path):
             return FileResponse(file_path)

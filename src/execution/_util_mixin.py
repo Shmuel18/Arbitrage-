@@ -134,8 +134,8 @@ class _UtilMixin:
                     if self._publisher:
                         try:
                             await self._publisher.push_alert(alert_msg)
-                        except Exception:
-                            pass  # best-effort; logging is the fallback
+                        except Exception as exc:
+                            logger.debug(f"Alert publish failed: {exc}")
                     self._blacklist.add(symbol, exchange)
 
         cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
@@ -240,7 +240,8 @@ class _UtilMixin:
                     usdt = float(bal.get("free", 0))
                     balances[exchange_id] = usdt
                     total += usdt
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"Balance fetch failed for {exchange_id}: {exc}")
                     balances[exchange_id] = None
             self._journal.balance_snapshot(balances, total=total)
         except Exception as e:

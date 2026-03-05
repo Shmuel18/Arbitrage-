@@ -19,7 +19,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Protocol, runtime_checkable
 
 from src.core.contracts import (
     ExitReason,
@@ -51,6 +51,45 @@ from src.execution._close_mixin import _CloseMixin
 from src.execution._util_mixin import _UtilMixin
 
 logger = get_logger("execution")
+
+
+# ── Structural type that every mixin expects ``self`` to satisfy ──
+# This gives type-checkers a way to validate cross-mixin attribute access
+# without circular imports.  The concrete class (*ExecutionController*)
+# satisfies this protocol via composition (duck-typing).
+
+@runtime_checkable
+class ControllerProtocol(Protocol):
+    """Contract that all execution mixins rely on."""
+
+    # ── Instance data ──
+    _cfg: "Config"
+    _exchanges: "ExchangeManager"
+    _redis: "RedisClient"
+    _risk_guard: Optional["RiskGuard"]
+    _publisher: Optional["APIPublisher"]
+    _active_trades: Dict[str, TradeRecord]
+    _active_symbols: set[str]
+    _busy_exchanges: set[str]
+    _symbols_entering: set[str]
+    _upgrade_cooldown: Dict[str, float]
+    _blacklist: BlacklistManager
+    _sizer: PositionSizer
+    _timeout_streak: Dict[str, int]
+    _running: bool
+
+    # ── Cross-mixin methods ──
+    async def _place_with_timeout(self, adapter: object, req: OrderRequest) -> Optional[dict]: ...
+    async def _close_orphan(
+        self, adapter: object, exchange: str, symbol: str,
+        side: OrderSide, fill: dict, fallback_qty: Optional[Decimal] = None,
+    ) -> None: ...
+    def _register_trade(self, trade: TradeRecord) -> None: ...
+    def _deregister_trade(self, trade: TradeRecord) -> None: ...
+    async def _persist_trade(self, trade: TradeRecord) -> None: ...
+    async def _close_trade(self, trade: TradeRecord) -> None: ...
+    async def _record_manual_close(self, trade: TradeRecord) -> None: ...
+    async def _log_exchange_balances(self) -> None: ...
 
 class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
     # ── Cross-mixin constants (shared by _UtilMixin / _CloseMixin) ──

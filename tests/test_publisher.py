@@ -104,21 +104,32 @@ class TestPublishOpportunities:
 class TestPublishLog:
     async def test_pushes_to_list(self, publisher, mock_redis):
         await publisher.publish_log("INFO", "Bot started")
-        mock_redis._client.lpush.assert_called_once()
-        list_key = mock_redis._client.lpush.call_args[0][0]
+        mock_redis.lpush.assert_called_once()
+        list_key = mock_redis.lpush.call_args[0][0]
         assert list_key == "trinity:logs"
 
     async def test_trims_to_200(self, publisher, mock_redis):
         await publisher.publish_log("DEBUG", "test")
-        mock_redis._client.ltrim.assert_called_once_with("trinity:logs", 0, 199)
+        mock_redis.ltrim.assert_called_once_with("trinity:logs", 0, 199)
 
     async def test_log_entry_is_valid_json(self, publisher, mock_redis):
         await publisher.publish_log("WARNING", "high spread")
-        entry_str = mock_redis._client.lpush.call_args[0][1]
+        entry_str = mock_redis.lpush.call_args[0][1]
         entry = json.loads(entry_str)
         assert entry["message"] == "high spread"
         assert entry["level"] == "WARNING"
         assert "timestamp" in entry
+
+
+# ── push_alert ────────────────────────────────────────────────────
+
+class TestPushAlert:
+    async def test_push_alert_delegates_to_publish_log(self, publisher, mock_redis):
+        await publisher.push_alert("orphan detected!")
+        entry_str = mock_redis.lpush.call_args[0][1]
+        entry = json.loads(entry_str)
+        assert entry["level"] == "CRITICAL"
+        assert entry["message"] == "orphan detected!"
 
 
 # ── publish_summary ───────────────────────────────────────────────

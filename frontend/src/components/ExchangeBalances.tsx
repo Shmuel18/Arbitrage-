@@ -1,5 +1,6 @@
 import React from 'react';
 import { useSettings } from '../context/SettingsContext';
+import { formatCurrency } from '../utils/format';
 
 interface ExchangeBalancesProps {
   balances: { balances: Record<string, number>; total: number } | null;
@@ -9,8 +10,6 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
   const { t } = useSettings();
   const entries = balances?.balances ? Object.entries(balances.balances) : [];
   const total = balances?.total ?? 0;
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value);
 
   return (
     <div className="card p-5" style={{ position: 'relative' }}>

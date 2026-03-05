@@ -2,6 +2,7 @@ import React, { useState, memo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import TradeDetailModal from './TradeDetailModal';
+import { TierBadge, formatCurrency } from '../utils/format';
 
 interface RecentTradesPanelProps {
   trades: Trade[];
@@ -16,14 +17,14 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
     if (!value) return '--';
     const n = Number(value);
     if (Number.isNaN(n)) return '--';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4, maximumFractionDigits: 4 }).format(n);
+    return formatCurrency(n);
   };
 
   const formatFunding = (value?: string | null) => {
     if (!value) return '--';
     const n = Number(value);
     if (Number.isNaN(n)) return '--';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 4 }).format(n);
+    return formatCurrency(n);
   };
 
   const formatRate = (value?: string | null) => {
@@ -49,7 +50,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
 
   const formatPnl = (v?: number | null) => {
     if (v == null) return '--';
-    const s = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(v);
+    const s = formatCurrency(v);
     return <span style={{ color: v >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 700 }}>{s}</span>;
   };
 
@@ -59,28 +60,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
     return `${Math.floor(mins / 60)}h${Math.round(mins % 60) > 0 ? Math.round(mins % 60) + 'm' : ''}`;
   };
 
-  const tierBadge = (tier?: string | null) => {
-    if (!tier) return null;
-    const key = tier.toLowerCase();
-    let label = tier.toUpperCase();
-    let color = '#94a3b8';
-    let emoji = '';
-
-    if (key === 'top')     { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
-    if (key === 'medium')  { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
-    if (key === 'bad')     { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
-    if (key === 'adverse') { color = '#6b7280'; emoji = ''; label = t.tierAdverse; }
-
-    return (
-      <span style={{
-        background: color + '18', color, border: `1px solid ${color}44`,
-        borderRadius: 4, padding: '0px 6px', fontSize: 10, fontWeight: 700,
-        letterSpacing: '0.06em', marginLeft: 4,
-      }}>
-        {emoji}{label}
-      </span>
-    );
-  };
+  const tierBadge = (tier?: string | null) => <TierBadge tier={tier} t={t} />;
 
   return (
   <>

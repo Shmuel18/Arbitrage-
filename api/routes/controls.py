@@ -4,7 +4,7 @@ Bot Controls API Routes
 
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 import json
 import os
@@ -15,7 +15,7 @@ def set_redis_client(client):
     global redis_client
     redis_client = client
 
-router = APIRouter()
+router = APIRouter(redirect_slashes=False)
 
 
 class BotCommand(BaseModel):
@@ -42,10 +42,10 @@ async def send_command(command: BotCommand):
         
         command_data = {
             "action": command.action,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        await redis_client._client.publish("trinity:commands", json.dumps(command_data))
+        await redis_client.publish("trinity:commands", json.dumps(command_data))
         
         return {
             "status": "success",
@@ -71,17 +71,17 @@ async def update_config(update: ConfigUpdate):
 
         # Update config in Redis
         config_key = f"trinity:config:{update.key}"
-        await redis_client._client.set(config_key, json.dumps(update.value))
+        await redis_client.set(config_key, json.dumps(update.value))
         
         # Notify bot of config change
         command = {
             "action": "config_update",
             "key": update.key,
             "value": update.value,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        await redis_client._client.publish("trinity:commands", json.dumps(command))
+        await redis_client.publish("trinity:commands", json.dumps(command))
         
         return {
             "status": "success",
@@ -104,10 +104,10 @@ async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
         
         command = {
             "action": "emergency_stop",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        await redis_client._client.publish("trinity:commands", json.dumps(command))
+        await redis_client.publish("trinity:commands", json.dumps(command))
         
         return {
             "status": "success",
@@ -125,7 +125,7 @@ async def get_exchanges():
             return {"exchanges": []}
         
         exchanges_key = "trinity:exchanges"
-        exchanges_data = await redis_client._client.get(exchanges_key)
+        exchanges_data = await redis_client.get(exchanges_key)
         
         if not exchanges_data:
             return {"exchanges": []}

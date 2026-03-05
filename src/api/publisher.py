@@ -3,20 +3,25 @@ Trinity Bot - API Publisher
 Publishes bot data to Redis for API consumption
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Any
+from typing import TYPE_CHECKING, Dict, List, Any
 import asyncio
+
+if TYPE_CHECKING:
+    from src.storage.redis_client import RedisClient
 
 
 class APIPublisher:
     """Publishes bot data to Redis for web interface"""
     
-    def __init__(self, redis_client):
+    def __init__(self, redis_client: "RedisClient") -> None:
         self.redis = redis_client
         self.start_time = datetime.now(timezone.utc)
-        self._total_trades = 0
-        self._winning_trades = 0
+        self._total_trades: int = 0
+        self._winning_trades: int = 0
     
     async def publish_status(self, running: bool, exchanges: List[str], positions_count: int, min_funding_spread: float = 0.5):
         """Publish bot status"""
@@ -55,8 +60,8 @@ class APIPublisher:
             "level": level
         })
         # Push to a list, keep last 200
-        await self.redis._client.lpush("trinity:logs", entry)
-        await self.redis._client.ltrim("trinity:logs", 0, 199)
+        await self.redis.lpush("trinity:logs", entry)
+        await self.redis.ltrim("trinity:logs", 0, 199)
     
     async def publish_summary(self, balances: Dict[str, float], positions_count: int):
         """Publish overall summary"""
@@ -94,4 +99,12 @@ class APIPublisher:
     async def publish_exchanges(self, exchanges: List[Dict[str, Any]]):
         """Publish exchange statuses"""
         await self.redis.set("trinity:exchanges", json.dumps({"exchanges": exchanges}))
+
+    async def push_alert(self, message: str) -> None:
+        """Push an operator alert (logged + published as a CRITICAL log entry).
+
+        This is called by the execution controller for events that need
+        immediate human attention (e.g. orphaned legs, ERROR state trades).
+        """
+        await self.publish_log("CRITICAL", message)
 

@@ -7,6 +7,11 @@ Price differences are only used as a slippage filter.
 from decimal import Decimal
 from typing import Dict, Any
 
+# Module-level Decimal constants — avoid re-parsing strings on every call
+_ZERO = Decimal("0")
+_HUNDRED = Decimal("100")
+_NEG_ONE = Decimal("-1")
+
 
 # ── Primary entry signal ─────────────────────────────────────────
 
@@ -36,15 +41,15 @@ def calculate_funding_spread(
     # Immediate spread (no normalization) — the ACTUAL rate difference right now
     immediate_long_pnl = -long_rate    # negative rate → income
     immediate_short_pnl = short_rate   # positive rate → income
-    immediate_spread_pct = (immediate_long_pnl + immediate_short_pnl) * Decimal("100")
+    immediate_spread_pct = (immediate_long_pnl + immediate_short_pnl) * _HUNDRED
 
     # No 8h normalization — evaluate the actual next payment only
     return {
         "immediate_spread_pct": immediate_spread_pct,
         "funding_spread_pct": immediate_spread_pct,
-        "annualized_pct": Decimal("0"),
-        "long_pnl_pct": immediate_long_pnl * Decimal("100"),
-        "short_pnl_pct": immediate_short_pnl * Decimal("100"),
+        "annualized_pct": _ZERO,
+        "long_pnl_pct": immediate_long_pnl * _HUNDRED,
+        "short_pnl_pct": immediate_short_pnl * _HUNDRED,
         "long_rate_norm": long_rate,
         "short_rate_norm": short_rate,
     }
@@ -66,7 +71,7 @@ def calculate_funding_edge(
     return {
         "edge_pct": result["funding_spread_pct"],
         "annualized_pct": result["annualized_pct"],
-        "long_rate_pct": result["long_pnl_pct"] * Decimal("-1"),  # restore original sign
+        "long_rate_pct": result["long_pnl_pct"] * _NEG_ONE,  # restore original sign
         "short_rate_pct": result["short_pnl_pct"],
     }
 
@@ -110,7 +115,7 @@ def calculate_cherry_pick_edge(
     n_collections: int,
 ) -> Decimal:
     """Total collectible edge in PERCENT from cherry-pick strategy."""
-    return abs(income_rate_per_payment) * n_collections * Decimal("100")
+    return abs(income_rate_per_payment) * n_collections * _HUNDRED
 
 
 # ── Fee calculation ──────────────────────────────────────────────
@@ -120,5 +125,5 @@ def calculate_fees(
     short_taker_fee: Decimal,
 ) -> Decimal:
     """Total round-trip taker fees in PERCENT (open + close both legs)."""
-    return (long_taker_fee + short_taker_fee) * 2 * Decimal("100")
+    return (long_taker_fee + short_taker_fee) * 2 * _HUNDRED
 

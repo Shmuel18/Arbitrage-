@@ -15,9 +15,22 @@ interface SystemLogsProps {
 const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
   const { t } = useSettings();
   const containerRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
 
+  // Track whether user is near the bottom (within 60px)
   useEffect(() => {
-    if (containerRef.current) {
+    const el = containerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Only auto-scroll when user is near the bottom (don't hijack their scroll position)
+  useEffect(() => {
+    if (containerRef.current && isNearBottomRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [logs]);

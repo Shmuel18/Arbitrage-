@@ -1,5 +1,6 @@
 import React from 'react';
 import { useSettings } from '../context/SettingsContext';
+import { formatCurrency } from '../utils/format';
 
 interface PnlPoint {
   pnl: number;
@@ -51,9 +52,6 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
   // Stroke: gradient that switches color at zero line
   const zeroFrac = zeroY / height; // 0 = top, 1 = bottom
-
-  const formatCurrency = (value: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value);
 
   return (
     <div className="card p-5" style={{ position: 'relative' }}>

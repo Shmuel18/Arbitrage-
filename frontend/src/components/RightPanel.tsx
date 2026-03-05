@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
+import { TierBadge, formatCountdown as sharedCountdown } from '../utils/format';
 
 interface Opportunity {
   symbol: string;
@@ -51,17 +52,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
-  const formatCountdown = (ms: number | null | undefined): string => {
-    if (!ms) return '—';
-    const now = Date.now();
-    const diff = ms - now;
-    if (diff <= 0) return 'NOW';
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m`;
-    const hrs = Math.floor(mins / 60);
-    const remainMins = mins % 60;
-    return `${hrs}h${remainMins > 0 ? remainMins + 'm' : ''}`;
-  };
+  const formatCountdown = sharedCountdown;
 
   // Long side: negative rate → we earn (green), positive → we pay (red)
   const getLongRateStyle = (rate: number): React.CSSProperties => {
@@ -83,26 +74,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     return { color: 'var(--text-muted)' };
   };
 
-  const tierBadge = (tier?: string | null) => {
-    if (!tier) return null;
-    const key = tier.toLowerCase();
-    let label = tier.toUpperCase();
-    let color = '#94a3b8';
-    let emoji = '';
-    if (key === 'top')     { color = '#f59e0b'; emoji = '🏆 '; label = t.tierTop; }
-    if (key === 'medium')  { color = '#3b82f6'; emoji = '📊 '; label = t.tierMedium; }
-    if (key === 'bad')     { color = '#ef4444'; emoji = '⚠️ '; label = t.tierBad; }
-    if (key === 'adverse') { color = '#6b7280'; emoji = ''; label = t.tierAdverse; }
-    return (
-      <span style={{
-        background: color + '18', color, border: `1px solid ${color}44`,
-        borderRadius: 4, padding: '0px 5px', fontSize: 9, fontWeight: 700,
-        letterSpacing: '0.06em', marginInlineStart: 4,
-      }}>
-        {emoji}{label}
-      </span>
-    );
-  };
+  const tierBadge = (tier?: string | null) => <TierBadge tier={tier} t={t} />;
 
   const aboveThreshold = useMemo(() => opps.filter(o => o.qualified !== false), [opps]);
   const belowThreshold = useMemo(() => opps.filter(o => o.qualified === false), [opps]);

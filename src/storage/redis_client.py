@@ -56,11 +56,49 @@ class RedisClient:
             return None
         return val if isinstance(val, str) else val.decode()
 
-    async def zadd(self, key: str, mapping: Dict[str, float]) -> None:
-        """Add to a sorted set (no prefix applied)."""
-        await self._client.zadd(key, mapping)
+    async def zadd(self, key: str, mapping: Dict[str, float]) -> int:
+        """Add to a sorted set (no prefix applied). Returns number of elements added."""
+        return await self._client.zadd(key, mapping)
 
-    def pubsub(self):
+    async def zrangebyscore(
+        self, key: str, min_score: float, max_score: float,
+        *, withscores: bool = False,
+    ) -> list[Any]:
+        """Read members from a sorted set by score range (no prefix applied)."""
+        return await self._client.zrangebyscore(
+            key, min_score, max_score, withscores=withscores,
+        )
+
+    async def zremrangebyscore(
+        self, key: str, min_score: float, max_score: float,
+    ) -> int:
+        """Remove members from a sorted set by score range (no prefix applied)."""
+        return await self._client.zremrangebyscore(key, min_score, max_score)
+
+    async def lpush(self, key: str, *values: str) -> int:
+        """Prepend values to a list (no prefix applied)."""
+        return await self._client.lpush(key, *values)
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[Any]:
+        """Return a range of elements from a list (no prefix applied)."""
+        return await self._client.lrange(key, start, stop)
+
+    async def ltrim(self, key: str, start: int, stop: int) -> None:
+        """Trim a list to the specified range (no prefix applied)."""
+        await self._client.ltrim(key, start, stop)
+
+    async def zrange(
+        self, key: str, start: int, stop: int,
+        *, withscores: bool = False,
+    ) -> list[Any]:
+        """Return a range of elements from a sorted set (no prefix applied)."""
+        return await self._client.zrange(key, start, stop, withscores=withscores)
+
+    async def publish(self, channel: str, message: str) -> int:
+        """Publish a message to a Redis channel (no prefix applied)."""
+        return await self._client.publish(channel, message)
+
+    def pubsub(self) -> Any:
         """Return a pubsub instance (no prefix applied)."""
         return self._client.pubsub()
 

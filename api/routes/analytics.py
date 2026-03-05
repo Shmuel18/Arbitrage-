@@ -3,7 +3,7 @@ Analytics API Routes
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from typing import Optional
 
@@ -13,7 +13,7 @@ def set_redis_client(client):
     global redis_client
     redis_client = client
 
-router = APIRouter()
+router = APIRouter(redirect_slashes=False)
 
 
 @router.get("/performance")
@@ -25,9 +25,9 @@ async def get_performance(hours: int = Query(24, ge=1, le=4320)):
         
         # Get performance data from Redis time series
         perf_key = "trinity:performance:timeseries"
-        cutoff_time = (datetime.utcnow() - timedelta(hours=hours)).timestamp()
+        cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
         
-        perf_data = await redis_client._client.zrangebyscore(
+        perf_data = await redis_client.zrangebyscore(
             perf_key,
             cutoff_time,
             float('inf'),
@@ -70,11 +70,11 @@ async def get_pnl(hours: int = Query(24, ge=1, le=4320)):
                 "count": 0
             }
         
-        cutoff_time = (datetime.utcnow() - timedelta(hours=hours)).timestamp()
+        cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
         
         # ── Read closed trades from history ──────────────────────────
         trades_key = "trinity:trades:history"
-        trades_data = await redis_client._client.zrangebyscore(
+        trades_data = await redis_client.zrangebyscore(
             trades_key,
             cutoff_time,
             float('inf'),
@@ -113,7 +113,7 @@ async def get_pnl(hours: int = Query(24, ge=1, le=4320)):
                     pass
         
         # ── Add unrealized PnL from running snapshots (if bot is active) ──
-        latest = await redis_client._client.get("trinity:pnl:latest")
+        latest = await redis_client.get("trinity:pnl:latest")
         unrealized_pnl = 0.0
         if latest:
             try:
@@ -147,7 +147,7 @@ async def get_summary():
             }
 
         summary_key = "trinity:summary"
-        summary_data = await redis_client._client.get(summary_key)
+        summary_data = await redis_client.get(summary_key)
         base = json.loads(summary_data) if summary_data else {
             "total_pnl": 0, "total_trades": 0, "win_rate": 0,
             "active_positions": 0, "uptime_hours": 0,
@@ -158,7 +158,7 @@ async def get_summary():
         trade_count = 0
         winning = 0
         try:
-            trades_raw = await redis_client._client.zrange("trinity:trades:history", 0, -1)
+            trades_raw = await redis_client.zrange("trinity:trades:history", 0, -1)
             for t in trades_raw:
                 td = json.loads(t)
                 pnl = float(td.get('total_pnl', 0))

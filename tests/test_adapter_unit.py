@@ -296,12 +296,20 @@ class TestExchangeManager:
         assert set(result.keys()) == {"exchange_a", "exchange_b"}
         assert result["exchange_a"] is a
 
-    def test_all_returns_copy(self):
+    def test_all_returns_read_only_view(self):
+        """all() returns a MappingProxyType (read-only view of internal dict)."""
+        from types import MappingProxyType
+
         mgr = ExchangeManager()
         mgr.register("exchange_a", {})
         snapshot = mgr.all()
-        snapshot["injected"] = MagicMock()
-        assert "injected" not in mgr._adapters
+        # Must be a MappingProxyType, not the raw dict
+        assert isinstance(snapshot, MappingProxyType)
+        # Contents should mirror the internal adapters dict
+        assert dict(snapshot) == mgr._adapters
+        # Mutation should be blocked
+        with pytest.raises(TypeError):
+            snapshot["exchange_z"] = None  # type: ignore[index]
 
     def test_get_raises_on_unknown(self):
         mgr = ExchangeManager()

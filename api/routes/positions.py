@@ -3,7 +3,7 @@ Positions API Routes
 """
 
 from fastapi import APIRouter, HTTPException
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 
 # Will be set by main.py during startup
@@ -13,10 +13,11 @@ def set_redis_client(client):
     global redis_client
     redis_client = client
 
-router = APIRouter()
+router = APIRouter(redirect_slashes=False)
 
 
 @router.get("/")
+@router.get("")
 async def get_positions():
     """Get all active positions"""
     try:
@@ -25,7 +26,7 @@ async def get_positions():
         
         # Get positions from Redis
         positions_key = "trinity:positions"
-        positions_data = await redis_client._client.get(positions_key)
+        positions_data = await redis_client.get(positions_key)
         
         if not positions_data:
             return {"positions": [], "count": 0}
@@ -35,7 +36,7 @@ async def get_positions():
         return {
             "positions": positions,
             "count": len(positions),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -49,7 +50,7 @@ async def get_position(position_id: str):
             raise HTTPException(status_code=503, detail="Redis not connected")
         
         position_key = f"trinity:position:{position_id}"
-        position_data = await redis_client._client.get(position_key)
+        position_data = await redis_client.get(position_key)
         
         if not position_data:
             raise HTTPException(status_code=404, detail="Position not found")
@@ -72,10 +73,10 @@ async def close_position(position_id: str):
         command = {
             "action": "close_position",
             "position_id": position_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
-        await redis_client._client.publish("trinity:commands", json.dumps(command))
+        await redis_client.publish("trinity:commands", json.dumps(command))
         
         return {
             "status": "success",

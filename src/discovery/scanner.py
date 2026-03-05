@@ -225,8 +225,8 @@ class Scanner:
                 if self._publisher:
                     try:
                         await self._publisher.publish_log("ERROR", f"Scan error: {e}")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(f"Scan error log publish failed: {exc}")
             await asyncio.sleep(scan_interval)
 
     def stop(self) -> None:
@@ -271,20 +271,18 @@ class Scanner:
 
         results: List[OpportunityCandidate] = []
         
-        # Scan symbols in parallel batches
+        # Scan symbols in parallel batches with semaphore-bounded concurrency.
+        # Coroutines are created lazily inside the wrapper to avoid eager
+        # instantiation (which would start all coroutines before the semaphore
+        # has a chance to limit concurrency).
         symbol_list = list(common_symbols)
-        scan_tasks = [
-            self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols)
-            for symbol in symbol_list
-        ]
-        
-        # Use semaphore to limit concurrent scans
         semaphore = asyncio.Semaphore(parallelism)
-        async def bounded_scan(task):
+
+        async def bounded_scan(symbol):
             async with semaphore:
-                return await task
+                return await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols)
         
-        gathered = await asyncio.gather(*[bounded_scan(t) for t in scan_tasks], return_exceptions=True)
+        gathered = await asyncio.gather(*[bounded_scan(s) for s in symbol_list], return_exceptions=True)
         
         for symbol_results in gathered:
             if isinstance(symbol_results, Exception):
