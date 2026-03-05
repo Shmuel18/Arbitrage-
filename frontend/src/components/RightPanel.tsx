@@ -184,15 +184,6 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
         <td className="text-end mono" style={getSpreadStyle(opp.net_pct ?? 0)}>
           {opp.net_pct != null ? formatSpread(opp.net_pct) : '--'}
         </td>
-        <td className="text-end mono" style={
-          opp.price_spread_pct == null ? { color: 'var(--text-muted)' }
-          : opp.price_spread_pct >= 0 ? { color: 'var(--green)', fontWeight: 600 }
-          : { color: 'var(--red)', fontWeight: 600 }
-        }>
-          {opp.price_spread_pct != null
-            ? `${opp.price_spread_pct >= 0 ? '+' : ''}${opp.price_spread_pct.toFixed(2)}%`
-            : '--'}
-        </td>
         <td className="text-end" style={{ fontSize: 11, fontWeight: 600 }}>
           {opp.mode === 'cherry_pick'
             ? <span style={{ color: '#f97316' }}>🍒 CHERRY</span>
@@ -257,7 +248,6 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 <th className="text-end">{t.fundingS}</th>
                 <th className="text-end">{t.immediateSpreadOpp}</th>
                 <th className="text-end">{t.netPct}</th>
-                <th className="text-end">{t.priceSpreadPct}</th>
                 <th className="text-end">{t.colMode}</th>
                 <th className="text-end">{t.colNextFunding}</th>
               </tr>
@@ -266,7 +256,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
               {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
               {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                 <tr>
-                  <td colSpan={9} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
+                  <td colSpan={8} style={{ padding: '4px 16px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--card-border)' }}>
                     ── {t.belowThresholdLabel} ({thresholdPct}) ──
                   </td>
                 </tr>

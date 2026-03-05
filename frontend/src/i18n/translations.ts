@@ -338,7 +338,7 @@ const en: Translations = {
   colFundPct: 'Fund%',
 
   // RightPanel column headers
-  colBridge: 'BRIDGE',
+  colBridge: 'EXCHANGES',
   colMode: 'MODE',
   colNextFunding: 'NEXT FUNDING',
 
@@ -512,7 +512,7 @@ const he: Translations = {
   colFundPct: '% מימון',
 
   // RightPanel column headers
-  colBridge: 'גשר',
+  colBridge: 'בורסאות',
   colMode: 'מצב',
   colNextFunding: 'מימון הבא',
 
