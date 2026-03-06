@@ -194,26 +194,25 @@ class TestHoldOrExit:
     async def test_holds_when_spread_above_threshold(
         self, controller, config, mock_exchange_mgr
     ):
-        """If spread >= hold_min_spread after payment, should HOLD."""
+        """After funding, basis is adverse (current > entry) so should HOLD while waiting for recovery."""
         config.trading_params.quick_cycle = True
-        # Net spread = gross (0.6%) - exit fees (0.2%) = 0.4%; threshold must be below that
         config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.exit_offset_seconds = 0  # instant for testing
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
         # Set exchange funding rates to produce a high spread (0.6%)
-        # Must populate _funding_rate_cache since _check_exit uses get_funding_rate_cached()
         for eid in ("exchange_a", "exchange_b"):
             adapter = mock_exchange_mgr.get(eid)
             past_ms = (time.time() - 1200) * 1000  # 20 min ago
             if eid == "exchange_a":
                 data = {
-                    "rate": Decimal("-0.0030"),  # negative = we receive
+                    "rate": Decimal("-0.0030"),
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
             else:
                 data = {
-                    "rate": Decimal("0.0030"),  # positive = we receive on short
+                    "rate": Decimal("0.0030"),
                     "next_timestamp": past_ms,
                     "interval_hours": 8,
                 }
@@ -221,10 +220,17 @@ class TestHoldOrExit:
             adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        # Entry basis = 0%, but current long is higher → adverse basis
+        trade.entry_basis_pct = Decimal("0")
+        # Long price went up more than short → basis widened (adverse)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50100.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
 
-        # Trade should still be open (held)
+        # Trade should still be open — basis adverse, within recovery timeout
         assert trade.trade_id in controller._active_trades
         assert trade.state == TradeState.OPEN
 
@@ -263,12 +269,12 @@ class TestHoldOrExit:
     async def test_holds_when_next_funding_within_max_wait(
         self, controller, config, mock_exchange_mgr
     ):
-        """Spread >= threshold AND next funding within hold_max_wait → HOLD."""
+        """After funding, basis adverse but within recovery timeout → HOLD."""
         config.trading_params.quick_cycle = True
-        # Net spread = gross (0.6%) - exit fees (0.2%) = 0.4%; threshold must be below that
         config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
         # Good spread AND next funding in 30 min (within 1h limit)
         future_30m_ms = (time.time() + 1800) * 1000
@@ -277,7 +283,7 @@ class TestHoldOrExit:
             if eid == "exchange_a":
                 data = {
                     "rate": Decimal("-0.0030"),
-                    "next_timestamp": future_30m_ms,  # 30 min away
+                    "next_timestamp": future_30m_ms,
                     "interval_hours": 8,
                 }
             else:
@@ -290,12 +296,18 @@ class TestHoldOrExit:
             adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
         trade._funding_paid_long = True
         trade._funding_paid_short = True
+        # Adverse basis: long went up more than short
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50200.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
 
-        # Should still be holding — next funding is close enough
+        # Should still be holding — basis adverse, within recovery timeout
         assert trade.trade_id in controller._active_trades
         assert trade.state == TradeState.OPEN
 
@@ -627,6 +639,7 @@ class TestCherryPickHardExit:
         config.trading_params.quick_cycle = True
         config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
         # High spread so it would HOLD
         for eid in ("exchange_a", "exchange_b"):
@@ -639,10 +652,16 @@ class TestCherryPickHardExit:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.mode = TradeMode.CHERRY_PICK
         trade.exit_before = now + timedelta(hours=2)  # far in future
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
+        # Adverse basis so it doesn't trigger basis_recovery exit
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50150.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
 
-        # Still open — not yet time to exit
+        # Still open — not yet time to exit, basis adverse (within timeout)
         assert trade.trade_id in controller._active_trades
 
 
@@ -653,8 +672,9 @@ class TestBasisGuard:
     async def test_waits_when_spread_low_and_basis_adverse(
         self, controller, config, mock_exchange_mgr
     ):
-        """PnL below target, within timeout → holds."""
+        """PnL below target, basis adverse, within recovery timeout → holds."""
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
         past_ms = (time.time() - 1200) * 1000
         for eid in ("exchange_a", "exchange_b"):
@@ -663,17 +683,18 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Prices unchanged → PnL = 0% (below 0.7% target)
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        # Adverse basis: long went up → current basis > entry basis
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50100.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")  # entry: equal prices
 
         await controller._check_exit(trade)
 
-        # Should still be open — PnL below target, timeout not reached
+        # Should still be open — basis adverse, within recovery timeout
         assert trade.trade_id in controller._active_trades
         assert trade._funding_paid_at is not None
 
@@ -806,10 +827,11 @@ class TestNonQuickCyclePath:
     async def test_holds_when_net_above_threshold(
         self, controller, config, mock_exchange_mgr
     ):
-        """Non-quick-cycle: good net → hold + advance trackers."""
+        """Non-quick-cycle: basis adverse, within recovery timeout → hold."""
         config.trading_params.quick_cycle = False
         config.trading_params.hold_min_spread = Decimal("0.01")
         config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
         past_ms = (time.time() - 1200) * 1000
         future_4h = (time.time() + 4 * 3600) * 1000
@@ -820,6 +842,12 @@ class TestNonQuickCyclePath:
             adapter._funding_rate_cache["BTC/USDT"] = data
 
         trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
+        # Adverse: long went up, basis widened
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50200.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
 

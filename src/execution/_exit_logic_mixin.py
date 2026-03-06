@@ -1,14 +1,18 @@
-"""
-Exit-decision mixin — tier-aware profit-target exit strategy.
+"""Exit-decision mixin -- basis-recovery exit strategy.
 
 Exit rules (in priority order):
   1. LIQUIDATION SAFETY: if either side approaches liquidation -> exit immediately
-  2. PROFIT TARGET:      profit_target_pct on notional -> exit
+  2. PROFIT TARGET:      profit_target_pct on notional -> exit (always, even before funding)
   3. CHERRY_PICK HARD:   exit BEFORE costly funding payment
-  4. TIME-BASED:         if exit_timeout_hours after funding payment and no profit
-                         target met, check if NEXT IMMINENT funding qualifies
-                         using the SAME entry-window rules as the scanner
-                         (max_entry_window_minutes).  If yes → stay, else → exit.
+  4. BASIS RECOVERY:     after funding is collected, exit when the cross-exchange
+                         price basis (long-short)/short returns to entry level or
+                         better (favorable).  This ensures we don't give back
+                         funding profits to adverse price movements.
+  5. BASIS HARD STOP:    if basis doesn't recover within basis_recovery_timeout_minutes
+                         (default 30min), exit immediately -- don't hold indefinitely.
+  6. TIME-BASED:         if exit_timeout_hours after funding payment and no basis
+                         recovery, check if NEXT IMMINENT funding qualifies.
+                         If yes -> stay for next cycle, else -> exit.
 
 IMPORTANT: The bot always evaluates only the NEXT upcoming funding payment.
 Both at entry (scanner) AND while holding (exit logic), the decision is based
@@ -272,27 +276,57 @@ class _ExitLogicMixin:
             await self._close_trade(trade)
             return
 
-        # ── 4. TIME-BASED EXIT (after funding) ──────────────────
-        # Only evaluate after funding has been collected
+        # ── 4. BASIS RECOVERY EXIT (after funding) ──────────────
+        # After funding is collected, exit when the cross-exchange price
+        # basis returns to entry level or better.  If it doesn't recover
+        # within basis_recovery_timeout_minutes, force exit.
         if not (long_paid or short_paid):
             return
 
-        # Check how long since funding was paid
-        timeout_hours = float(tp.exit_timeout_hours)
-        time_since_funding = 0.0
-        if trade._funding_paid_at:
-            time_since_funding = (now - trade._funding_paid_at).total_seconds() / 3600
+        # Calculate current price basis: (long − short) / short × 100
+        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else _ZERO
+        _current_basis = _ZERO
+        if l_price > 0 and s_price > 0:
+            _current_basis = (l_price - s_price) / s_price * Decimal("100")
 
-        if time_since_funding >= timeout_hours:
-            # Timeout reached — check if next funding cycle qualifies
+        # Favorable = current basis ≤ entry basis (spread narrowed or reversed)
+        # entry_basis is (long−short)/short at entry.  If it shrinks, we profit.
+        _basis_favorable = _current_basis <= _entry_basis
+
+        if _basis_favorable:
+            _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
+            logger.info(
+                f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "
+                f"entry_basis={float(_entry_basis):+.4f}% → current={float(_current_basis):+.4f}% "
+                f"(favorable ✔) | PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_exit"},
+            )
+            trade._exit_reason = _reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
+
+        # ── 5. BASIS HARD STOP (30min timeout) ───────────────────
+        basis_timeout_min = float(getattr(tp, 'basis_recovery_timeout_minutes', 30))
+        time_since_funding_min = 0.0
+        if trade._funding_paid_at:
+            time_since_funding_min = (now - trade._funding_paid_at).total_seconds() / 60
+
+        if time_since_funding_min >= basis_timeout_min:
+            # Check if next funding cycle qualifies before giving up
             next_cycle_ok = await self._next_funding_qualifies(trade, long_adapter, short_adapter)
 
             if next_cycle_ok:
                 # Stay for next cycle — reset timer
                 logger.info(
-                    f"🔄 Trade {trade.trade_id}{tier_tag}: {timeout_hours}h timeout reached "
-                    f"(PnL={float(total_pnl_pct):+.4f}%), BUT next funding qualifies — "
-                    f"staying for next cycle (collections={trade.funding_collections})",
+                    f"🔄 Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min reached "
+                    f"(basis: entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%), "
+                    f"BUT next funding qualifies — staying (collections={trade.funding_collections})",
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_next_cycle"},
                 )
                 # Reset flags for next funding cycle
@@ -319,13 +353,14 @@ class _ExitLogicMixin:
                     trade.short_funding_rate = Decimal(str(short_funding["rate"]))
                 return
             else:
-                # Next cycle doesn't qualify — exit
-                _reason = f"exit_timeout_{timeout_hours}h_no_next_funding"
+                # Basis didn't recover + no next funding → force exit
+                _reason = f"basis_hard_stop_{basis_timeout_min:.0f}min"
                 logger.info(
-                    f"⏱️ Trade {trade.trade_id}{tier_tag}: EXIT — {timeout_hours}h timeout "
-                    f"after funding, PnL={float(total_pnl_pct):+.4f}% (below {float(profit_target)}% target), "
-                    f"next funding does NOT qualify — closing after {hold_min}min",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "timeout_exit"},
+                    f"⏱️ Trade {trade.trade_id}{tier_tag}: BASIS HARD STOP — "
+                    f"{basis_timeout_min:.0f}min since funding, basis NOT recovered "
+                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%) "
+                    f"and next funding doesn't qualify — closing after {hold_min}min",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_hard_stop_exit"},
                 )
                 trade._exit_reason = _reason
                 self._journal.exit_decision(
@@ -337,8 +372,16 @@ class _ExitLogicMixin:
                 await self._close_trade(trade)
                 return
 
-        # ── Not yet at timeout — keep holding ────────────────────
-        # (Profit target check already ran above and didn't trigger)
+        # ── Not yet at basis timeout — keep holding ──────────────
+        # Log that we're waiting for basis recovery
+        if trade._funding_paid_at and not trade._hold_logged_until:
+            logger.info(
+                f"⏳ Trade {trade.trade_id}{tier_tag}: waiting for basis recovery "
+                f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}% "
+                f"Δ={float(_current_basis - _entry_basis):+.4f}%) — "
+                f"{time_since_funding_min:.0f}/{basis_timeout_min:.0f}min elapsed",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "waiting_basis_recovery"},
+            )
 
     # ── P&L Calculation ──────────────────────────────────────────
 

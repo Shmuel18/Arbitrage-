@@ -51,8 +51,8 @@ class TradingParams(BaseModel):
     tier_bad_max_adverse_spread: Decimal = Decimal("2.0")  # BAD tier: max adverse price spread %
     tier_top_anytime_price_spread: Decimal = Decimal("0.5")  # TOP tier: min favorable spread for anytime entry
     # Exit strategy
-    profit_target_pct: Decimal = Decimal("0.5")  # Exit at 0.5% profit on notional
-
+    profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
+    basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     exit_timeout_hours: Decimal = Decimal("1.5")  # Hours after funding to wait for profit target
     exit_slippage_buffer_pct: Decimal = Decimal("0.2")  # Slippage buffer for exit calculation
     liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
