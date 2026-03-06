@@ -33,7 +33,7 @@ logger = get_logger("scanner")
 
 _FUNDING_STALE_SEC = 3600
 _MIN_WINDOW_MINUTES = 30
-_MIN_CHERRY_GAP_MINUTES = 60  # income and cost must fire at least this far apart to qualify as cherry
+_MIN_CHERRY_GAP_MINUTES = 30  # income and cost must fire at least this far apart to qualify as cherry
 _TOP_OPPS_LOG_INTERVAL_SEC = 300
 
 
@@ -865,11 +865,16 @@ class Scanner:
                     mode = TradeMode.CHERRY_PICK
 
             # ── Projected net: accurate per-mode calculation ──────
-            # Income = sum of income-side rates
+            # Income = ONLY from sides with imminent funding (within entry window).
+            # Without this guard, stale cost-side timestamps cause the mode
+            # to flip to CHERRY, inflating projected_net with income that
+            # fires far beyond the entry window.
+            # Use the full entry window (not the narrow tier-based one) for display.
+            _display_window = float(tp.max_entry_window_minutes)
             projected_income_pct = Decimal("0")
-            if long_is_income:
+            if long_is_income and long_mins is not None and long_mins <= _display_window:
                 projected_income_pct += abs(long_rate) * Decimal("100")
-            if short_is_income:
+            if short_is_income and short_mins is not None and short_mins <= _display_window:
                 projected_income_pct += abs(short_rate) * Decimal("100")
 
             # NUTCRACKER: both sides fire in the same cycle — must deduct
