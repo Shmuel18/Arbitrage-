@@ -321,6 +321,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={labelStyle}>{t.entryEdge}</span>
               <span style={valueStyle}>{pct(trade.entry_spread)}</span>
             </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.entryBasis}</span>
+              <span style={valueStyle}>{pct(trade.entry_basis_pct)}</span>
+            </div>
           </div>
         </div>
 

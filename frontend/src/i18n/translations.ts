@@ -123,6 +123,7 @@ export interface Translations {
   collectionsCount: string;
   fundingCollectedUsd: string;
   entryEdge: string;
+  entryBasis: string;
   fundingAtEntry: string;
   exitReasonLabel: string;
   openedAt: string;
@@ -299,6 +300,7 @@ const en: Translations = {
   collectionsCount: 'Collections',
   fundingCollectedUsd: 'Collected (USD)',
   entryEdge: 'Entry Edge',
+  entryBasis: 'Price Spread',
   fundingAtEntry: 'Funding at Entry',
   exitReasonLabel: 'Exit Reason',
   openedAt: 'Opened',
@@ -473,6 +475,7 @@ const he: Translations = {
   collectionsCount: 'גביות',
   fundingCollectedUsd: 'מימון שנגבה (USD)',
   entryEdge: 'יתרון כניסה',
+  entryBasis: 'מרווח מחירים בכניסה',
   fundingAtEntry: 'מימון בכניסה',
   exitReasonLabel: 'סיבת יציאה',
   openedAt: 'נפתחה',

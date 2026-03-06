@@ -67,6 +67,8 @@ export interface Trade {
   // collections tracking
   funding_collections?: number | null;
   funding_collected_usd?: number | null;
+  // basis
+  entry_basis_pct?: string | number | null;
   // exit metadata
   exit_reason?: string | null;
   entry_tier?: string | null;
