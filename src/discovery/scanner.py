@@ -416,12 +416,12 @@ class Scanner:
         Entry logic — PURE FUNDING ARBITRAGE:
           1. Compute immediate funding spread: (-long_rate) + short_rate (actual next payment, no 8h normalization)
           2. Per-payment analysis → HOLD (both sides income) or CHERRY_PICK (one income, one cost)
-          3. HOLD:        both sides income, spread ≥ min_funding_spread AND net > min_net_pct
+          3. HOLD:        both sides income, imminent spread ≥ min_funding_spread
           4. CHERRY_PICK: income side fires first, collect BEFORE the cost side fires
         """
         tp = self._cfg.trading_params
 
-        # ── Compute funding spread (normalized to 8h) ────────────
+        # ── Compute funding spread (no 8h normalization) ─────────
         spread_info = calculate_funding_spread(
             long_rate, short_rate,
             long_interval_hours=long_interval,
