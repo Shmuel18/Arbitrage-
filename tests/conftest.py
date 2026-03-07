@@ -54,10 +54,8 @@ def config():
         ),
         trading_params=TradingParams(
             min_funding_spread=Decimal("0.05"),
-            max_slippage_pct=Decimal("0.10"),
             slippage_buffer_pct=Decimal("0.015"),
             safety_buffer_pct=Decimal("0.02"),
-            basis_buffer_pct=Decimal("0.01"),
         ),
         execution=ExecutionConfig(concurrent_opportunities=3, order_timeout_ms=5000),
         risk_guard=RiskGuardConfig(fast_loop_interval_sec=5, deep_loop_interval_sec=60),

@@ -27,37 +27,29 @@ class RiskLimits(BaseModel):
 
 class TradingParams(BaseModel):
     min_funding_spread: Decimal = Decimal("0.5")  # min spread of next imminent payment (%) — no 8h normalization
-    max_slippage_pct: Decimal = Decimal("0.10")
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
-    basis_buffer_pct: Decimal = Decimal("0.01")      # Basis risk penalty
     cooldown_after_orphan_hours: int = 2
     max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
     max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes
     narrow_entry_window_minutes: int = 15  # For MEDIUM/BAD tiers, only enter if funding is within N minutes
-    quick_cycle: bool = True             # Exit after first funding payment (zero dead time)
     upgrade_spread_delta: Decimal = Decimal("0.5")  # Switch to new opp if spread is +N% better
     upgrade_cooldown_seconds: int = 300  # Block re-entry of upgraded symbol for N seconds
     upgrade_funding_lock_secs: int = 180  # Lock upgrades when funding is within N seconds
-    top_opportunities_display: int = 5
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy
     tier_bad_max_adverse_spread: Decimal = Decimal("2.0")  # BAD tier: max adverse price spread %
-    tier_top_anytime_price_spread: Decimal = Decimal("0.5")  # TOP tier: min favorable spread for anytime entry
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
-    exit_timeout_hours: Decimal = Decimal("1.5")  # Hours after funding to wait for profit target
-    exit_slippage_buffer_pct: Decimal = Decimal("0.2")  # Slippage buffer for exit calculation
     liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
 
 
 class ExecutionConfig(BaseModel):
     concurrent_opportunities: int = 3
     order_timeout_ms: int = 10000
-    batch_scan_concurrent: bool = True
     scan_parallelism: int = 10
 
 
@@ -107,7 +99,6 @@ class LoggingConfig(BaseModel):
     backup_count: int = 10
     log_balances_on_startup: bool = True
     log_balances_after_trade: bool = True
-    log_top_opportunities: bool = True
 
 
 # ── Master config ────────────────────────────────────────────────

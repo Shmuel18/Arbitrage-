@@ -195,7 +195,6 @@ class TestHoldOrExit:
         self, controller, config, mock_exchange_mgr
     ):
         """After funding, basis is adverse (current > entry) so should HOLD while waiting for recovery."""
-        config.trading_params.quick_cycle = True
         config.trading_params.exit_offset_seconds = 0  # instant for testing
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -269,7 +268,6 @@ class TestHoldOrExit:
         self, controller, config, mock_exchange_mgr
     ):
         """After funding, basis adverse but within recovery timeout → HOLD."""
-        config.trading_params.quick_cycle = True
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -633,7 +631,6 @@ class TestCherryPickHardExit:
     ):
         """Cherry-pick should NOT hard-exit if exit_before is still in the future."""
         now = datetime.now(timezone.utc)
-        config.trading_params.quick_cycle = True
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -824,7 +821,6 @@ class TestNonQuickCyclePath:
         self, controller, config, mock_exchange_mgr
     ):
         """Non-quick-cycle: basis adverse, within recovery timeout → hold."""
-        config.trading_params.quick_cycle = False
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 

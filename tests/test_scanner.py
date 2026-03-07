@@ -115,21 +115,6 @@ class TestScanAll:
         assert len(results) == 0
 
 
-class TestStaleness:
-    def test_stale_data_detected(self, scanner):
-        import time
-        old_ts = (time.time() - 7200) * 1000  # 2 hours ago
-        assert scanner._is_stale({"timestamp": old_ts}) is True
-
-    def test_fresh_data_ok(self, scanner):
-        import time
-        fresh_ts = time.time() * 1000  # now
-        assert scanner._is_stale({"timestamp": fresh_ts}) is False
-
-    def test_none_timestamp_is_ok(self, scanner):
-        assert scanner._is_stale({"timestamp": None}) is False
-
-
 class TestIntervalFromFunding:
     """Interval is now detected in adapter.get_funding_rate, not scanner."""
 

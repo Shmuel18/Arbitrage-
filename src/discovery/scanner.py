@@ -627,8 +627,6 @@ class Scanner:
         # favor but hours away — skip.  This prevents entering trades
         # where we wait for hours, exposed to price risk, before
         # collecting anything.
-        _top_anytime = False  # disabled: every tier needs imminent funding
-
         hold_qualified = True
         if long_stale or short_stale:
             hold_qualified = False
@@ -644,21 +642,8 @@ class Scanner:
         exit_before = None
         n_collections = 0
 
-        # TOP anytime: use full immediate spread (not just imminent window payments)
-        if _top_anytime:
-            gross_pct = immediate_spread
-            net_pct = immediate_spread - total_cost_pct
-            # Ensure closest_ms is set (use earliest future funding from either side)
-            if not closest_ms:
-                _future_ts = []
-                if long_next and long_next > now_ms:
-                    _future_ts.append(long_next)
-                if short_next and short_next > now_ms:
-                    _future_ts.append(short_next)
-                closest_ms = min(_future_ts) if _future_ts else None
-        else:
-            gross_pct = imminent_spread_pct
-            net_pct = imminent_spread_pct - total_cost_pct
+        gross_pct = imminent_spread_pct
+        net_pct = imminent_spread_pct - total_cost_pct
 
         if hold_qualified:
             # ── HOLD / POT / NUTCRACKER Block ─────────────────
@@ -995,14 +980,6 @@ class Scanner:
             n_collections=n_collections,            entry_tier=entry_tier,
             price_spread_pct=price_spread_pct,        )
 
-    # ── Helpers ──────────────────────────────────────────────────
 
-    @staticmethod
-    def _is_stale(funding: dict) -> bool:
-        ts = funding.get("timestamp")
-        if ts is None:
-            return False                 # some exchanges don't provide it
-        age = time.time() * 1000 - ts    # ccxt timestamps are in ms
-        return age > _FUNDING_STALE_SEC * 1000
 
 
