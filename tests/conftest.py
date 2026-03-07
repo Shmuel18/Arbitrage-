@@ -54,7 +54,6 @@ def config():
         ),
         trading_params=TradingParams(
             min_funding_spread=Decimal("0.05"),
-            min_net_pct=Decimal("0.01"),
             max_slippage_pct=Decimal("0.10"),
             slippage_buffer_pct=Decimal("0.015"),
             safety_buffer_pct=Decimal("0.02"),

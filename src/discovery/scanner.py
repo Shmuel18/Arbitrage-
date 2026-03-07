@@ -707,41 +707,36 @@ class Scanner:
                 emoji = "🤝"
                 label = "HOLD"
 
-            if (imminent_spread_pct - total_cost_pct) < tp.min_net_pct and not _top_anytime:
-                qualified = False
-            elif _top_anytime and net_pct < tp.min_net_pct:
-                qualified = False
-            else:
-                # For CHERRY mode, the regular _tier_net uses immediate_spread (both sides)
-                # which is tiny. Instead use net_pct (income-only cherry net) for tier.
-                if mode == TradeMode.CHERRY_PICK and entry_tier is None:
-                    _cp_tier_net = net_pct
-                    if _cp_tier_net >= tp.min_funding_spread:
-                        if price_spread_pct >= _cp_tier_net:
-                            entry_tier = EntryTier.TOP.value
-                        elif price_spread_pct > Decimal("0"):
-                            entry_tier = EntryTier.MEDIUM.value
-                        elif price_spread_pct >= -_cp_tier_net:
-                            entry_tier = EntryTier.MEDIUM.value
-                        elif abs(price_spread_pct) <= tp.tier_bad_max_adverse_spread:
-                            entry_tier = EntryTier.BAD.value
-                min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
-                funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
-                tier_tag = f" [{entry_tier.upper()}]" if entry_tier else ""
-                price_tag = f" price_spread={float(price_spread_pct):+.4f}%" if _live_basis_available else ""
-                logger.info(
-                    f"🎯 [{symbol}] OPPORTUNITY FOUND ({label} {emoji}){tier_tag}: "
-                    f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
-                    f"NET={net_pct:.4f}%{price_tag} | NEXT_FUNDING={funding_tag}",
-                    extra={
-                        "action": "opportunity_found",
-                        "symbol": symbol,
-                        "mode": mode,
-                        "long_rate": str(long_rate),
-                        "short_rate": str(short_rate),
-                        "min_to_funding": min_to_funding,
-                    },
-                )
+            # For CHERRY mode, the regular _tier_net uses immediate_spread (both sides)
+            # which is tiny. Instead use net_pct (income-only cherry net) for tier.
+            if mode == TradeMode.CHERRY_PICK and entry_tier is None:
+                _cp_tier_net = net_pct
+                if _cp_tier_net >= tp.min_funding_spread:
+                    if price_spread_pct >= _cp_tier_net:
+                        entry_tier = EntryTier.TOP.value
+                    elif price_spread_pct > Decimal("0"):
+                        entry_tier = EntryTier.MEDIUM.value
+                    elif price_spread_pct >= -_cp_tier_net:
+                        entry_tier = EntryTier.MEDIUM.value
+                    elif abs(price_spread_pct) <= tp.tier_bad_max_adverse_spread:
+                        entry_tier = EntryTier.BAD.value
+            min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
+            funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
+            tier_tag = f" [{entry_tier.upper()}]" if entry_tier else ""
+            price_tag = f" price_spread={float(price_spread_pct):+.4f}%" if _live_basis_available else ""
+            logger.info(
+                f"🎯 [{symbol}] OPPORTUNITY FOUND ({label} {emoji}){tier_tag}: "
+                f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
+                f"NET={net_pct:.4f}%{price_tag} | NEXT_FUNDING={funding_tag}",
+                extra={
+                    "action": "opportunity_found",
+                    "symbol": symbol,
+                    "mode": mode,
+                    "long_rate": str(long_rate),
+                    "short_rate": str(short_rate),
+                    "min_to_funding": min_to_funding,
+                },
+            )
         else:
             # ── One side income, one side cost OR hold not qualified ──
             # Always attempt cherry_pick — enter to collect income, exit before cost fires.
@@ -786,7 +781,7 @@ class Scanner:
                             # alone yields ≥ min_funding_spread net, enter.
                             cp_gross = calculate_cherry_pick_edge(income_pnl, 1)
                             cp_net = cp_gross - total_cost_pct
-                            if cp_net >= tp.min_funding_spread and cp_net >= tp.min_net_pct:
+                            if cp_net >= tp.min_funding_spread:
                                 cherry_ok = True
                                 qualified = True
                                 mode = TradeMode.CHERRY_PICK

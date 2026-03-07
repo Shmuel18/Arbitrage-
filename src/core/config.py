@@ -27,7 +27,6 @@ class RiskLimits(BaseModel):
 
 class TradingParams(BaseModel):
     min_funding_spread: Decimal = Decimal("0.5")  # min spread of next imminent payment (%) — no 8h normalization
-    min_net_pct: Decimal = Decimal("0.5")  # ← Requires 0.5% net profit (not 0.01%) after all fees & slippage
     max_slippage_pct: Decimal = Decimal("0.10")
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
