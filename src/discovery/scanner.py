@@ -571,9 +571,9 @@ class Scanner:
         # Check each side independently.  If ANY income-generating side
         # has funding within the window, calculate imminent net from
         # payments that actually fire during the hold.
-        current_entry_window_minutes = tp.max_entry_window_minutes
-        if entry_tier == EntryTier.MEDIUM.value or entry_tier == EntryTier.BAD.value:
-            current_entry_window_minutes = tp.narrow_entry_window_minutes
+        # ALL tiers use narrow_entry_window_minutes (15 min) — matches
+        # the unified entry gate in _entry_mixin.py (entry_offset_seconds).
+        current_entry_window_minutes = tp.narrow_entry_window_minutes
 
         now_ms = time.time() * 1000
         long_next = funding[long_eid].get("next_timestamp")
