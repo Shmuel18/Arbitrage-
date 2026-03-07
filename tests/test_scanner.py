@@ -25,7 +25,6 @@ class TestScanAll:
     async def test_finds_opportunity_when_funding_spread_exists(self, scanner, config, mock_exchange_mgr):
         """High funding spread → should produce an opportunity."""
         config.trading_params.min_funding_spread = Decimal("0.01")
-        config.trading_params.min_immediate_spread = Decimal("0.01")
         config.trading_params.min_net_pct = Decimal("0.01")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")
@@ -140,7 +139,6 @@ class TestIntervalFromFunding:
     async def test_interval_hours_used_in_spread_calc(self, scanner, config, mock_exchange_mgr):
         """Different intervals should affect funding spread calculation."""
         config.trading_params.min_funding_spread = Decimal("0.001")
-        config.trading_params.min_immediate_spread = Decimal("0.001")
         config.trading_params.min_net_pct = Decimal("0.001")
 
         adapter_a = mock_exchange_mgr.get("exchange_a")
