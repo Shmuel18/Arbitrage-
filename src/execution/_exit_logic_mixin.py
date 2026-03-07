@@ -399,8 +399,14 @@ class _ExitLogicMixin:
         try:
             l_ticker = await long_adapter.get_ticker(trade.symbol)
             s_ticker = await short_adapter.get_ticker(trade.symbol)
-            l_price = Decimal(str(l_ticker.get("last") or l_ticker.get("close") or 0))
-            s_price = Decimal(str(s_ticker.get("last") or s_ticker.get("close") or 0))
+            # Long exit = sell at BID; short exit = buy at ASK.
+            # Using last/close would overestimate PnL vs actual market impact.
+            l_price = Decimal(str(
+                l_ticker.get("bid") or l_ticker.get("last") or l_ticker.get("close") or 0
+            ))
+            s_price = Decimal(str(
+                s_ticker.get("ask") or s_ticker.get("last") or s_ticker.get("close") or 0
+            ))
         except Exception as e:
             logger.debug(f"Price fetch failed for {trade.symbol}: {e}")
             return None
