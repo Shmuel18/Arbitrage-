@@ -51,6 +51,8 @@ async def send_command(command: BotCommand):
             "status": "success",
             "message": f"Command '{command.action}' sent to bot"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -87,6 +89,8 @@ async def update_config(update: ConfigUpdate):
             "status": "success",
             "message": f"Config '{update.key}' updated"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -113,6 +117,8 @@ async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
             "status": "success",
             "message": "Emergency stop initiated"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

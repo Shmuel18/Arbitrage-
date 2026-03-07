@@ -72,7 +72,7 @@ class StatusPublisher:
 
         # 1. Bot status
         await self._publisher.publish_status(
-            running=True,
+            running=self._controller._running,
             exchanges=self._cfg.enabled_exchanges,
             positions_count=active_count,
             min_funding_spread=float(self._cfg.trading_params.min_funding_spread),

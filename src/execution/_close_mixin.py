@@ -401,6 +401,8 @@ class _CloseMixin:
                 "trinity:trades:history",
                 {json.dumps(trade_data): datetime.now(timezone.utc).timestamp()},
             )
+            if self._publisher:
+                self._publisher.record_trade(is_win=total_pnl >= 0, pnl=float(total_pnl))
 
             # Log balances after trade closure (if enabled)
             if self._cfg.logging.log_balances_after_trade:
@@ -555,6 +557,8 @@ class _CloseMixin:
                 "trinity:trades:history",
                 {json.dumps(trade_data): datetime.now(timezone.utc).timestamp()},
             )
+            if self._publisher:
+                self._publisher.record_trade(is_win=total_pnl >= 0, pnl=float(total_pnl))
             logger.info(
                 f"📋 Manual close recorded: {trade.trade_id} ({trade.symbol}) "
                 f"PnL=${float(total_pnl):.4f} (held {float(hold_minutes):.0f}min)",

@@ -86,5 +86,7 @@ async def close_position(position_id: str):
             "status": "success",
             "message": f"Close command sent for position {position_id}"
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

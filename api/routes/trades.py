@@ -38,6 +38,9 @@ async def get_trades(
                 cutoff_time, 
                 float('inf'),
             )
+            # Respect limit: return only the most recent `limit` entries
+            if len(trades_data) > limit:
+                trades_data = trades_data[-limit:]
         else:
             trades_data = await redis_client.zrange(trades_key, -limit, -1)
         

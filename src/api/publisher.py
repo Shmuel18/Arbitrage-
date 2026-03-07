@@ -22,6 +22,7 @@ class APIPublisher:
         self.start_time = datetime.now(timezone.utc)
         self._total_trades: int = 0
         self._winning_trades: int = 0
+        self._total_realized_pnl: float = 0.0
     
     async def publish_status(self, running: bool, exchanges: List[str], positions_count: int, min_funding_spread: float = 0.5):
         """Publish bot status"""
@@ -63,14 +64,13 @@ class APIPublisher:
         await self.redis.lpush("trinity:logs", entry)
         await self.redis.ltrim("trinity:logs", 0, 199)
     
-    async def publish_summary(self, balances: Dict[str, float], positions_count: int):
-        """Publish overall summary"""
-        total_balance = sum(balances.values())
+    async def publish_summary(self, balances: Dict[str, float], positions_count: int) -> None:
+        """Publish overall summary. total_pnl is accumulated realized PnL, not equity."""
         win_rate = (self._winning_trades / self._total_trades) if self._total_trades > 0 else 0
         uptime = round((datetime.now(timezone.utc) - self.start_time).total_seconds() / 3600, 2)
         
         summary = {
-            "total_pnl": total_balance,
+            "total_pnl": self._total_realized_pnl,
             "total_trades": self._total_trades,
             "win_rate": round(win_rate, 3),
             "active_positions": positions_count,
@@ -78,9 +78,10 @@ class APIPublisher:
         }
         await self.redis.set("trinity:summary", json.dumps(summary))
     
-    def record_trade(self, is_win: bool):
-        """Record a trade result for win rate tracking"""
+    def record_trade(self, is_win: bool, pnl: float = 0.0) -> None:
+        """Record a trade result for win rate and PnL tracking."""
         self._total_trades += 1
+        self._total_realized_pnl += pnl
         if is_win:
             self._winning_trades += 1
     
