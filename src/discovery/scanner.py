@@ -95,6 +95,7 @@ class Scanner:
 
                 # Sort for DISPLAY: near-term opportunities (payment within 1h) come first.
                 # Within each group, sort by immediate_net_pct descending.
+                # Tiebreaker: prefer higher (less negative) price_spread — cheaper entry/exit.
                 # This ensures the top 5 shows the best actionable opportunities right now,
                 # not high-spread opportunities whose payment is hours away.
                 _now_ms = time.time() * 1000
@@ -106,12 +107,14 @@ class Scanner:
                         1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
                         _tier_rank.get(o.entry_tier or "", 0),   # TOP tier ranked above MEDIUM/BAD/None
                         float(o.immediate_net_pct),
+                        float(o.price_spread_pct),               # tiebreaker: higher (less negative) is better
                     ),
                     reverse=True,
                 )
-                # Sort qualified by tier first (TOP > MEDIUM > BAD > None), then net_edge_pct
+                # Sort qualified by tier first (TOP > MEDIUM > BAD > None), then net_edge_pct.
+                # Tiebreaker: prefer higher (less negative) price_spread — cheaper entry/exit.
                 qualified_opps.sort(
-                    key=lambda o: (_tier_rank.get(o.entry_tier or "", 0), float(o.net_edge_pct)),
+                    key=lambda o: (_tier_rank.get(o.entry_tier or "", 0), float(o.net_edge_pct), float(o.price_spread_pct)),
                     reverse=True,
                 )
 
