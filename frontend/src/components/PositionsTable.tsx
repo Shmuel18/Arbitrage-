@@ -38,6 +38,7 @@ interface PositionRow {
   pending_income_pct?: string | null;
   pending_net_usd?: string | null;
   pending_net_pct?: string | null;
+  opened_at?: string | null;
   state: string;
 }
 
@@ -333,6 +334,19 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                 {/* ── Row 4: Mini info bar ── */}
                 <div className="nx-pos-info-bar">
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {p.opened_at && (() => {
+                      const d = new Date(p.opened_at);
+                      if (Number.isNaN(d.getTime())) return null;
+                      const hh = String(d.getUTCHours()).padStart(2, '0');
+                      const mm = String(d.getUTCMinutes()).padStart(2, '0');
+                      const dd = String(d.getUTCDate()).padStart(2, '0');
+                      const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+                      return (
+                        <span>
+                          🕐 {dd}/{mo} {hh}:{mm} UTC
+                        </span>
+                      );
+                    })()}
                     <span>
                       {t.colFundPct}: <span className="mono" style={{ color: 'var(--text-secondary)' }}>
                         {fmtFunding(p.current_long_rate)}/{fmtFunding(p.current_short_rate)}
