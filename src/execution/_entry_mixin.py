@@ -119,8 +119,7 @@ class _EntryMixin:
         short_adapter = self._exchanges.get(opp.short_exchange)
 
         # ── Tier-based Entry timing gate ─────────────────────────────
-        # TOP tier: enters anytime (no timing restriction)
-        # MEDIUM/BAD: only within entry_offset_seconds of funding payment
+        # All tiers (TOP/MEDIUM/BAD): only within entry_offset_seconds of funding payment
         # Use next_funding_ms from scanner (no REST call needed)
         entry_offset = self._cfg.trading_params.entry_offset_seconds
         now_ms = _time.time() * 1000
@@ -153,32 +152,8 @@ class _EntryMixin:
         # boundary, causing negative or missed funding.
         _MIN_ENTRY_SECS_BEFORE_FUNDING = 120
 
-        if tier == "top":
-            # TOP tier: enter anytime — only ensure funding timestamp exists
-            if primary_next_ms is None:
-                logger.info(
-                    f"⏳ Skipping {opp.symbol}: TOP tier but no funding timestamp available"
-                )
-                return
-            seconds_until = (primary_next_ms - now_ms) / 1000
-            if seconds_until <= 0:
-                logger.info(
-                    f"⏳ Skipping {opp.symbol}: TOP tier but funding timestamp in the past"
-                )
-                return
-            if seconds_until < _MIN_ENTRY_SECS_BEFORE_FUNDING:
-                logger.info(
-                    f"⏳ Skipping {opp.symbol}: TOP tier but funding too close "
-                    f"({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
-                )
-                return
-            logger.info(
-                f"{tier_emoji} [{opp.symbol}] TOP tier — entering anytime "
-                f"(price_spread={float(opp.price_spread_pct):+.4f}%, "
-                f"funding in {int(seconds_until/60)}min)"
-            )
-        elif tier in ("medium", "bad"):
-            # MEDIUM/BAD: require entry within entry_offset_seconds window
+        if tier in ("top", "medium", "bad"):
+            # All tiers: require entry within entry_offset_seconds window before funding
             if primary_next_ms is None:
                 logger.info(
                     f"⏳ Skipping {opp.symbol}: {tier.upper()} tier but no funding timestamp"
