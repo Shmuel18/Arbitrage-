@@ -39,11 +39,9 @@ class TradingParams(BaseModel):
     max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes
     narrow_entry_window_minutes: int = 15  # For MEDIUM/BAD tiers, only enter if funding is within N minutes
     quick_cycle: bool = True             # Exit after first funding payment (zero dead time)
-    hold_min_spread: Decimal = Decimal("0.5")   # Min spread % to HOLD after funding collection
     upgrade_spread_delta: Decimal = Decimal("0.5")  # Switch to new opp if spread is +N% better
     upgrade_cooldown_seconds: int = 300  # Block re-entry of upgraded symbol for N seconds
     upgrade_funding_lock_secs: int = 180  # Lock upgrades when funding is within N seconds
-    hold_max_wait_seconds: int = 3600    # Max seconds to wait for next funding while holding (0=unlimited)
     top_opportunities_display: int = 5
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy

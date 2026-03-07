@@ -141,18 +141,6 @@ class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
         if self._cfg.logging.log_balances_on_startup:
             await self._log_exchange_balances()
 
-        # ── Sanity check: hold_min_spread should not exceed min_funding_spread ──
-        # If it does, trades near the entry threshold exit after one payment rather
-        # than holding, which is likely unintentional.
-        _min_entry = self._cfg.trading_params.min_funding_spread
-        _min_hold = self._cfg.trading_params.hold_min_spread
-        if _min_hold > _min_entry:
-            logger.warning(
-                f"[CONFIG WARNING] hold_min_spread ({_min_hold}%) > min_funding_spread ({_min_entry}%). "
-                f"Trades that enter near the threshold will always exit after one payment. "
-                f"Set hold_min_spread <= min_funding_spread to allow multi-cycle holding."
-            )
-
         logger.info("Execution controller started")
 
     async def stop(self) -> None:

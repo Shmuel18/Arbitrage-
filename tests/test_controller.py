@@ -196,7 +196,6 @@ class TestHoldOrExit:
     ):
         """After funding, basis is adverse (current > entry) so should HOLD while waiting for recovery."""
         config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.exit_offset_seconds = 0  # instant for testing
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -271,8 +270,6 @@ class TestHoldOrExit:
     ):
         """After funding, basis adverse but within recovery timeout → HOLD."""
         config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.3")
-        config.trading_params.hold_max_wait_seconds = 3600  # 1 hour
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -637,7 +634,6 @@ class TestCherryPickHardExit:
         """Cherry-pick should NOT hard-exit if exit_before is still in the future."""
         now = datetime.now(timezone.utc)
         config.trading_params.quick_cycle = True
-        config.trading_params.hold_min_spread = Decimal("0.3")
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -829,7 +825,6 @@ class TestNonQuickCyclePath:
     ):
         """Non-quick-cycle: basis adverse, within recovery timeout → hold."""
         config.trading_params.quick_cycle = False
-        config.trading_params.hold_min_spread = Decimal("0.01")
         config.trading_params.exit_offset_seconds = 0
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 

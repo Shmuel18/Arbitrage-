@@ -24,8 +24,6 @@ trading_params:
   max_entry_window_minutes: 60 # Only enter if funding is within 60 minutes
   narrow_entry_window_minutes: 15 # For MEDIUM/BAD tiers, only enter if funding is within 15 minutes
   quick_cycle: true # Exit after first funding payment (zero dead time)
-  hold_min_spread: 0.5 # Min spread % to hold position after funding collection
-  hold_max_wait_seconds: 3600 # Max seconds to wait for NEXT funding; if longer, exit (e.g. 3600 = 1h)
   upgrade_spread_delta: 0.5 # Switch to a better opportunity if its spread is +N% higher
   upgrade_funding_lock_secs: 900 # Lock upgrades when funding is within N seconds (15 min)
   top_opportunities_display: 5
