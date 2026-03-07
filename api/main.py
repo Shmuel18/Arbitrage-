@@ -289,6 +289,7 @@ async def broadcast_updates():
                             'exchanges': {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
                             'size': f"${invested:,.0f}",
                             'entry_spread': float(entry_edge) / 100 if entry_edge else None,
+                            'entry_basis_pct': float(t['entry_basis_pct']) / 100 if t.get('entry_basis_pct') is not None else None,
                             'exit_spread': None,
                             'price_pnl': float(t.get('price_pnl') or 0),
                             'funding_net': float(t.get('funding_net') or 0),
