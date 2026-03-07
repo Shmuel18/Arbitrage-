@@ -82,6 +82,11 @@ class Scanner:
 
         while self._running:
             try:
+                # Refresh market data (fees, specs) if stale — no-op on most cycles
+                await asyncio.gather(
+                    *[a.maybe_reload_markets() for a in self._exchanges.all().values()],
+                    return_exceptions=True,
+                )
                 opps = await self.scan_all()
                 
                 # Split qualified (tradeable) and display-only

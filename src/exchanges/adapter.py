@@ -48,6 +48,7 @@ class ExchangeAdapter:
         self._symbols_list: Optional[List[str]] = None
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
         self._last_clock_sync: float = 0.0  # epoch timestamp of last clock sync
+        self._last_markets_reload: float = 0.0  # epoch timestamp of last load_markets
 
     # ── Supervised task (auto-restart on crash) ──────────────────
 
@@ -457,6 +458,9 @@ class ExchangeAdapter:
     # Re-sync exchange clock offset every 5 minutes to prevent "timestamp ahead" errors
     _CLOCK_RESYNC_INTERVAL = 300
 
+    # Reload markets (fees, contract specs) every 4 hours to pick up tier/fee changes
+    _MARKETS_RELOAD_INTERVAL = 4 * 3600
+
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
         rate = Decimal(str(data.get("fundingRate", 0)))
@@ -802,6 +806,30 @@ class ExchangeAdapter:
                 )
         except Exception as e:
             logger.debug(f"{self.exchange_id}: clock re-sync failed: {e}")
+
+    async def maybe_reload_markets(self) -> None:
+        """Reload exchange markets every 4 hours to keep taker fees and contract
+        specs up to date (e.g. after account tier upgrades or fee schedule changes).
+        Clears the instrument cache so new fees are picked up on the next scan.
+        """
+        if not self._exchange:
+            return
+        now = _time.time()
+        if now - self._last_markets_reload < self._MARKETS_RELOAD_INTERVAL:
+            return
+        try:
+            await self._exchange.load_markets(reload=True)
+            self._instrument_cache.clear()
+            self._last_markets_reload = now
+            logger.info(
+                f"{self.exchange_id}: markets reloaded ({len(self._exchange.markets)} contracts, fees refreshed)",
+                extra={"exchange": self.exchange_id, "action": "markets_reloaded"},
+            )
+        except Exception as e:
+            logger.warning(
+                f"{self.exchange_id}: markets reload failed: {e}",
+                extra={"exchange": self.exchange_id},
+            )
 
     # ── Trading settings ─────────────────────────────────────────
 
