@@ -760,7 +760,10 @@ class Scanner:
 
                         # Cost must be far enough away (>30 min)
                         # Income must arrive before cost
+                        # Income must be at least 2 min away (order execution overhead)
+                        _MIN_INCOME_MINUTES = 2.0
                         if (minutes_until_cost >= _MIN_WINDOW_MINUTES
+                                and minutes_until_income >= _MIN_INCOME_MINUTES
                                 and (minutes_until_cost - minutes_until_income) >= _MIN_CHERRY_GAP_MINUTES
                                 and minutes_until_income < minutes_until_cost
                                 and minutes_until_income <= current_entry_window_minutes): # Use current_entry_window_minutes here as well for cherry_pick

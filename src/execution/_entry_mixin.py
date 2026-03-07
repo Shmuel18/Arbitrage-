@@ -159,6 +159,20 @@ class _EntryMixin:
                     f"⏳ Skipping {opp.symbol}: {tier.upper()} tier but no funding timestamp"
                 )
                 return
+            # Defense-in-depth: re-read live funding timestamp to catch stale opp data
+            _live_funding = long_adapter.get_funding_rate_cached(opp.symbol) if long_adapter else None
+            _live_short_funding = short_adapter.get_funding_rate_cached(opp.symbol) if short_adapter else None
+            _live_next_ms: float | None = None
+            if primary_side == "long" and _live_funding and _live_funding.get("next_timestamp"):
+                _live_next_ms = _live_funding["next_timestamp"]
+            elif primary_side == "short" and _live_short_funding and _live_short_funding.get("next_timestamp"):
+                _live_next_ms = _live_short_funding["next_timestamp"]
+            if _live_next_ms is not None and _live_next_ms != primary_next_ms:
+                logger.info(
+                    f"🔄 [{opp.symbol}] Funding timestamp changed since scan: "
+                    f"opp={primary_next_ms} → live={_live_next_ms}. Using live value."
+                )
+                primary_next_ms = _live_next_ms
             seconds_until = (primary_next_ms - now_ms) / 1000
             if not (_MIN_ENTRY_SECS_BEFORE_FUNDING < seconds_until <= entry_offset):
                 if seconds_until <= _MIN_ENTRY_SECS_BEFORE_FUNDING and seconds_until > 0:
@@ -185,6 +199,20 @@ class _EntryMixin:
                     f"⏳ Skipping {opp.symbol}: no funding timestamp available from scanner"
                 )
                 return
+            # Defense-in-depth: re-read live funding timestamp
+            _live_funding = long_adapter.get_funding_rate_cached(opp.symbol) if long_adapter else None
+            _live_short_funding = short_adapter.get_funding_rate_cached(opp.symbol) if short_adapter else None
+            _live_next_ms_nt: float | None = None
+            if primary_side == "long" and _live_funding and _live_funding.get("next_timestamp"):
+                _live_next_ms_nt = _live_funding["next_timestamp"]
+            elif primary_side == "short" and _live_short_funding and _live_short_funding.get("next_timestamp"):
+                _live_next_ms_nt = _live_short_funding["next_timestamp"]
+            if _live_next_ms_nt is not None and _live_next_ms_nt != primary_next_ms:
+                logger.info(
+                    f"🔄 [{opp.symbol}] Funding timestamp changed since scan: "
+                    f"opp={primary_next_ms} → live={_live_next_ms_nt}. Using live value."
+                )
+                primary_next_ms = _live_next_ms_nt
             seconds_until = (primary_next_ms - now_ms) / 1000
             if not (_MIN_ENTRY_SECS_BEFORE_FUNDING < seconds_until <= entry_offset):
                 if seconds_until <= _MIN_ENTRY_SECS_BEFORE_FUNDING and seconds_until > 0:
