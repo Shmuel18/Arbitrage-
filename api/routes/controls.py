@@ -11,6 +11,28 @@ import os
 
 redis_client = None
 
+
+def _require_admin_token(x_admin_token: Optional[str]) -> None:
+    expected = os.environ.get("ADMIN_TOKEN")
+    if expected and x_admin_token != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing admin token")
+
+
+async def _audit_control_action(action: str, payload: dict[str, Any]) -> None:
+    if not redis_client:
+        return
+    event = {
+        "action": action,
+        "payload": payload,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await redis_client.lpush("trinity:audit:controls", json.dumps(event))
+        await redis_client.ltrim("trinity:audit:controls", 0, 499)
+    except Exception:
+        # Audit should not break control paths.
+        pass
+
 def set_redis_client(client):
     global redis_client
     redis_client = client
@@ -34,18 +56,21 @@ class ConfigUpdate(BaseModel):
 
 
 @router.post("/command")
-async def send_command(command: BotCommand):
+async def send_command(command: BotCommand, x_admin_token: Optional[str] = Header(None)):
     """Send command to bot"""
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")
         
+        _require_admin_token(x_admin_token)
+
         command_data = {
             "action": command.action,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command_data))
+        await _audit_control_action("command", command_data)
         
         return {
             "status": "success",
@@ -58,11 +83,13 @@ async def send_command(command: BotCommand):
 
 
 @router.post("/config")
-async def update_config(update: ConfigUpdate):
+async def update_config(update: ConfigUpdate, x_admin_token: Optional[str] = Header(None)):
     """Update bot configuration"""
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")
+
+        _require_admin_token(x_admin_token)
 
         if update.key not in _ALLOWED_CONFIG_KEYS:
             raise HTTPException(
@@ -84,6 +111,7 @@ async def update_config(update: ConfigUpdate):
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command))
+        await _audit_control_action("config_update", command)
         
         return {
             "status": "success",
@@ -112,6 +140,7 @@ async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command))
+        await _audit_control_action("emergency_stop", command)
         
         return {
             "status": "success",

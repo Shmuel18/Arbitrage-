@@ -4,6 +4,7 @@ let reconnectAttempts = 0;
 let manualClose = false;
 const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
+const WS_SCHEMA_VERSION = 1;
 
 export type WsConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 
@@ -15,7 +16,11 @@ function isValidWsMessage(v: unknown): v is Record<string, unknown> {
   const msg = v as Record<string, unknown>;
   if (typeof msg['type'] !== 'string') return false;
   // 'full_update' messages must carry a non-null data object
-  if (msg['type'] === 'full_update' && (msg['data'] == null || typeof msg['data'] !== 'object')) return false;
+  if (msg['type'] === 'full_update') {
+    if (msg['data'] == null || typeof msg['data'] !== 'object') return false;
+    const schemaVersion = msg['schema_version'];
+    if (typeof schemaVersion === 'number' && schemaVersion !== WS_SCHEMA_VERSION) return false;
+  }
   if (msg['type'] === 'status_update' && (msg['data'] == null || typeof msg['data'] !== 'object')) return false;
   return true;
 }

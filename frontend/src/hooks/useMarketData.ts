@@ -90,6 +90,26 @@ export interface FullData {
 
 const _POLL_INTERVAL_MS = 5000;
 
+function sameTradeIds(left: Trade[], right: Trade[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((trade, i) => trade.id === right[i]?.id);
+}
+
+function samePositionKeys(left: PositionRow[], right: PositionRow[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((position, i) => {
+    const leftKey = position.id || position.symbol || '';
+    const rightPos = right[i];
+    const rightKey = (rightPos?.id || rightPos?.symbol || '') as string;
+    return leftKey === rightKey;
+  });
+}
+
+function sameExchangeList(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((exchange, i) => exchange === right[i]);
+}
+
 interface MarketDataState {
   data: FullData;
   pnlHours: number;
@@ -215,9 +235,7 @@ export function useMarketData(): MarketDataState {
         tradesLoaded: true,
         trades: (() => {
           if (httpTrades.length === 0) return prev.trades;
-          const prevIds = prev.trades.map((t) => t.id).join(',');
-          const newIds = httpTrades.map((t) => t.id).join(',');
-          return prevIds === newIds ? prev.trades : httpTrades;
+          return sameTradeIds(prev.trades, httpTrades) ? prev.trades : httpTrades;
         })(),
       }));
     } catch (error) {
@@ -242,8 +260,7 @@ export function useMarketData(): MarketDataState {
                 d.status.bot_running === prev.status.bot_running &&
                 d.status.active_positions === prev.status.active_positions &&
                 d.status.uptime === prev.status.uptime &&
-                d.status.connected_exchanges.length === prev.status.connected_exchanges.length &&
-                d.status.connected_exchanges.every((e, i) => e === prev.status.connected_exchanges[i])
+                sameExchangeList(d.status.connected_exchanges, prev.status.connected_exchanges)
               ) {
                 return prev.status;
               }
@@ -290,17 +307,13 @@ export function useMarketData(): MarketDataState {
               }
               if (posArr === null) return prev.positions;  // field absent — keep prev
               if (posArr.length === 0) return [];           // server says 0 positions — clear
-              const prevKey = prev.positions.map((p) => p.id || p.symbol || '').join(',');
-              const newKey = posArr.map((p) => p.id || p.symbol || '').join(',');
-              return prevKey === newKey ? prev.positions : posArr;
+              return samePositionKeys(prev.positions, posArr) ? prev.positions : posArr;
             })();
 
             const newTrades = (() => {
               const tradeList = Array.isArray(d.trades) && d.trades.length > 0 ? d.trades : null;
               if (!tradeList) return prev.trades;
-              const prevIds = prev.trades.map((x) => x.id).join(',');
-              const newIds = tradeList.map((x) => x.id).join(',');
-              return prevIds === newIds ? prev.trades : tradeList;
+              return sameTradeIds(prev.trades, tradeList) ? prev.trades : tradeList;
             })();
 
             const wsTradesLoaded = newTrades.length > 0 ? true : prev.tradesLoaded;

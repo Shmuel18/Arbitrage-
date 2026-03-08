@@ -354,6 +354,7 @@ async def broadcast_updates():
 
             update = {
                 "type": "full_update",
+                "schema_version": 1,
                 "data": {
                     "status": json.loads(status_data) if status_data else None,
                     "positions": positions_parsed,

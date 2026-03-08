@@ -20,6 +20,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
   const secsRef = useRef<HTMLElement>(null);
   const wsSecsRef = useRef<HTMLElement>(null);
   const wsAgePillRef = useRef<HTMLDivElement>(null);
+  const stalePillRef = useRef<HTMLDivElement>(null);
   const startRef = useRef(Date.now());
   const wsStartRef = useRef<number>(Date.now());
 
@@ -50,6 +51,9 @@ const Header: React.FC<HeaderProps> = React.memo(({
               : wsAgeSec <= 20
               ? 'nx-health-pill nx-health-pill--warn'
               : 'nx-health-pill nx-health-pill--down';
+        }
+        if (stalePillRef.current) {
+          stalePillRef.current.style.display = wsAgeSec > 20 ? 'inline-flex' : 'none';
         }
       }
     }, 1000);
@@ -95,6 +99,10 @@ const Header: React.FC<HeaderProps> = React.memo(({
 
         <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
           WS age: <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+        </div>
+
+        <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none' }} title="Data may be stale">
+          STALE DATA
         </div>
       </div>
 
