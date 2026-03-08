@@ -160,3 +160,73 @@ class TestSequentialPollResilience:
         warning_calls = [c for c in mock_logger.warning.call_args_list
                          if "Sequential funding refresh: 0/" in str(c)]
         assert len(warning_calls) >= 1
+
+
+# ── fetch_fill_price_from_trades tests ──────────────────────────
+
+
+class TestFetchFillPriceFromTrades:
+    """Verify fill price recovery via fetchMyTrades."""
+
+    @pytest.mark.asyncio
+    async def test_returns_vwap_matching_order_id(self):
+        """When trades match the order_id, return volume-weighted avg price."""
+        adapter = _make_adapter()
+        adapter._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"order": "ord-123", "price": 14.600, "amount": 2.0, "timestamp": 1000},
+            {"order": "ord-123", "price": 14.620, "amount": 2.0, "timestamp": 1001},
+            {"order": "ord-999", "price": 99.000, "amount": 1.0, "timestamp": 1002},
+        ])
+
+        result = await adapter.fetch_fill_price_from_trades("BTC/USDT:USDT", "ord-123")
+
+        assert result is not None
+        # VWAP = (14.600*2 + 14.620*2) / (2+2) = 14.610
+        assert result == Decimal("14.61")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_failure(self):
+        """API failure returns None gracefully."""
+        adapter = _make_adapter()
+        adapter._exchange.fetch_my_trades = AsyncMock(
+            side_effect=RuntimeError("API down"),
+        )
+
+        result = await adapter.fetch_fill_price_from_trades("BTC/USDT:USDT", "ord-123")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_empty_trades(self):
+        """No trades returned -> None."""
+        adapter = _make_adapter()
+        adapter._exchange.fetch_my_trades = AsyncMock(return_value=[])
+
+        result = await adapter.fetch_fill_price_from_trades("BTC/USDT:USDT", "ord-123")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_recent_trade_without_order_id(self):
+        """When order_id is None, use most recent trade if within 30s."""
+        import time as _time
+
+        adapter = _make_adapter()
+        now_ms = int(_time.time() * 1000)
+        adapter._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"order": "other", "price": 14.500, "amount": 4.0, "timestamp": now_ms - 5000},
+        ])
+
+        result = await adapter.fetch_fill_price_from_trades("BTC/USDT:USDT", None)
+
+        assert result is not None
+        assert result == Decimal("14.5")
+
+    @pytest.mark.asyncio
+    async def test_rejects_stale_trade_without_order_id(self):
+        """When order_id is None and most recent trade is >30s old, return None."""
+        adapter = _make_adapter()
+        adapter._exchange.fetch_my_trades = AsyncMock(return_value=[
+            {"order": "other", "price": 14.500, "amount": 4.0, "timestamp": 1000},
+        ])
+
+        result = await adapter.fetch_fill_price_from_trades("BTC/USDT:USDT", None)
+        assert result is None

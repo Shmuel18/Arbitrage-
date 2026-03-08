@@ -1519,6 +1519,75 @@ class ExchangeAdapter:
             )
             return 0.0
 
+    async def fetch_fill_price_from_trades(
+        self, symbol: str, order_id: Optional[str] = None,
+    ) -> Optional[Decimal]:
+        """Recover average fill price via fetchMyTrades when fetchOrder returns null.
+
+        Calls the exchange's ``fetchMyTrades`` endpoint and filters for trades
+        matching *order_id*.  Falls back to the most-recent trade on the symbol
+        if no order_id match is found (e.g. some exchanges do not tag order ids).
+
+        Returns the volume-weighted average price as ``Decimal``, or ``None``
+        if no trades can be retrieved.
+        """
+        resolved = self._resolve_symbol(symbol)
+        try:
+            # Fetch the last 20 trades on this symbol (covers any recent fill)
+            raw_trades = await self._exchange.fetch_my_trades(
+                resolved, limit=20,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"fetchMyTrades failed on {self.exchange_id}/{symbol}: {exc}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return None
+
+        if not raw_trades:
+            return None
+
+        # Try to match by order_id first
+        matched = [
+            t for t in raw_trades
+            if order_id and t.get("order") == order_id
+        ] if order_id else []
+
+        if not matched:
+            # Fallback: use the single most-recent trade (within last 30s)
+            most_recent = raw_trades[-1]
+            trade_ts = most_recent.get("timestamp") or 0
+            now_ms = int(_time.time() * 1000)
+            if now_ms - trade_ts > 30_000:
+                logger.debug(
+                    f"[{self.exchange_id}/{symbol}] Most recent trade is "
+                    f"{(now_ms - trade_ts) / 1000:.0f}s old — too stale for fallback",
+                )
+                return None
+            matched = [most_recent]
+
+        # Volume-weighted average price
+        total_cost = Decimal("0")
+        total_qty = Decimal("0")
+        for t in matched:
+            price = Decimal(str(t.get("price", 0) or 0))
+            amount = Decimal(str(t.get("amount", 0) or 0))
+            if price > 0 and amount > 0:
+                total_cost += price * amount
+                total_qty += amount
+
+        if total_qty <= 0:
+            return None
+
+        vwap = total_cost / total_qty
+        logger.info(
+            f"[{self.exchange_id}/{symbol}] Fill price recovered from trades API: "
+            f"{vwap} (from {len(matched)} trade(s), order_id={order_id})",
+            extra={"exchange": self.exchange_id, "symbol": symbol,
+                   "action": "fill_price_from_trades"},
+        )
+        return vwap
+
     # ── Order execution ──────────────────────────────────────────
 
     async def place_order(self, req: OrderRequest) -> Dict[str, Any]:
@@ -1596,7 +1665,15 @@ class ExchangeAdapter:
                 )
                 if filled_native > 0:
                     order["filled"] = filled_native
-                    order["average"] = order.get("average")
+                    # Recover avg price from trades API if missing
+                    if order.get("average") is None:
+                        _recovered = await self.fetch_fill_price_from_trades(
+                            req.symbol, order.get("id"),
+                        )
+                        if _recovered is not None:
+                            order["average"] = float(_recovered)
+                    else:
+                        order["average"] = order.get("average")
             else:
                 # For ENTRY orders: fetchOrder retries are worth the wait
                 _fetch_params: Dict[str, Any] = {}
@@ -1638,7 +1715,24 @@ class ExchangeAdapter:
                     )
                     if filled_native > 0:
                         order["filled"] = filled_native
-                        order["average"] = order.get("average")
+                        # Recover avg price from trades API if missing
+                        if order.get("average") is None:
+                            _recovered = await self.fetch_fill_price_from_trades(
+                                req.symbol, order.get("id"),
+                            )
+                            if _recovered is not None:
+                                order["average"] = float(_recovered)
+                        else:
+                            order["average"] = order.get("average")
+
+        # Final fallback: if filled > 0 but still no avg price, try trades API
+        filled_native_check = float(order.get("filled", 0) or 0)
+        if filled_native_check > 0 and order.get("average") is None:
+            _recovered = await self.fetch_fill_price_from_trades(
+                req.symbol, order.get("id"),
+            )
+            if _recovered is not None:
+                order["average"] = float(_recovered)
 
         filled_base = filled_native * contract_size
         order["filled"] = filled_base

@@ -67,21 +67,50 @@ class _CloseMixin:
             trade.exit_price_long = _h.extract_avg_price(long_fill)
             trade.exit_price_short = _h.extract_avg_price(short_fill)
 
-            # ── Fallback: if exchange didn't return avg price, use ticker ──
+            # ── Fallback: if exchange didn't return avg price ──
+            # Priority: (1) trades API (actual fill), (2) ticker (last resort)
             if trade.exit_price_long is None and long_adapter:
                 try:
-                    t = await long_adapter.get_ticker(trade.symbol)
-                    trade.exit_price_long = Decimal(str(t.get("last", 0)))
-                    logger.info(f"[{trade.symbol}] Long exit price from ticker: {trade.exit_price_long}")
+                    _order_id = long_fill.get("id") if long_fill else None
+                    _recovered = await long_adapter.fetch_fill_price_from_trades(
+                        trade.symbol, _order_id,
+                    )
+                    if _recovered is not None:
+                        trade.exit_price_long = _recovered
+                        logger.info(
+                            f"[{trade.symbol}] Long exit price from trades API: "
+                            f"{trade.exit_price_long}",
+                        )
+                    else:
+                        t = await long_adapter.get_ticker(trade.symbol)
+                        trade.exit_price_long = Decimal(str(t.get("last", 0)))
+                        logger.warning(
+                            f"[{trade.symbol}] Long exit price from ticker (last resort): "
+                            f"{trade.exit_price_long}",
+                        )
                 except Exception as exc:
-                    logger.debug(f"[{trade.symbol}] Long exit price ticker fetch failed: {exc}")
+                    logger.debug(f"[{trade.symbol}] Long exit price recovery failed: {exc}")
             if trade.exit_price_short is None and short_adapter:
                 try:
-                    t = await short_adapter.get_ticker(trade.symbol)
-                    trade.exit_price_short = Decimal(str(t.get("last", 0)))
-                    logger.info(f"[{trade.symbol}] Short exit price from ticker: {trade.exit_price_short}")
+                    _order_id = short_fill.get("id") if short_fill else None
+                    _recovered = await short_adapter.fetch_fill_price_from_trades(
+                        trade.symbol, _order_id,
+                    )
+                    if _recovered is not None:
+                        trade.exit_price_short = _recovered
+                        logger.info(
+                            f"[{trade.symbol}] Short exit price from trades API: "
+                            f"{trade.exit_price_short}",
+                        )
+                    else:
+                        t = await short_adapter.get_ticker(trade.symbol)
+                        trade.exit_price_short = Decimal(str(t.get("last", 0)))
+                        logger.warning(
+                            f"[{trade.symbol}] Short exit price from ticker (last resort): "
+                            f"{trade.exit_price_short}",
+                        )
                 except Exception as exc:
-                    logger.debug(f"[{trade.symbol}] Short exit price ticker fetch failed: {exc}")
+                    logger.debug(f"[{trade.symbol}] Short exit price recovery failed: {exc}")
 
             # Use stored taker fees as fallback for extract_fee
             fallback_long = trade.long_taker_fee

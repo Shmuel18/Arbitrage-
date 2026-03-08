@@ -28,7 +28,7 @@ import asyncio
 import time as _time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from src.core.contracts import ExitReason, TradeMode, TradeRecord
 from src.core.logging import get_logger
@@ -142,21 +142,126 @@ class _ExitLogicMixin:
             if short_just_paid:
                 trade._funding_paid_short = True
 
-            # Track funding payment
-            _live_long = long_adapter.get_funding_rate_cached(trade.symbol)
-            _live_short = short_adapter.get_funding_rate_cached(trade.symbol)
+            # ── Fetch ACTUAL funding settlement from exchange ─────────
+            # Funding fires once per 4-8h — one REST call per side is
+            # acceptable to get the real settlement instead of estimating.
+            _long_usd = _ZERO
+            _short_usd = _ZERO
+            _lr: Optional[Decimal] = None
+            _sr: Optional[Decimal] = None
+            _funding_source = "estimate"
 
-            _lr = (
-                Decimal(str(_live_long["rate"])) if (_live_long and long_just_paid and "rate" in _live_long)
-                else (trade.long_funding_rate if long_just_paid else None)
-            )
-            _sr = (
-                Decimal(str(_live_short["rate"])) if (_live_short and short_just_paid and "rate" in _live_short)
-                else (trade.short_funding_rate if short_just_paid else None)
-            )
+            # Determine the time window for this funding payment
+            _opened_ms = int(trade.opened_at.timestamp() * 1000) if trade.opened_at else None
+            _now_ms = int(now.timestamp() * 1000)
 
-            _long_usd = ((trade.entry_price_long or _ZERO) * trade.long_qty * (-(Decimal(str(_lr or 0))))) if _lr else _ZERO
-            _short_usd = ((trade.entry_price_short or _ZERO) * trade.short_qty * (Decimal(str(_sr or 0)))) if _sr else _ZERO
+            # Try to fetch real settlement from exchange history
+            _real_long_hist: Optional[Dict] = None
+            _real_short_hist: Optional[Dict] = None
+
+            _funding_fetch_tasks = []
+            _funding_fetch_sides: list[str] = []
+            if long_just_paid and _opened_ms:
+                _funding_fetch_tasks.append(
+                    long_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
+                )
+                _funding_fetch_sides.append("long")
+            if short_just_paid and _opened_ms:
+                _funding_fetch_tasks.append(
+                    short_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
+                )
+                _funding_fetch_sides.append("short")
+
+            if _funding_fetch_tasks:
+                _results = await asyncio.gather(
+                    *_funding_fetch_tasks, return_exceptions=True,
+                )
+                for _side, _res in zip(_funding_fetch_sides, _results):
+                    if _side == "long":
+                        _real_long_hist = _res if isinstance(_res, dict) else None
+                    else:
+                        _real_short_hist = _res if isinstance(_res, dict) else None
+
+            # Parse actual long-side settlement
+            _long_actual_used = False
+            if (
+                long_just_paid
+                and isinstance(_real_long_hist, dict)
+                and _real_long_hist.get("source") == "exchange"
+                and _real_long_hist.get("payments")
+            ):
+                # Sum ALL payments in this trade's lifetime (not just this period)
+                # Then subtract previously counted amount to get THIS period's delta
+                _total_long_hist = Decimal(str(_real_long_hist["net_usd"]))
+                # Previously accumulated from long side across all collections
+                _prev_long_sum = getattr(trade, "_actual_long_funding_sum", _ZERO)
+                _long_usd = _total_long_hist - _prev_long_sum
+                trade._actual_long_funding_sum = _total_long_hist  # type: ignore[attr-defined]
+                _long_actual_used = True
+                _funding_source = "exchange"
+                logger.info(
+                    f"[{trade.symbol}] Long funding from exchange history: "
+                    f"${float(_long_usd):.4f} (total hist=${float(_total_long_hist):.4f})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
+
+            # Parse actual short-side settlement
+            _short_actual_used = False
+            if (
+                short_just_paid
+                and isinstance(_real_short_hist, dict)
+                and _real_short_hist.get("source") == "exchange"
+                and _real_short_hist.get("payments")
+            ):
+                _total_short_hist = Decimal(str(_real_short_hist["net_usd"]))
+                _prev_short_sum = getattr(trade, "_actual_short_funding_sum", _ZERO)
+                _short_usd = _total_short_hist - _prev_short_sum
+                trade._actual_short_funding_sum = _total_short_hist  # type: ignore[attr-defined]
+                _short_actual_used = True
+                _funding_source = "exchange"
+                logger.info(
+                    f"[{trade.symbol}] Short funding from exchange history: "
+                    f"${float(_short_usd):.4f} (total hist=${float(_total_short_hist):.4f})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
+
+            # Fallback to rate-based estimate if exchange history unavailable
+            if long_just_paid and not _long_actual_used:
+                _live_long = long_adapter.get_funding_rate_cached(trade.symbol)
+                _lr = (
+                    Decimal(str(_live_long["rate"]))
+                    if (_live_long and "rate" in _live_long)
+                    else trade.long_funding_rate
+                )
+                _long_usd = (
+                    (trade.entry_price_long or _ZERO) * trade.long_qty
+                    * (-(Decimal(str(_lr or 0))))
+                ) if _lr else _ZERO
+                if _lr == trade.long_funding_rate:
+                    logger.warning(
+                        f"[{trade.symbol}] Long funding using ENTRY rate fallback: "
+                        f"{_lr} — actual settlement may differ",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                    )
+
+            if short_just_paid and not _short_actual_used:
+                _live_short = short_adapter.get_funding_rate_cached(trade.symbol)
+                _sr = (
+                    Decimal(str(_live_short["rate"]))
+                    if (_live_short and "rate" in _live_short)
+                    else trade.short_funding_rate
+                )
+                _short_usd = (
+                    (trade.entry_price_short or _ZERO) * trade.short_qty
+                    * (Decimal(str(_sr or 0)))
+                ) if _sr else _ZERO
+                if _sr == trade.short_funding_rate:
+                    logger.warning(
+                        f"[{trade.symbol}] Short funding using ENTRY rate fallback: "
+                        f"{_sr} — actual settlement may differ",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                    )
+
             _net_usd = _long_usd + _short_usd
 
             trade.funding_collections += 1
@@ -164,12 +269,12 @@ class _ExitLogicMixin:
             trade._funding_paid_at = now
 
             # Journal entries
-            if long_just_paid and _lr:
+            if long_just_paid:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.long_exchange, 'long',
                     rate=_lr, estimated_payment=_long_usd,
                 )
-            if short_just_paid and _sr:
+            if short_just_paid:
                 self._journal.funding_detected(
                     trade.trade_id, trade.symbol, trade.short_exchange, 'short',
                     rate=_sr, estimated_payment=_short_usd,
@@ -185,8 +290,9 @@ class _ExitLogicMixin:
                 immediate_spread=float(total_pnl_pct),
             )
             logger.info(
-                f"💰 [{trade.symbol}] Funding collection #{trade.funding_collections}: "
-                f"~${_net_usd:.4f} this cycle | cumulative ~${float(trade.funding_collected_usd):.4f}",
+                f"💰 [{trade.symbol}] Funding collection #{trade.funding_collections} "
+                f"(source={_funding_source}): "
+                f"${float(_net_usd):.4f} this cycle | cumulative ~${float(trade.funding_collected_usd):.4f}",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "funding_collected"},
             )
 
