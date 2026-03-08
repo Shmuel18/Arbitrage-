@@ -199,6 +199,13 @@ class _ExitLogicMixin:
                 trade._actual_long_funding_sum = _total_long_hist  # type: ignore[attr-defined]
                 _long_actual_used = True
                 _funding_source = "exchange"
+                # Populate _lr for logging even though we don't need it for the amount.
+                _cached_long = long_adapter.get_funding_rate_cached(trade.symbol)
+                _lr = (
+                    Decimal(str(_cached_long["rate"]))
+                    if (_cached_long and _cached_long.get("rate") is not None)
+                    else trade.long_funding_rate
+                )
                 logger.info(
                     f"[{trade.symbol}] Long funding from exchange history: "
                     f"${float(_long_usd):.4f} (total hist=${float(_total_long_hist):.4f})",
@@ -219,6 +226,13 @@ class _ExitLogicMixin:
                 trade._actual_short_funding_sum = _total_short_hist  # type: ignore[attr-defined]
                 _short_actual_used = True
                 _funding_source = "exchange"
+                # Populate _sr for logging even though we don't need it for the amount.
+                _cached_short = short_adapter.get_funding_rate_cached(trade.symbol)
+                _sr = (
+                    Decimal(str(_cached_short["rate"]))
+                    if (_cached_short and _cached_short.get("rate") is not None)
+                    else trade.short_funding_rate
+                )
                 logger.info(
                     f"[{trade.symbol}] Short funding from exchange history: "
                     f"${float(_short_usd):.4f} (total hist=${float(_total_short_hist):.4f})",
