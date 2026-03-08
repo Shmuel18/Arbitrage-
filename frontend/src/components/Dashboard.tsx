@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { FullData } from '../App';
+import { FullData } from '../hooks/useMarketData';
+import { WsConnectionState } from '../services/websocket';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
@@ -25,9 +26,17 @@ interface DashboardProps {
   data: FullData;
   pnlHours: number;
   onPnlHoursChange: (hours: number) => void;
+  wsConnection: WsConnectionState;
+  lastWsMessageAt: number | null;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ data, pnlHours, onPnlHoursChange }) => {
+const Dashboard: React.FC<DashboardProps> = ({
+  data,
+  pnlHours,
+  onPnlHoursChange,
+  wsConnection,
+  lastWsMessageAt,
+}) => {
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -72,7 +81,12 @@ const Dashboard: React.FC<DashboardProps> = ({ data, pnlHours, onPnlHoursChange 
       <Sidebar activeSection={activeSection} onNavigate={scrollToSection} />
 
       <div className="main-content">
-        <Header botStatus={data.status} lastFetchedAt={data.lastFetchedAt} />
+        <Header
+          botStatus={data.status}
+          lastFetchedAt={data.lastFetchedAt}
+          wsConnection={wsConnection}
+          lastWsMessageAt={lastWsMessageAt}
+        />
 
         <div className="content-area" ref={contentRef}>
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />

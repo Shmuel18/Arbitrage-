@@ -4,6 +4,8 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
 
+export type WsConnectionState = 'connected' | 'reconnecting' | 'disconnected';
+
 /* ── Message schema guard ─────────────────────────────────────────
    Validates that a parsed WS payload has the minimum expected shape.
    Rejects blobs, null, arrays, and messages missing required fields. */
@@ -16,7 +18,10 @@ function isValidWsMessage(v: unknown): v is Record<string, unknown> {
   return true;
 }
 
-export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => void) => {
+export const connectWebSocket = (
+  onMessage: (data: Record<string, unknown>) => void,
+  onConnectionChange?: (state: WsConnectionState) => void,
+) => {
   // Prevent duplicate connections
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
     return;
@@ -36,6 +41,7 @@ export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => v
   ws.onopen = () => {
     console.log('✅ WebSocket connected');
     reconnectAttempts = 0; // reset backoff on successful connect
+    onConnectionChange?.('connected');
   };
 
   ws.onmessage = (event) => {
@@ -58,6 +64,7 @@ export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => v
   ws.onclose = () => {
     console.log('❌ WebSocket disconnected');
     ws = null;
+    onConnectionChange?.('reconnecting');
     // Exponential backoff with jitter, capped at MAX_RECONNECT_DELAY
     if (!reconnectTimer) {
       const delay = Math.min(

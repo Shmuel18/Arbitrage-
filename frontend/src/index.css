@@ -358,8 +358,8 @@ code, .mono {
 .top-bar {
   background: var(--nav-bg);
   border-bottom: 1px solid var(--nav-border);
-  padding: 0 28px;
-  min-height: 52px;
+  padding: 0 26px;
+  min-height: 54px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -381,7 +381,7 @@ code, .mono {
 .top-bar-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
@@ -397,10 +397,12 @@ code, .mono {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 4px 11px;
   border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .status-badge--running {
@@ -2812,13 +2814,15 @@ code, .mono {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 10.5px;
   color: rgba(255,255,255,0.5);
-  padding: 4px 10px;
+  padding: 4px 9px;
   border-radius: 8px;
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.05);
   transition: all 0.2s ease;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .nx-info-pill:hover {
@@ -2829,6 +2833,55 @@ code, .mono {
 .nx-info-pill strong {
   color: rgba(255,255,255,0.85);
   font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.nx-health-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.nx-health-pill strong {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.nx-health-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.nx-health-pill--ok {
+  color: #34d399;
+  background: rgba(52,211,153,0.08);
+  border-color: rgba(52,211,153,0.2);
+}
+
+.nx-health-pill--warn {
+  color: #f59e0b;
+  background: rgba(245,158,11,0.1);
+  border-color: rgba(245,158,11,0.22);
+}
+
+.nx-health-pill--down {
+  color: #ef4444;
+  background: rgba(239,68,68,0.1);
+  border-color: rgba(239,68,68,0.24);
 }
 
 .nx-topbar-btn {
