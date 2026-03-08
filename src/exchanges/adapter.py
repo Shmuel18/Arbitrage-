@@ -1584,41 +1584,61 @@ class ExchangeAdapter:
         # creating one-sided (unhedged) positions.
         if filled_native == 0 and order.get("id"):
             _resolved = self._resolve_symbol(req.symbol)
-            # Bybit: pass acknowledged=True to suppress "last 500 orders" warning
-            _fetch_params: Dict[str, Any] = {}
-            if self.exchange_id == "bybit":
-                _fetch_params["acknowledged"] = True
-            for _attempt in range(1, 4):            # 3 attempts, 1s apart
-                try:
-                    await asyncio.sleep(1)
-                    updated = await self._exchange.fetch_order(
-                        order["id"], _resolved, _fetch_params if _fetch_params else None,
-                    )
-                    filled_native = float(updated.get("filled", 0) or 0)
-                    if filled_native > 0:
-                        order.update(updated)       # merge full fill details
-                        logger.info(
-                            f"Order re-fetched on {self.exchange_id} "
-                            f"(attempt {_attempt}): filled={filled_native} {req.symbol}",
-                            extra={"exchange": self.exchange_id, "symbol": req.symbol},
-                        )
-                        break
-                except Exception as _rfe:
-                    logger.warning(
-                        f"Order re-fetch attempt {_attempt} failed on "
-                        f"{self.exchange_id}/{req.symbol}: {_rfe}",
-                        extra={"exchange": self.exchange_id, "symbol": req.symbol},
-                    )
-            else:
-                # ── Bybit fallback: fetchOrder() can fail with "last 500 orders"
-                # error. Fall back to checking actual positions to confirm fill.
+
+            if req.reduce_only:
+                # For CLOSE orders: skip slow fetchOrder retries and verify
+                # via position presence immediately — saves ~3s vs 3 re-fetches
+                # that often fail on kucoin/bitget anyway.
+                await asyncio.sleep(0.5)  # brief settle
                 filled_native = await self._verify_fill_via_position(
                     req.symbol, _resolved, req.side, native_qty, order.get("id"),
-                    reduce_only=req.reduce_only,
+                    reduce_only=True,
                 )
                 if filled_native > 0:
-                    order["filled"] = filled_native  # will be overwritten below with base conversion
-                    order["average"] = order.get("average")  # keep whatever we have
+                    order["filled"] = filled_native
+                    order["average"] = order.get("average")
+            else:
+                # For ENTRY orders: fetchOrder retries are worth the wait
+                _fetch_params: Dict[str, Any] = {}
+                if self.exchange_id == "bybit":
+                    _fetch_params["acknowledged"] = True
+                for _attempt in range(1, 4):            # 3 attempts, 1s apart
+                    try:
+                        await asyncio.sleep(1)
+                        updated = await self._exchange.fetch_order(
+                            order["id"], _resolved, _fetch_params if _fetch_params else None,
+                        )
+                        if updated is None:
+                            logger.warning(
+                                f"Order re-fetch attempt {_attempt} returned None on "
+                                f"{self.exchange_id}/{req.symbol}",
+                                extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                            )
+                            continue
+                        filled_native = float(updated.get("filled", 0) or 0)
+                        if filled_native > 0:
+                            order.update(updated)       # merge full fill details
+                            logger.info(
+                                f"Order re-fetched on {self.exchange_id} "
+                                f"(attempt {_attempt}): filled={filled_native} {req.symbol}",
+                                extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                            )
+                            break
+                    except Exception as _rfe:
+                        logger.warning(
+                            f"Order re-fetch attempt {_attempt} failed on "
+                            f"{self.exchange_id}/{req.symbol}: {_rfe}",
+                            extra={"exchange": self.exchange_id, "symbol": req.symbol},
+                        )
+                else:
+                    # Fall back to checking actual positions to confirm fill.
+                    filled_native = await self._verify_fill_via_position(
+                        req.symbol, _resolved, req.side, native_qty, order.get("id"),
+                        reduce_only=req.reduce_only,
+                    )
+                    if filled_native > 0:
+                        order["filled"] = filled_native
+                        order["average"] = order.get("average")
 
         filled_base = filled_native * contract_size
         order["filled"] = filled_base

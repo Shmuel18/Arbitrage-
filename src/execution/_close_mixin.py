@@ -34,14 +34,32 @@ class _CloseMixin:
         long_adapter = self._exchanges.get(trade.long_exchange)
         short_adapter = self._exchanges.get(trade.short_exchange)
 
-        long_fill = await self._close_leg(
-            long_adapter, trade.long_exchange, trade.symbol,
-            OrderSide.SELL, trade.long_qty, trade.trade_id,
+        # Close both legs in parallel — sequential close wastes time
+        # and risks the 10s timeout on the second leg after re-fetch delays.
+        long_fill, short_fill = await asyncio.gather(
+            self._close_leg(
+                long_adapter, trade.long_exchange, trade.symbol,
+                OrderSide.SELL, trade.long_qty, trade.trade_id,
+            ),
+            self._close_leg(
+                short_adapter, trade.short_exchange, trade.symbol,
+                OrderSide.BUY, trade.short_qty, trade.trade_id,
+            ),
+            return_exceptions=True,
         )
-        short_fill = await self._close_leg(
-            short_adapter, trade.short_exchange, trade.symbol,
-            OrderSide.BUY, trade.short_qty, trade.trade_id,
-        )
+        # Unpack gather results — exceptions become None
+        if isinstance(long_fill, BaseException):
+            logger.error(
+                f"Long close exception for {trade.symbol}: {long_fill}",
+                extra={"trade_id": trade.trade_id},
+            )
+            long_fill = None
+        if isinstance(short_fill, BaseException):
+            logger.error(
+                f"Short close exception for {trade.symbol}: {short_fill}",
+                extra={"trade_id": trade.trade_id},
+            )
+            short_fill = None
 
         if long_fill and short_fill:
             trade.state = TradeState.CLOSED
@@ -469,7 +487,18 @@ class _CloseMixin:
         self, adapter, exchange: str, symbol: str,
         side: OrderSide, qty: Decimal, trade_id: str,
     ) -> Optional[dict]:
-        """Close one leg with retry (3×). Always reduceOnly."""
+        """Close one leg with retry (3×). Always reduceOnly.
+
+        Recognises 'no open positions' / 'empty position' errors as
+        success — the position is already gone (closed by panic close
+        or the original order filled but fetchOrder was unreliable).
+        """
+        _NO_POSITION_KEYWORDS = (
+            "no open position",
+            "empty position",
+            "position does not exist",
+            "reduce only: current position is",
+        )
         for attempt in range(3):
             try:
                 req = OrderRequest(
@@ -482,7 +511,35 @@ class _CloseMixin:
                 result = await self._place_with_timeout(adapter, req)
                 if result:
                     return result
+                # _place_with_timeout returned None — check if position
+                # is already gone (order may have succeeded silently)
+                if adapter and attempt >= 1:
+                    try:
+                        resolved = adapter._resolve_symbol(symbol)
+                        positions = await adapter._exchange.fetch_positions([resolved])
+                        has_pos = any(
+                            abs(float(p.get("contracts", 0) or 0)) > 1e-12
+                            for p in positions
+                        )
+                        if not has_pos:
+                            logger.info(
+                                f"[{symbol}] Position already gone on {exchange} — "
+                                f"treating as successful close",
+                                extra={"trade_id": trade_id, "exchange": exchange},
+                            )
+                            return {"filled": float(qty), "average": None,
+                                    "id": "position_verified_gone"}
+                    except Exception as _pe:
+                        logger.debug(f"Position check failed on {exchange}/{symbol}: {_pe}")
             except Exception as e:
+                err_lower = str(e).lower()
+                if any(kw in err_lower for kw in _NO_POSITION_KEYWORDS):
+                    logger.info(
+                        f"[{symbol}] {exchange}: '{e}' — position already closed",
+                        extra={"trade_id": trade_id, "exchange": exchange},
+                    )
+                    return {"filled": float(qty), "average": None,
+                            "id": "position_already_closed"}
                 logger.warning(
                     f"Close attempt {attempt+1}/3 failed {exchange}/{symbol}: {e}",
                     extra={"trade_id": trade_id, "exchange": exchange},
