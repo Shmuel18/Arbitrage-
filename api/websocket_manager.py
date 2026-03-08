@@ -2,7 +2,10 @@
 WebSocket Connection Manager
 """
 
+from __future__ import annotations
+
 from fastapi import WebSocket
+from starlette.websockets import WebSocketState
 from typing import List
 
 
@@ -12,23 +15,30 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
     
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket) -> None:
         """Accept new WebSocket connection"""
         await websocket.accept()
         self.active_connections.append(websocket)
     
-    def disconnect(self, websocket: WebSocket):
+    async def disconnect(self, websocket: WebSocket, close_socket: bool = False) -> None:
         """Remove WebSocket connection"""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+        if close_socket and websocket.client_state == WebSocketState.CONNECTED:
+            try:
+                await websocket.close()
+            except Exception:
+                # Best-effort close; connection is already removed from manager.
+                pass
     
-    async def broadcast(self, message: str):
+    async def broadcast(self, message: str) -> None:
         """Broadcast message to all connected clients"""
         dead: List[WebSocket] = []
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-            except Exception:
+            except Exception as exc:
+                print(f"WebSocket send failed; dropping connection: {exc}")
                 dead.append(connection)
         for conn in dead:
-            self.disconnect(conn)
+            await self.disconnect(conn, close_socket=True)

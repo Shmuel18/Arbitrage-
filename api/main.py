@@ -181,12 +181,22 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive
-            data = await websocket.receive_text()
-            # Echo back for ping/pong
-            await websocket.send_text(f"pong: {data}")
+            # Keep connection alive even if client doesn't send any frames.
+            # This prevents "ghost connected" sessions that remain open but idle.
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=25)
+                if data.lower() == "ping":
+                    await websocket.send_text(json.dumps({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }))
+            except asyncio.TimeoutError:
+                await websocket.send_text(json.dumps({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }))
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await manager.disconnect(websocket)
 
 
 async def _compute_summary(rc) -> dict:
@@ -324,6 +334,12 @@ async def broadcast_updates():
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
                 await manager.broadcast(json.dumps(update))
+            elif manager.active_connections:
+                # No Redis yet, but keep clients alive with explicit heartbeat.
+                await manager.broadcast(json.dumps({
+                    "type": "heartbeat",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }))
             
             await asyncio.sleep(2)
         except Exception as e:
