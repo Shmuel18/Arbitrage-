@@ -121,6 +121,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               pnl={data.pnl}
               pnlHours={pnlHours}
               onPnlHoursChange={onPnlHoursChange}
+              totalBalance={data.balances?.total ?? 0}
             />
 
             <div id={SECTION_IDS.trades}>

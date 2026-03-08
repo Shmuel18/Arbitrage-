@@ -141,6 +141,12 @@ const StatsCards: React.FC<StatsCardsProps> = ({
   }, []);
   const fmtPct = (v: number) => `${(v * 100).toFixed(1)}%`;
 
+  const balancePct = (pnl: number): string => {
+    if (!totalBalance || totalBalance <= 0) return '';
+    const pct = (pnl / totalBalance) * 100;
+    return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+  };
+
   return (
     <div className="nx-stats-layout">
       {/* ── Primary hero row ───────────────────── */}
@@ -158,7 +164,11 @@ const StatsCards: React.FC<StatsCardsProps> = ({
         <StatCard
           label={t.dailyPnl}
           value={fmt(dailyPnl)}
-          sub={dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession}
+          sub={(() => {
+            const pct = balancePct(dailyPnl);
+            const label = dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession;
+            return pct ? `${pct}  ·  ${label}` : label;
+          })()}
           subColor={dailyPnl >= 0 ? 'var(--green)' : 'var(--red)'}
           icon={<IconTrendUp />}
           accentVar="--green"
@@ -193,7 +203,10 @@ const StatsCards: React.FC<StatsCardsProps> = ({
         <StatCard
           label={t.allTimePnl}
           value={fmt(allTimePnl)}
-          sub={t.subCumulativePnl}
+          sub={(() => {
+            const pct = balancePct(allTimePnl);
+            return pct ? `${pct}  ·  ${t.subCumulativePnl}` : t.subCumulativePnl;
+          })()}
           subColor={allTimePnl >= 0 ? 'var(--green)' : 'var(--red)'}
           icon={<IconBarChart />}
           accentVar="--accent"

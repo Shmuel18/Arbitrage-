@@ -14,9 +14,10 @@ interface AnalyticsPanelProps {
   pnl: { data_points: PnlPoint[]; total_pnl: number; unrealized_pnl?: number; realized_pnl?: number } | null;
   pnlHours: number;
   onPnlHoursChange: (hours: number) => void;
+  totalBalance?: number;
 }
 
-const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange }) => {
+const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange, totalBalance }) => {
   const { t } = useSettings();
   const points = pnl?.data_points ?? [];
   const total = pnl?.total_pnl ?? 0;
@@ -85,6 +86,16 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
           )}
           <div className={`nx-analytics-total ${total >= 0 ? 'nx-analytics-total--positive' : 'nx-analytics-total--negative'}`}>
             {formatCurrency(total)}
+            {totalBalance && totalBalance > 0 ? (
+              <span className="nx-analytics-pct" style={{
+                fontSize: '0.72em',
+                marginLeft: 6,
+                opacity: 0.75,
+                fontWeight: 500,
+              }}>
+                ({total >= 0 ? '+' : ''}{((total / totalBalance) * 100).toFixed(2)}%)
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
