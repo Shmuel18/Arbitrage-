@@ -2909,6 +2909,101 @@ code, .mono {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   EXECUTION TIMELINE — Institutional event narrative
+   ══════════════════════════════════════════════════════════════════ */
+.nx-timeline {
+  margin-top: 14px;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--card-bg) 92%, transparent);
+}
+
+.nx-timeline__title {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.nx-timeline__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nx-timeline__item {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+}
+
+.nx-timeline__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.nx-timeline__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  margin-top: 2px;
+}
+
+.nx-timeline__dot--done {
+  background: #10b981;
+  border-color: rgba(16,185,129,0.42);
+  box-shadow: 0 0 10px rgba(16,185,129,0.38);
+}
+
+.nx-timeline__dot--live {
+  background: #3b82f6;
+  border-color: rgba(59,130,246,0.42);
+  box-shadow: 0 0 10px rgba(59,130,246,0.38);
+}
+
+.nx-timeline__dot--pending {
+  background: #64748b;
+  border-color: rgba(100,116,139,0.45);
+}
+
+.nx-timeline__line {
+  width: 1px;
+  flex: 1;
+  margin-top: 3px;
+  background: linear-gradient(180deg, rgba(148,163,184,0.32), rgba(148,163,184,0.06));
+}
+
+.nx-timeline__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.nx-timeline__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.nx-timeline__time {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.nx-timeline__detail {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  margin-bottom: 6px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
    NX SIDEBAR — Premium navigation
    ══════════════════════════════════════════════════════════════════ */
 .nx-sidebar-logo {

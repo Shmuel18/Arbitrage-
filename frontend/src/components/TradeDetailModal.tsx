@@ -10,6 +10,7 @@ import {
   ModeBadge,
   TierBadge,
 } from '../utils/format';
+import ExecutionTimeline, { TimelineEvent } from './ExecutionTimeline';
 
 interface TradeDetailModalProps {
   trade: Trade;
@@ -83,6 +84,48 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
     padding: '12px 0 4px', borderTop: '2px solid var(--card-border)', marginTop: 8,
   };
+
+  const openedAt = trade.opened_at || trade.open_time || null;
+  const closedAt = trade.closed_at || trade.close_time || null;
+  const fundingCollections = trade.funding_collections ?? 0;
+
+  const timelineEvents: TimelineEvent[] = [
+    {
+      id: 'entry',
+      label: 'Execution Started',
+      detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} pair opened`,
+      timeLabel: formatDate(openedAt),
+      status: 'done',
+    },
+    {
+      id: 'mark',
+      label: 'Spread Captured',
+      detail: `Entry edge ${formatFundingRateN(trade.entry_spread, 4)} | Basis ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
+      status: 'done',
+    },
+    {
+      id: 'funding',
+      label: 'Funding Settlement',
+      detail:
+        fundingCollections > 0
+          ? `${fundingCollections} collection(s), net ${formatUsd(trade.funding_collected_usd)}`
+          : 'No funding settlement recorded',
+      status: fundingCollections > 0 ? 'done' : trade.status === 'closed' ? 'pending' : 'live',
+    },
+    {
+      id: 'exit',
+      label: 'Exit & Attribution',
+      detail: trade.exit_reason || 'Awaiting exit trigger',
+      timeLabel: closedAt ? formatDate(closedAt) : undefined,
+      status: trade.status === 'closed' ? 'done' : 'live',
+    },
+    {
+      id: 'final',
+      label: 'Net Result',
+      detail: `${formatUsd(totalPnl)} total | hold ${formatDuration(trade.hold_minutes)}`,
+      status: trade.status === 'closed' ? 'done' : 'pending',
+    },
+  ];
 
   return (
     <>
@@ -247,6 +290,8 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             </div>
           </div>
         </div>
+
+        <ExecutionTimeline title="Execution Confidence Timeline" events={timelineEvents} />
 
         {/* ── Exit Reason ── */}
         {trade.exit_reason && (

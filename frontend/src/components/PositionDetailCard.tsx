@@ -6,8 +6,11 @@ import {
   formatFundingRateN,
   formatUsd,
   formatPrice,
+  formatDate,
+  formatCountdown,
   pnlColor,
 } from '../utils/format';
+import ExecutionTimeline, { TimelineEvent } from './ExecutionTimeline';
 
 export interface PositionDetail {
   // Entry prices
@@ -42,6 +45,10 @@ export interface PositionDetail {
   funding_collections?: number | null;
   // Target
   profit_target_pct?: string | null;
+  // Lifecycle
+  opened_at?: string | null;
+  next_funding_ms?: number | null;
+  state?: string;
 }
 
 interface PositionDetailCardProps {
@@ -138,6 +145,50 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
     fontFamily: 'monospace',
   };
 
+  const fundingCollections = position.funding_collections ?? 0;
+  const timelineEvents: TimelineEvent[] = [
+    {
+      id: 'entry',
+      label: 'Position Opened',
+      detail: `Entry spread ${formatPct(position.entry_edge_pct, 3)} | Basis ${formatPct(position.entry_basis_pct, 3)}`,
+      timeLabel: formatDate(position.opened_at),
+      status: 'done',
+    },
+    {
+      id: 'mark',
+      label: 'Mark-to-Market',
+      detail: `Current spread ${formatPct(position.current_spread_pct, 3)} | Price PnL ${formatPct(position.price_pnl_pct, 3)}`,
+      status: 'live',
+    },
+    {
+      id: 'funding',
+      label: 'Funding Collection',
+      detail:
+        fundingCollections > 0
+          ? `${fundingCollections} collection(s), net ${formatUsd(position.funding_collected_usd)}`
+          : `Next window ${formatCountdown(position.next_funding_ms)}`,
+      status: fundingCollections > 0 ? 'done' : 'live',
+    },
+    {
+      id: 'target',
+      label: 'Profit Target',
+      detail:
+        targetMove != null
+          ? Number(targetMove) <= 0
+            ? 'Target reached'
+            : `${Number(targetMove).toFixed(3)}% remaining`
+          : 'Target tracking unavailable',
+      status:
+        targetMove == null ? 'pending' : Number(targetMove) <= 0 ? 'done' : 'live',
+    },
+    {
+      id: 'state',
+      label: 'Execution State',
+      detail: position.state ? position.state.toUpperCase() : 'ACTIVE',
+      status: 'live',
+    },
+  ];
+
   return (
     <div style={cardStyle}>
       <button style={closeBtn} onClick={onClose} title="Close">✕</button>
@@ -228,6 +279,8 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
           </div>
         </div>
       </div>
+
+      <ExecutionTimeline title="Execution Confidence Timeline" events={timelineEvents} />
     </div>
   );
 };
