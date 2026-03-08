@@ -150,6 +150,38 @@ class _CloseMixin:
             if _long_hist_ok or _short_hist_ok:
                 _long_net = _real_funding_long.get("net_usd", 0.0) if _long_hist_ok else 0.0
                 _short_net = _real_funding_short.get("net_usd", 0.0) if _short_hist_ok else 0.0
+
+                # ── Sign validation ──────────────────────────────────
+                # Some exchanges (e.g. Bybit) return funding amounts with
+                # reversed sign (positive = paid instead of positive = received).
+                # Validate using funding rate direction:
+                #   Long:  income when rate < 0,  cost when rate > 0
+                #   Short: income when rate > 0,  cost when rate < 0
+                _long_rate_f = float(trade.long_funding_rate or 0)
+                _short_rate_f = float(trade.short_funding_rate or 0)
+
+                if _long_hist_ok and _long_net != 0 and abs(_long_rate_f) > 0.00005:
+                    _expect_long_positive = _long_rate_f < 0
+                    if (_long_net > 0) != _expect_long_positive:
+                        logger.warning(
+                            f"[{trade.symbol}] Funding sign correction on "
+                            f"{trade.long_exchange} (long): API=${_long_net:+.4f} "
+                            f"vs rate={_long_rate_f:.6f} — flipping sign",
+                            extra={"trade_id": trade.trade_id},
+                        )
+                        _long_net = -_long_net
+
+                if _short_hist_ok and _short_net != 0 and abs(_short_rate_f) > 0.00005:
+                    _expect_short_positive = _short_rate_f > 0
+                    if (_short_net > 0) != _expect_short_positive:
+                        logger.warning(
+                            f"[{trade.symbol}] Funding sign correction on "
+                            f"{trade.short_exchange} (short): API=${_short_net:+.4f} "
+                            f"vs rate={_short_rate_f:.6f} — flipping sign",
+                            extra={"trade_id": trade.trade_id},
+                        )
+                        _short_net = -_short_net
+
                 # If only one side responded but the other didn't, log which is missing
                 if _long_hist_ok and not _short_hist_ok:
                     logger.warning(

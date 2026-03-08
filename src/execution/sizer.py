@@ -65,10 +65,10 @@ class PositionSizer:
         short_free = Decimal(str(short_bal["free"]))
 
         # Minimum balance guard — don't enter if either exchange has less
-        # than $8 free.  Tiny balances lead to immediate liquidation risk
+        # than $5 free.  Tiny balances lead to immediate liquidation risk
         # exits (margin_ratio drops below safety threshold on the first
         # adverse tick).
-        _MIN_BALANCE_USD = Decimal("8")
+        _MIN_BALANCE_USD = Decimal("5")
         if long_free < _MIN_BALANCE_USD:
             logger.warning(
                 f"{opp.symbol}: Skipping — {opp.long_exchange} balance "
