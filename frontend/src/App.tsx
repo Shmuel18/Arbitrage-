@@ -150,7 +150,15 @@ function App() {
       setData(prev => ({
         ...prev,
         status: statusRes.status === 'fulfilled' ? statusRes.value : prev.status,
-        balances: balRes.status === 'fulfilled' ? balRes.value as BalancesSet : prev.balances,
+        balances: (() => {
+          if (balRes.status !== 'fulfilled') return prev.balances;
+          const incoming = balRes.value as BalancesSet;
+          // Guard: don't replace good balances with empty/zero data
+          if (prev.balances && prev.balances.total > 0 && (!incoming || incoming.total <= 0)) {
+            return prev.balances;
+          }
+          return incoming;
+        })(),
         opportunities: oppRes.status === 'fulfilled' ? oppRes.value as OpportunitySet : prev.opportunities,
         logs: logsRes.status === 'fulfilled' ? (logsRes.value.logs || []) : prev.logs,
         summary: summRes.status === 'fulfilled' && summRes.value?.total_trades != null ? summRes.value : prev.summary,
@@ -190,9 +198,13 @@ function App() {
             return d.status;
           })();
 
-          // ── Balances: only swap when total changed ───────────────────────────
+          // ── Balances: only swap when total changed, never downgrade to zero ──
           const newBalances = (() => {
             if (!d.balances) return prev.balances;
+            // Guard: don't replace good balances with empty/zero data
+            if (prev.balances && prev.balances.total > 0 && d.balances.total <= 0) {
+              return prev.balances;
+            }
             if (prev.balances && d.balances.total === prev.balances.total) return prev.balances;
             return d.balances;
           })();

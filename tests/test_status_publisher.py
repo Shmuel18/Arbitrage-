@@ -141,11 +141,28 @@ async def test_fetch_balances_returns_dict(status_pub):
 
 @pytest.mark.asyncio
 async def test_fetch_balances_handles_error(status_pub, mock_exchange_mgr):
-    """If get_balance raises, that exchange should get 0.0."""
+    """If get_balance raises and no cache exists, that exchange should get 0.0."""
+    # Clear any cached balances first
+    status_pub._last_good_balances.clear()
     adapter_a = mock_exchange_mgr.get("exchange_a")
     adapter_a.get_balance.side_effect = RuntimeError("network error")
     balances = await status_pub._fetch_balances()
     assert balances.get("exchange_a") == 0.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_balances_uses_cache_on_error(status_pub, mock_exchange_mgr):
+    """If get_balance raises but cache exists, return cached value."""
+    # First fetch succeeds → caches the value
+    balances = await status_pub._fetch_balances()
+    cached_val = balances["exchange_a"]
+    assert cached_val > 0
+
+    # Now make it fail
+    adapter_a = mock_exchange_mgr.get("exchange_a")
+    adapter_a.get_balance.side_effect = RuntimeError("network error")
+    balances = await status_pub._fetch_balances()
+    assert balances.get("exchange_a") == cached_val
 
 
 @pytest.mark.asyncio

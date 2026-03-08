@@ -463,7 +463,17 @@ class ExchangeAdapter:
 
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
-        rate = Decimal(str(data.get("fundingRate", 0)))
+        raw_rate = data.get("fundingRate")
+        if raw_rate is None:
+            return  # Skip symbols with no funding rate data
+        try:
+            rate = Decimal(str(raw_rate))
+        except Exception:
+            logger.debug(
+                f"[{self.exchange_id}] Invalid fundingRate for {symbol}: {raw_rate!r}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return
         
         # Raw ccxt data — guard f-string: called on every WebSocket tick
         if logger.isEnabledFor(logging.DEBUG):
@@ -685,8 +695,14 @@ class ExchangeAdapter:
                 for sym_raw, data in all_rates.items():
                     sym = self._normalize_symbol(sym_raw)
                     if sym in self._exchange.symbols:
-                        self._update_funding_cache(sym, data)
-                        count += 1
+                        try:
+                            self._update_funding_cache(sym, data)
+                            count += 1
+                        except Exception as sym_exc:
+                            logger.debug(
+                                f"[{self.exchange_id}] Failed to cache funding for {sym}: {sym_exc}",
+                                extra={"exchange": self.exchange_id, "symbol": sym},
+                            )
                 consecutive_failures = 0
                 logger.debug(
                     f"Batch funding refresh: {count} rates on {self.exchange_id}",
@@ -1021,7 +1037,8 @@ class ExchangeAdapter:
         _ts_b = data.get("fundingTimestamp")
         _future_candidates = [t for t in (_ts_a, _ts_b) if t and t > _now_ms_pick]
         next_ts = min(_future_candidates) if _future_candidates else (_ts_a or _ts_b)
-        rate = Decimal(str(data.get("fundingRate", 0)))
+        raw_rate = data.get("fundingRate")
+        rate = Decimal(str(raw_rate)) if raw_rate is not None else Decimal("0")
         
         # 🔍 DEBUG: Log REST fetch
         logger.info(

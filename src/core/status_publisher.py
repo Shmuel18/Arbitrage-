@@ -94,11 +94,13 @@ class StatusPublisher:
 
     # ── Balance fetcher ──────────────────────────────────────────
 
+    _last_good_balances: Dict[str, float] = {}  # cache last-known-good per exchange
+
     async def _fetch_balances(self) -> Dict[str, float]:
         async def _one(eid: str) -> tuple[str, float]:
             adapter = self._mgr.get(eid)
             if not adapter:
-                return eid, 0.0
+                return eid, self._last_good_balances.get(eid, 0.0)
             try:
                 bal = await adapter.get_balance()
                 total_val = bal.get("total")
@@ -106,10 +108,17 @@ class StatusPublisher:
                     total_val = total_val.get("USDT")
                 if total_val is None:
                     total_val = bal.get("free", 0)
-                return eid, float(total_val or 0)
+                value = float(total_val or 0)
+                if value > 0:
+                    self._last_good_balances[eid] = value
+                return eid, value
             except Exception as exc:
                 logger.debug(f"Balance fetch failed for {eid}: {exc}")
-                return eid, 0.0
+                # Fall back to last known good balance instead of 0
+                cached = self._last_good_balances.get(eid, 0.0)
+                if cached > 0:
+                    logger.debug(f"Using cached balance for {eid}: {cached:.2f}")
+                return eid, cached
 
         results = await asyncio.gather(
             *[_one(eid) for eid in self._cfg.enabled_exchanges],
