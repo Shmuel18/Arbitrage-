@@ -551,8 +551,23 @@ class ExchangeAdapter:
         return self._price_cache.get(symbol)
 
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get latest cached funding rate (low-latency, no network call)."""  
+        """Get latest cached funding rate (low-latency, no network call).
+
+        If the cached ``next_timestamp`` has drifted into the past (funding
+        already fired since the last WS/REST refresh), advance it by the
+        funding interval so callers always see a future timestamp.
+        """
         cached = self._funding_rate_cache.get(symbol)
+        if cached:
+            next_ts = cached.get("next_timestamp")
+            interval_hours = cached.get("interval_hours")
+            if next_ts and interval_hours:
+                now_ms = _time.time() * 1000
+                interval_ms = interval_hours * 3_600_000
+                if next_ts <= now_ms:
+                    while next_ts <= now_ms:
+                        next_ts += interval_ms
+                    cached["next_timestamp"] = next_ts
         # Guard f-string formatting: called ~1000×/scan, skip when not in DEBUG mode.
         if cached and logger.isEnabledFor(logging.DEBUG):
             logger.debug(
