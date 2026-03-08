@@ -24,8 +24,8 @@ export interface OpportunitiesResponse { opportunities: Record<string, unknown>[
 
 /* ── API functions ─────────────────────────────────────────────── */
 
-export const getPositions = async (): Promise<PositionsResponse> => {
-  const response = await api.get('/positions');
+export const getPositions = async (signal?: AbortSignal): Promise<PositionsResponse> => {
+  const response = await api.get('/positions', { signal });
   return response.data;
 };
 
@@ -34,10 +34,10 @@ export const closePosition = async (positionId: string): Promise<CommandResponse
   return response.data;
 };
 
-export const getTrades = async (limit = 100, hours?: number): Promise<TradesResponse> => {
+export const getTrades = async (limit = 100, hours?: number, signal?: AbortSignal): Promise<TradesResponse> => {
   const params: Record<string, number> = { limit };
   if (hours) params.hours = hours;
-  const response = await api.get('/trades', { params });
+  const response = await api.get('/trades', { params, signal });
   return response.data;
 };
 
@@ -71,33 +71,33 @@ export const getPerformance = async (hours = 24): Promise<unknown> => {
   return response.data;
 };
 
-export const getPnL = async (hours = 24): Promise<PnlResponse> => {
-  const response = await api.get('/analytics/pnl', { params: { hours } });
+export const getPnL = async (hours = 24, signal?: AbortSignal): Promise<PnlResponse> => {
+  const response = await api.get('/analytics/pnl', { params: { hours }, signal });
   return response.data;
 };
 
-export const getSummary = async (): Promise<SummaryResponse> => {
-  const response = await api.get('/analytics/summary');
+export const getSummary = async (signal?: AbortSignal): Promise<SummaryResponse> => {
+  const response = await api.get('/analytics/summary', { signal });
   return response.data;
 };
 
-export const getOpportunities = async (): Promise<OpportunitiesResponse> => {
-  const response = await api.get('/opportunities');
+export const getOpportunities = async (signal?: AbortSignal): Promise<OpportunitiesResponse> => {
+  const response = await api.get('/opportunities', { signal });
   return response.data;
 };
 
-export const getBalances = async (): Promise<BalancesResponse> => {
-  const response = await api.get('/balances');
+export const getBalances = async (signal?: AbortSignal): Promise<BalancesResponse> => {
+  const response = await api.get('/balances', { signal });
   return response.data;
 };
 
-export const getStatus = async (): Promise<BotStatus> => {
-  const response = await api.get('/status');
+export const getStatus = async (signal?: AbortSignal): Promise<BotStatus> => {
+  const response = await api.get('/status', { signal });
   return response.data;
 };
 
-export const getLogs = async (limit = 50): Promise<LogsResponse> => {
-  const response = await api.get('/logs', { params: { limit } });
+export const getLogs = async (limit = 50, signal?: AbortSignal): Promise<LogsResponse> => {
+  const response = await api.get('/logs', { params: { limit }, signal });
   return response.data;
 };
 

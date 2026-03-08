@@ -10,6 +10,7 @@ import ExchangeBalances from './ExchangeBalances';
 import RecentTradesPanel from './RecentTradesPanel';
 import RightPanel from './RightPanel';
 import SystemLogs from './SystemLogs';
+import SignalTape from './SignalTape';
 
 export const SECTION_IDS = {
   dashboard: 'section-dashboard',
@@ -87,6 +88,7 @@ const Dashboard: React.FC<DashboardProps> = ({
           wsConnection={wsConnection}
           lastWsMessageAt={lastWsMessageAt}
         />
+        <SignalTape logs={data.logs} />
 
         <div className="content-area" ref={contentRef}>
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />

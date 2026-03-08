@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BotStatus, Trade } from '../types';
+import axios from 'axios';
 import { connectWebSocket, disconnectWebSocket, WsConnectionState } from '../services/websocket';
 import {
   getBalances,
@@ -100,6 +101,7 @@ interface MarketDataState {
 export function useMarketData(): MarketDataState {
   const [pnlHours, setPnlHours] = useState<number>(24);
   const pnlHoursRef = useRef<number>(pnlHours);
+  const abortCtrlRef = useRef<AbortController | null>(null);
   const [wsConnection, setWsConnection] = useState<WsConnectionState>('disconnected');
   const [lastWsMessageAt, setLastWsMessageAt] = useState<number | null>(null);
 
@@ -124,33 +126,44 @@ export function useMarketData(): MarketDataState {
   const handlePnlHoursChange = useCallback((hours: number) => {
     setPnlHours(hours);
     pnlHoursRef.current = hours;
-    getPnL(hours)
+    const ctrl = new AbortController();
+    getPnL(hours, ctrl.signal)
       .then((pnlRes) => {
         setData((prev) => ({ ...prev, pnl: pnlRes }));
       })
-      .catch(() => {
-        // Next poll retry handles transient failures.
+      .catch((err) => {
+        if (!axios.isCancel(err)) {
+          // Next poll retry handles transient failures.
+        }
       });
   }, []);
 
   const fetchAll = useCallback(async () => {
+    // Cancel any in-flight requests from the previous cycle.
+    abortCtrlRef.current?.abort();
+    const ctrl = new AbortController();
+    abortCtrlRef.current = ctrl;
+    const { signal } = ctrl;
     try {
       const hours = pnlHoursRef.current;
-      const pnlPromise = getPnL(hours);
-      const dailyPnlPromise = hours === 24 ? pnlPromise : getPnL(24);
+      const pnlPromise = getPnL(hours, signal);
+      const dailyPnlPromise = hours === 24 ? pnlPromise : getPnL(24, signal);
 
       const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, dailyPnlRes, tradesRes] =
         await Promise.allSettled([
-          getStatus(),
-          getBalances(),
-          getOpportunities(),
-          getLogs(50),
-          getSummary(),
-          getPositions(),
+          getStatus(signal),
+          getBalances(signal),
+          getOpportunities(signal),
+          getLogs(50, signal),
+          getSummary(signal),
+          getPositions(signal),
           pnlPromise,
           dailyPnlPromise,
-          getTrades(20),
+          getTrades(20, undefined, signal),
         ]);
+
+      // If this fetch was superseded by a newer call, discard results.
+      if (signal.aborted) return;
 
       const extractPositions = (): PositionRow[] => {
         if (posRes.status !== 'fulfilled') return [];
@@ -208,7 +221,9 @@ export function useMarketData(): MarketDataState {
         })(),
       }));
     } catch (error) {
-      console.error('Error fetching data:', error);
+      if (!axios.isCancel(error)) {
+        console.error('Error fetching data:', error);
+      }
     }
   }, []);
 

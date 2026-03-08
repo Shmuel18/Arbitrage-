@@ -22,7 +22,7 @@
   --content-bg: #f4f6fa;
   --card-bg: #ffffff;
   --card-border: rgba(0, 0, 0, 0.06);
-  --card-radius: 14px;
+  --card-radius: 6px;
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(42, 106, 242, 0.025);
   --card-shadow-hover: 0 4px 16px rgba(42, 106, 242, 0.06), 0 1px 3px rgba(0, 0, 0, 0.05);
 
@@ -33,14 +33,15 @@
   --text-white: #ffffff;
 
   /* ── Accent colors ── */
-  --accent: #2563eb;
-  --accent-light: rgba(37, 99, 235, 0.08);
-  --accent-border: rgba(37, 99, 235, 0.2);
+  --accent: #1d6fe8;
+  --accent-light: rgba(29, 111, 232, 0.08);
+  --accent-border: rgba(29, 111, 232, 0.2);
   --teal: #0ea5a5;
   --teal-light: rgba(14, 165, 165, 0.08);
+  --gold: #c9a84c;
 
   /* ── Semantic ── */
-  --green: #10b981;
+  --green: #00c896;
   --green-bg: rgba(16, 185, 129, 0.08);
   --green-border: rgba(16, 185, 129, 0.2);
   --red: #ef4444;
@@ -69,8 +70,8 @@
 
 /* ── Dark theme override ── */
 [data-theme="dark"] {
-  --content-bg: #06090f;
-  --card-bg: rgba(12, 20, 38, 0.7);
+  --content-bg: #04080f;
+  --card-bg: rgba(8, 14, 28, 0.75);
   --card-border: rgba(96, 165, 250, 0.06);
   --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(96, 165, 250, 0.06), inset 0 1px 0 rgba(255,255,255,0.03);
   --card-shadow-hover: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(96, 165, 250, 0.12), inset 0 1px 0 rgba(255,255,255,0.05);
@@ -3741,4 +3742,92 @@ button:focus-visible {
 .nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(1) { animation-delay: 220ms; }
 .nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(2) { animation-delay: 280ms; }
 .nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(3) { animation-delay: 340ms; }
+
+/* ══════════════════════════════════════════
+   SIGNAL TAPE — Live event marquee
+   ══════════════════════════════════════════ */
+.signal-tape {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  background: rgba(4, 8, 15, 0.97);
+  border-bottom: 1px solid rgba(96, 165, 250, 0.07);
+  overflow: hidden;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+
+.signal-tape__label {
+  flex-shrink: 0;
+  padding: 0 10px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border-right: 1px solid rgba(96, 165, 250, 0.10);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  background: rgba(29, 111, 232, 0.07);
+  white-space: nowrap;
+}
+
+.signal-tape__track {
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, black 3%, black 97%, transparent 100%);
+}
+
+.signal-tape__inner {
+  display: flex;
+  white-space: nowrap;
+  animation: tape-scroll 60s linear infinite;
+  will-change: transform;
+}
+
+.signal-tape__inner:hover {
+  animation-play-state: paused;
+}
+
+@keyframes tape-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.signal-tape__item {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px;
+  opacity: 0.75;
+  transition: opacity 0.2s ease;
+  cursor: default;
+}
+
+.signal-tape__item:hover {
+  opacity: 1;
+}
+
+.signal-tape__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 4px currentColor;
+}
+
+.signal-tape__sep {
+  padding: 0 8px;
+  opacity: 0.2;
+  color: var(--text-muted);
+  font-size: 11px;
+}
 .nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(4) { animation-delay: 400ms; }

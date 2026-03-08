@@ -199,39 +199,6 @@ async def websocket_endpoint(websocket: WebSocket):
         await manager.disconnect(websocket)
 
 
-async def _compute_summary(rc) -> dict:
-    """Compute accurate summary from trade history (same logic as HTTP endpoint)."""
-    base = {"total_pnl": 0, "total_trades": 0, "win_rate": 0,
-            "active_positions": 0, "uptime_hours": 0,
-            "all_time_pnl": 0, "avg_pnl": 0}
-    try:
-        summary_data = await rc.get("trinity:summary")
-        if summary_data:
-            base.update(json.loads(summary_data))
-    except Exception as exc:
-        print(f"Summary fetch error: {exc}")
-    # Compute accurate stats from closed trade history
-    all_time_pnl = 0.0
-    trade_count = 0
-    winning = 0
-    try:
-        trades_raw = await rc.zrange("trinity:trades:history", 0, -1)
-        for t in trades_raw:
-            td = json.loads(t)
-            pnl = float(td.get('total_pnl', 0))
-            all_time_pnl += pnl
-            trade_count += 1
-            if pnl > 0:
-                winning += 1
-    except Exception as exc:
-        print(f"Trade history fetch error: {exc}")
-    base['all_time_pnl'] = round(all_time_pnl, 4)
-    base['avg_pnl'] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0
-    base['total_trades'] = trade_count
-    base['win_rate'] = round(winning / trade_count, 3) if trade_count > 0 else 0.0
-    return base
-
-
 async def broadcast_updates():
     """Background task to broadcast updates to all connected clients"""
     import time as _time  # import once at top of function, not inside loop
@@ -265,80 +232,120 @@ async def broadcast_updates():
                 rc.get("trinity:opportunities"),
                 rc.lrange("trinity:logs", 0, 19),
                 rc.get("trinity:pnl:latest"),
+                rc.get("trinity:summary"),
+                rc.zrange("trinity:trades:history", 0, -1, withscores=True),
                 return_exceptions=True,
             )
             (
                 status_data, positions_data, balances_data,
                 opportunities_data, logs_data, pnl_latest,
+                summary_data, trades_history_raw,
             ) = [None if isinstance(r, Exception) else r for r in results]
 
-            # Log any gather errors (once each) so operators notice Redis issues.
+            # Log any gather errors so operators notice Redis issues.
             for key, res in zip(
-                ("status", "positions", "balances", "opportunities", "logs", "pnl_latest"),
+                ("status", "positions", "balances", "opportunities", "logs",
+                 "pnl_latest", "summary", "trades_history"),
                 results,
             ):
                 if isinstance(res, Exception):
                     print(f"[broadcast] Redis read error for '{key}': {res}")
 
-            # Summary needs its own sequential reads (zrange) — run in parallel with trades
-            summary_task = asyncio.create_task(
-                _compute_summary(rc), name="_compute_summary"
-            )
-            summary_task.add_done_callback(_task_done_handler)
+            # ── Parse trade history ONCE — reuse for summary, pnl, trades_list ──
+            all_trades: list[tuple[dict, float]] = []
+            if trades_history_raw:
+                for entry in trades_history_raw:
+                    try:
+                        if isinstance(entry, tuple):
+                            raw_json, score = entry
+                        else:
+                            continue  # unexpected format
+                        all_trades.append((json.loads(raw_json), float(score)))
+                    except Exception:
+                        pass
 
-            # Build proper pnl structure from closed trades (last 24h)
+            # ── Summary (computed inline from all trades) ──
+            base_summary: dict = {
+                "total_pnl": 0, "total_trades": 0, "win_rate": 0,
+                "active_positions": 0, "uptime_hours": 0,
+                "all_time_pnl": 0, "avg_pnl": 0,
+            }
+            try:
+                if summary_data:
+                    base_summary.update(json.loads(summary_data))
+            except Exception:
+                pass
+
+            all_time_pnl = 0.0
+            winning = 0
+            for td, _ in all_trades:
+                pnl_v = float(td.get('total_pnl', 0))
+                all_time_pnl += pnl_v
+                if pnl_v > 0:
+                    winning += 1
+            trade_count = len(all_trades)
+            base_summary['all_time_pnl'] = round(all_time_pnl, 4)
+            base_summary['avg_pnl'] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0
+            base_summary['total_trades'] = trade_count
+            base_summary['win_rate'] = round(winning / trade_count, 3) if trade_count > 0 else 0.0
+            summary = base_summary
+
+            # ── PnL struct (last 24h, from pre-parsed trades) ──
             pnl_struct = None
             try:
                 cutoff = _time.time() - 86400
-                trades_raw = await rc.zrangebyscore(
-                    "trinity:trades:history", cutoff, float('inf'), withscores=True
-                )
                 dp = []
                 cumulative = 0.0
-                for item in trades_raw:
-                    tj, ts = item
-                    t = json.loads(tj)
-                    pnl_val = float(t.get('total_pnl') or t.get('net_profit') or 0)
+                for td, ts in all_trades:
+                    if ts < cutoff:
+                        continue
+                    pnl_val = float(td.get('total_pnl') or td.get('net_profit') or 0)
                     cumulative += pnl_val
-                    dp.append({"pnl": pnl_val, "cumulative_pnl": cumulative, "timestamp": float(ts), "symbol": t.get('symbol', '?')})
+                    dp.append({
+                        "pnl": pnl_val,
+                        "cumulative_pnl": cumulative,
+                        "timestamp": ts,
+                        "symbol": td.get('symbol', '?'),
+                    })
                 unrealized = float(json.loads(pnl_latest).get('unrealized_pnl', 0)) if pnl_latest else 0.0
-                pnl_struct = {"data_points": dp, "total_pnl": cumulative + unrealized, "realized_pnl": cumulative, "unrealized_pnl": unrealized}
+                pnl_struct = {
+                    "data_points": dp,
+                    "total_pnl": cumulative + unrealized,
+                    "realized_pnl": cumulative,
+                    "unrealized_pnl": unrealized,
+                }
             except Exception as exc:
                 print(f"PnL structure build error: {exc}")
 
-            # Build normalized trades list for frontend
+            # ── Trades list (last 20, from pre-parsed trades) ──
             trades_list = []
             try:
-                recent_raw = await rc.zrange("trinity:trades:history", -20, -1)
-                for item in reversed(recent_raw):
-                    t = json.loads(item)
-                    invested = float(t.get('invested') or 0)
-                    total_pnl_t = float(t.get('total_pnl') or 0)
+                for td, _ in reversed(all_trades[-20:]):
+                    invested = float(td.get('invested') or 0)
+                    total_pnl_t = float(td.get('total_pnl') or 0)
                     pnl_pct = (total_pnl_t / invested) if invested > 0 else 0.0
-                    entry_edge = t.get('entry_edge_pct')
+                    entry_edge = td.get('entry_edge_pct')
                     trades_list.append({
-                        **t,
+                        **td,
                         'pnl': total_pnl_t,
                         'pnl_percentage': pnl_pct,
-                        'open_time': t.get('opened_at'),
-                        'close_time': t.get('closed_at'),
-                        'exchanges': {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
+                        'open_time': td.get('opened_at'),
+                        'close_time': td.get('closed_at'),
+                        'exchanges': {'long': td.get('long_exchange'), 'short': td.get('short_exchange')},
                         'size': f"${invested:,.0f}",
                         'entry_spread': float(entry_edge) / 100 if entry_edge else None,
-                        'entry_basis_pct': float(t['entry_basis_pct']) / 100 if t.get('entry_basis_pct') is not None else None,
+                        'entry_basis_pct': float(td['entry_basis_pct']) / 100 if td.get('entry_basis_pct') is not None else None,
                         'exit_spread': None,
-                        'price_pnl': float(t.get('price_pnl') or 0),
-                        'funding_net': float(t.get('funding_net') or 0),
+                        'price_pnl': float(td.get('price_pnl') or 0),
+                        'funding_net': float(td.get('funding_net') or 0),
                         'invested': invested,
-                        'mode': t.get('mode', 'hold'),
-                        'exit_reason': t.get('exit_reason'),
-                        'funding_collections': int(t.get('funding_collections') or 0),
-                        'funding_collected_usd': float(t.get('funding_collected_usd') or 0),
+                        'mode': td.get('mode', 'hold'),
+                        'exit_reason': td.get('exit_reason'),
+                        'funding_collections': int(td.get('funding_collections') or 0),
+                        'funding_collected_usd': float(td.get('funding_collected_usd') or 0),
                     })
             except Exception as exc:
                 print(f"Trades list build error: {exc}")
-
-            summary = await summary_task
 
             # ── Normalize positions to always be a flat list ──────
             positions_parsed = json.loads(positions_data) if positions_data else []

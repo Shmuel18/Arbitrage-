@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 
 interface StatsCardsProps {
@@ -71,17 +71,8 @@ const ArrowDown = () => (
   </svg>
 );
 
-// ── Mini sparkline ───────────────────────────────────────────────
-const MiniSparkline: React.FC<{ positive: boolean; accent: string }> = ({ positive, accent }) => {
-  const path = positive
-    ? "M0,18 C5,16 10,12 15,10 C20,8 25,5 30,3"
-    : "M0,3 C5,5 10,8 15,11 C20,14 25,16 30,18";
-  return (
-    <svg width="30" height="21" viewBox="0 0 30 21" fill="none" style={{ opacity: 0.5 }}>
-      <path d={path} stroke={accent} strokeWidth="1.5" strokeLinecap="round" fill="none"/>
-    </svg>
-  );
-};
+// ── Mini sparkline removed: hardcoded SVG paths were decorative, not real data.
+// Replace with real per-card timeseries when available.
 
 // ── Single stat card ─────────────────────────────────────────────
 interface StatCardProps {
@@ -97,7 +88,7 @@ interface StatCardProps {
   idx?: number;
 }
 
-const StatCard: React.FC<StatCardProps> = ({ label, value, sub, subColor, icon, accentHex, trend, live, idx = 0 }) => (
+const StatCard: React.FC<StatCardProps> = memo(({ label, value, sub, subColor, icon, accentHex, trend, live, idx = 0 }) => (
   <div
     className="xcard nx-xcard"
     style={{ '--xcard-accent': accentHex, animationDelay: `${idx * 60}ms` } as React.CSSProperties}
@@ -120,13 +111,8 @@ const StatCard: React.FC<StatCardProps> = ({ label, value, sub, subColor, icon, 
         {sub}
       </div>
     )}
-    {trend && trend !== 'neutral' && (
-      <div className="xcard-sparkline">
-        <MiniSparkline positive={trend === 'up'} accent={accentHex} />
-      </div>
-    )}
   </div>
-);
+));
 
 // ── Main component ───────────────────────────────────────────────
 const StatsCards: React.FC<StatsCardsProps> = ({
