@@ -295,6 +295,36 @@ class _EntryMixin:
                 ),
             )
             if not long_fill:
+                # ── Timeout safety: check if order actually filled on exchange ──
+                # asyncio.wait_for cancels the Python coroutine but the HTTP
+                # request may have already been sent and the order filled.
+                try:
+                    _long_positions = await long_adapter.get_positions(opp.symbol)
+                    _long_pos = next(
+                        (p for p in _long_positions if p.side == OrderSide.BUY),
+                        None,
+                    )
+                except Exception as _lpe:
+                    logger.warning(
+                        f"[{opp.symbol}] Position check on {opp.long_exchange} "
+                        f"after timeout failed: {_lpe}",
+                    )
+                    _long_pos = None
+
+                if _long_pos and _long_pos.quantity > 0:
+                    logger.warning(
+                        f"⚠️ [{opp.symbol}] Long order FILLED despite timeout on "
+                        f"{opp.long_exchange}: qty={_long_pos.quantity} — "
+                        f"closing orphan immediately",
+                    )
+                    _synth_fill = {
+                        "filled": float(_long_pos.quantity),
+                        "average": float(_long_pos.entry_price),
+                    }
+                    await self._close_orphan(
+                        long_adapter, opp.long_exchange, opp.symbol,
+                        OrderSide.SELL, _synth_fill, _long_pos.quantity,
+                    )
                 return
 
             # ── Zero-fill guard: catch orders accepted but not executed ──
@@ -337,13 +367,46 @@ class _EntryMixin:
                 ),
             )
             if not short_fill:
-                # Orphan: long filled but short didn't → close long
-                logger.error(f"Short leg failed — closing orphan long for {opp.symbol}")
-                await self._close_orphan(
-                    long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, long_fill, long_actual_filled,
-                )
-                return
+                # ── Timeout safety: check if short actually filled on exchange ──
+                # The order may have been submitted and filled even though
+                # asyncio.wait_for cancelled the Python coroutine.
+                try:
+                    _short_positions = await short_adapter.get_positions(opp.symbol)
+                    _short_pos = next(
+                        (p for p in _short_positions if p.side == OrderSide.SELL),
+                        None,
+                    )
+                except Exception as _spe:
+                    logger.warning(
+                        f"[{opp.symbol}] Position check on {opp.short_exchange} "
+                        f"after timeout failed: {_spe}",
+                    )
+                    _short_pos = None
+
+                if _short_pos and _short_pos.quantity > 0:
+                    # Order DID fill — construct synthetic fill and register trade
+                    logger.warning(
+                        f"⚠️ [{opp.symbol}] Short order FILLED despite timeout on "
+                        f"{opp.short_exchange}: qty={_short_pos.quantity} "
+                        f"price={_short_pos.entry_price} — registering trade",
+                    )
+                    short_fill = {
+                        "filled": float(_short_pos.quantity),
+                        "average": float(_short_pos.entry_price),
+                        "fee": {"cost": None},
+                        "_recovered_from_position": True,
+                    }
+                    # Fall through to trade registration below
+                else:
+                    # Order truly didn't fill — close orphan long
+                    logger.error(
+                        f"Short leg failed — closing orphan long for {opp.symbol}"
+                    )
+                    await self._close_orphan(
+                        long_adapter, opp.long_exchange, opp.symbol,
+                        OrderSide.SELL, long_fill, long_actual_filled,
+                    )
+                    return
 
             # ── Zero-fill guard for short leg ──
             short_raw_filled = float(short_fill.get("filled", 0))
