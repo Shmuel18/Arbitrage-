@@ -1,6 +1,16 @@
 import React, { useState } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import PositionDetailCard from './PositionDetailCard';
+import {
+  parseNum,
+  formatPct,
+  formatFundingRate,
+  formatUsd,
+  formatCountdown,
+  pnlColor,
+  getModeConfig,
+  getTierInfo,
+} from '../utils/format';
 
 interface PositionRow {
   id: string;
@@ -54,66 +64,9 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     setExpandedId(prev => prev === id ? null : id);
   };
 
-  // ── Helpers ──────────────────────────────────────────────────
-  const num = (v?: string | null): number | null => {
-    if (v == null || v === '') return null;
-    const n = Number(v);
-    return Number.isNaN(n) ? null : n;
-  };
+  // ── Helpers (pure logic, not formatting) ────────────────────
 
-  const fmtPct = (v?: string | null, decimals = 3): string => {
-    const n = num(v);
-    if (n == null) return '--';
-    return `${n >= 0 ? '+' : ''}${n.toFixed(decimals)}%`;
-  };
-
-  const fmtFunding = (rate?: string | null) => {
-    if (!rate) return '--';
-    const n = Number(rate);
-    if (Number.isNaN(n)) return '--';
-    const pct = Math.abs(n) <= 1 ? n * 100 : n;
-    return `${pct >= 0 ? '+' : ''}${pct.toFixed(3)}%`;
-  };
-
-  const fmtUsd = (v?: string | null): string => {
-    const n = num(v);
-    if (n == null) return '--';
-    return `$${n.toFixed(2)}`;
-  };
-
-  const formatCountdown = (ms?: number | null): string => {
-    if (!ms) return '--';
-    const diff = ms - Date.now();
-    if (diff <= 0) return '⚡ NOW';
-    const mins = Math.floor(diff / 60000);
-    if (mins < 60) return `${mins}m`;
-    return `${Math.floor(mins / 60)}h${mins % 60 > 0 ? (mins % 60) + 'm' : ''}`;
-  };
-
-  const pnlColor = (v?: string | null): string => {
-    const n = num(v);
-    if (n == null) return 'var(--text-muted)';
-    return n >= 0 ? 'var(--green)' : 'var(--red)';
-  };
-
-  const modeConfig = (mode?: string) => {
-    const m = (mode || '').toLowerCase();
-    if (m === 'cherry_pick') return { emoji: '🍒', label: t.cherry_pick, color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.35)' };
-    if (m === 'pot') return { emoji: '🍯', label: t.pot, color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.4)' };
-    if (m === 'nutcracker') return { emoji: '🔨🥜', label: t.nutcracker, color: '#a855f7', bg: 'rgba(168,85,247,0.08)', border: 'rgba(168,85,247,0.35)' };
-    return { emoji: '🤝', label: t.hold, color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.35)' };
-  };
-
-  const tierConfig = (tier?: string | null) => {
-    const k = (tier || '').toLowerCase();
-    if (k === 'top')     return { emoji: '🏆', label: t.tierTop,     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
-    if (k === 'medium')  return { emoji: '📊', label: t.tierMedium,  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
-    if (k === 'bad')     return { emoji: '⚠️', label: t.tierBad,     color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
-    if (k === 'adverse') return { emoji: '',   label: t.tierAdverse, color: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
-    return null;
-  };
-
-  const fundingCountdownStyle = (ms?: number | null): React.CSSProperties => {
+  const fundingCountdownStyle = (ms?: number | null): React.CSSProperties => {  // keep: returns style object, not a string
     if (!ms) return { color: 'var(--text-muted)' };
     const diff = ms - Date.now();
     if (diff <= 0) return { color: '#10b981', fontWeight: 700 };
@@ -125,16 +78,16 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   };
 
   const getTargetProgress = (p: PositionRow) => {
-    const pnl = num(p.unrealized_pnl_pct);
-    const target = num(p.profit_target_pct);
+    const pnl = parseNum(p.unrealized_pnl_pct);
+    const target = parseNum(p.profit_target_pct);
     if (pnl == null || target == null || target === 0) return null;
     const progress = Math.max(0, Math.min(100, (pnl / target) * 100));
     return { pnl, target, progress, remaining: target - pnl };
   };
 
   const getSizeUsd = (p: PositionRow): string => {
-    const price = num(p.entry_price_long);
-    const qty = num(p.long_qty);
+    const price = parseNum(p.entry_price_long);
+    const qty = parseNum(p.long_qty);
     if (price == null || qty == null) return '--';
     return '$' + (qty * price).toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
@@ -188,10 +141,10 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
         {positions.map((p) => {
-          const mode = modeConfig(p.mode);
-          const tier = tierConfig(p.entry_tier);
+          const mode = getModeConfig(p.mode, t);
+          const tier = getTierInfo(p.entry_tier, t);
           const progress = getTargetProgress(p);
-          const pnlVal = num(p.unrealized_pnl_pct);
+          const pnlVal = parseNum(p.unrealized_pnl_pct);
           const isProfit = pnlVal != null && pnlVal >= 0;
           const isExpanded = expandedId === p.id;
 
@@ -262,7 +215,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       fontSize: '1.5rem', fontWeight: 800,
                       lineHeight: 1.1,
                     }}>
-                      {fmtPct(p.unrealized_pnl_pct)}
+                      {formatPct(p.unrealized_pnl_pct)}
                     </span>
                     <span className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
                       {getSizeUsd(p)}
@@ -302,7 +255,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {t.pricePnl}
                     </div>
                     <div className="nx-pos-stat-value" style={{ color: pnlColor(p.price_pnl_pct) }}>
-                      {fmtPct(p.price_pnl_pct)}
+                      {formatPct(p.price_pnl_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
@@ -310,7 +263,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {t.fundingNetDetail}
                     </div>
                     <div className="nx-pos-stat-value" style={{ color: pnlColor(p.funding_pnl_pct) }}>
-                      {fmtPct(p.funding_pnl_pct)}
+                      {formatPct(p.funding_pnl_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
@@ -318,7 +271,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {t.colEntryPct}
                     </div>
                     <div className="nx-pos-stat-value" style={{ color: 'var(--text-primary)' }}>
-                      {fmtPct(p.entry_edge_pct)}
+                      {formatPct(p.entry_edge_pct)}
                     </div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
@@ -349,21 +302,21 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     })()}
                     <span>
                       {t.colFundPct}: <span className="mono" style={{ color: 'var(--text-secondary)' }}>
-                        {fmtFunding(p.current_long_rate)}/{fmtFunding(p.current_short_rate)}
+                        {formatFundingRate(p.current_long_rate)}/{formatFundingRate(p.current_short_rate)}
                       </span>
                     </span>
                     <span>
-                      💰 {p.funding_collections ?? 0}× ({fmtUsd(p.funding_collected_usd)})
+                      💰 {p.funding_collections ?? 0}× ({formatUsd(p.funding_collected_usd)})
                     </span>
                     {(() => {
                       const isCherryPick = (p.mode || '').toLowerCase() === 'cherry_pick';
                       const pendingUsd = isCherryPick
-                        ? num(p.pending_income_usd)
-                        : num(p.pending_net_usd);
+                        ? parseNum(p.pending_income_usd)
+                        : parseNum(p.pending_net_usd);
                       if (pendingUsd == null || Math.abs(pendingUsd) < 0.001) return null;
                       const pendingPct = isCherryPick
-                        ? num(p.pending_income_pct)
-                        : num(p.pending_net_pct);
+                        ? parseNum(p.pending_income_pct)
+                        : parseNum(p.pending_net_pct);
                       const isPositive = pendingUsd >= 0;
                       return (
                         <span style={{
@@ -404,4 +357,4 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   );
 };
 
-export default PositionsTable;
+export default React.memo(PositionsTable);

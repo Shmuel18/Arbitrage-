@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
-import { TierBadge, formatCountdown as sharedCountdown } from '../utils/format';
+import { TierBadge, formatCountdown, formatFundingRateN } from '../utils/format';
 
 interface Opportunity {
   symbol: string;
@@ -48,16 +48,13 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
   const opps = useMemo(() => opportunities?.opportunities ?? [], [opportunities]);
   const count = opportunities?.count ?? 0;
 
-  const formatFunding = (rate: number): string => {
-    const pct = Math.abs(rate) <= 1 ? rate * 100 : rate;
-    return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
-  };
+  const formatFunding = (rate: number): string => formatFundingRateN(rate, 4);
 
   const formatSpread = (pct: number): string => {
     return `${pct >= 0 ? '+' : ''}${pct.toFixed(4)}%`;
   };
 
-  const formatCountdown = sharedCountdown;
+  // formatCountdown from shared utils — imported directly above
 
   const getLongRateStyle = (rate: number): React.CSSProperties => {
     if (rate < 0) return { color: 'var(--green)' };

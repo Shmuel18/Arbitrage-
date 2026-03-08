@@ -1992,15 +1992,15 @@ code, .mono {
 }
 
 /* ── Rate cells ──────────────────────────────────────────────── */
-.nx-cell-rate {
-  font-size: 11.5px !important;
+.nx-table .nx-cell-rate {
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 /* ── Spread pill ─────────────────────────────────────────────── */
-.nx-cell-spread {
-  padding-inline-end: 10px !important;
+.nx-table .nx-cell-spread {
+  padding-inline-end: 10px;
 }
 
 .nx-spread-pill {
@@ -2020,8 +2020,8 @@ code, .mono {
 }
 
 /* ── Net value — emphasized ──────────────────────────────────── */
-.nx-cell-net {
-  padding-inline-end: 10px !important;
+.nx-table .nx-cell-net {
+  padding-inline-end: 10px;
 }
 
 .nx-net-value {
@@ -2035,8 +2035,8 @@ code, .mono {
 }
 
 /* ── Mode badge pills ────────────────────────────────────────── */
-.nx-cell-mode {
-  padding: 8px 10px !important;
+.nx-table .nx-cell-mode {
+  padding: 8px 10px;
 }
 
 .nx-mode-badge {
@@ -2064,8 +2064,8 @@ code, .mono {
 }
 
 /* ── Funding countdown cells ─────────────────────────────────── */
-.nx-cell-funding {
-  padding: 6px 12px !important;
+.nx-table .nx-cell-funding {
+  padding: 6px 12px;
 }
 
 .nx-funding-pair {
@@ -2146,9 +2146,9 @@ code, .mono {
 }
 
 /* ── Separator row ───────────────────────────────────────────── */
-.nx-separator-row td {
-  padding: 0 !important;
-  border-bottom: none !important;
+.nx-table .nx-separator-row td {
+  padding: 0;
+  border-bottom: none;
 }
 
 .nx-separator {

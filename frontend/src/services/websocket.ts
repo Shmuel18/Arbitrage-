@@ -4,6 +4,18 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
 
+/* ── Message schema guard ─────────────────────────────────────────
+   Validates that a parsed WS payload has the minimum expected shape.
+   Rejects blobs, null, arrays, and messages missing required fields. */
+function isValidWsMessage(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const msg = v as Record<string, unknown>;
+  if (typeof msg['type'] !== 'string') return false;
+  // 'full_update' messages must carry a non-null data object
+  if (msg['type'] === 'full_update' && (msg['data'] == null || typeof msg['data'] !== 'object')) return false;
+  return true;
+}
+
 export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => void) => {
   // Prevent duplicate connections
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
@@ -28,10 +40,14 @@ export const connectWebSocket = (onMessage: (data: Record<string, unknown>) => v
 
   ws.onmessage = (event) => {
     try {
-      const data = JSON.parse(event.data);
+      const data = JSON.parse(event.data) as unknown;
+      if (!isValidWsMessage(data)) {
+        console.warn('WebSocket: dropping malformed message', typeof data);
+        return;
+      }
       onMessage(data);
     } catch (error) {
-      console.error('Error parsing WebSocket message:', error);
+      console.error('WebSocket: failed to parse message:', error);
     }
   };
 

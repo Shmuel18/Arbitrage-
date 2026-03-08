@@ -2,7 +2,7 @@ import React, { useState, memo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import TradeDetailModal from './TradeDetailModal';
-import { TierBadge, formatCurrency } from '../utils/format';
+import { TierBadge, formatCurrency, formatDate, formatDuration } from '../utils/format';
 
 interface RecentTradesPanelProps {
   trades: Trade[];
@@ -13,29 +13,10 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
   const { t } = useSettings();
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
-  const formatDate = (value?: string | null) => {
-    if (!value) return '--';
-    try {
-      return new Intl.DateTimeFormat('default', {
-        year: 'numeric', month: '2-digit', day: '2-digit',
-        hour: '2-digit', minute: '2-digit', second: '2-digit',
-        hour12: false,
-      }).format(new Date(value));
-    } catch {
-      return '--';
-    }
-  };
-
   const formatPnl = (v?: number | null) => {
     if (v == null) return <span style={{ color: 'var(--text-muted)' }}>--</span>;
     const s = formatCurrency(v);
     return <span className={`nx-trades-pnl ${v >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>{s}</span>;
-  };
-
-  const formatDuration = (mins?: number | null) => {
-    if (mins == null) return '--';
-    if (mins < 60) return `${Math.round(mins)}m`;
-    return `${Math.floor(mins / 60)}h${Math.round(mins % 60) > 0 ? Math.round(mins % 60) + 'm' : ''}`;
   };
 
   const tierBadge = (tier?: string | null) => <TierBadge tier={tier} t={t} />;
@@ -125,7 +106,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                     {formatDuration(tr.hold_minutes)}
                   </td>
                   <td className="text-end nx-trades-date" style={{ whiteSpace: 'nowrap' }}>
-                    {formatDate(tr.closed_at)}
+                    {formatDate(tr.closed_at, true)}
                   </td>
                 </tr>
                 );
