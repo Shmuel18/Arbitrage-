@@ -514,6 +514,14 @@ class ExchangeAdapter:
             while next_ts <= now_ms:
                 next_ts += interval_ms
 
+        # Final safety: if next_ts is STILL in the past (e.g. interval_ms was 0
+        # or no timestamp data at all), compute from epoch boundary so callers
+        # never see a stale "NOW" indicator.
+        if next_ts and next_ts <= now_ms and interval_ms > 0:
+            next_ts = (int(now_ms // interval_ms) + 1) * interval_ms
+        elif not next_ts and interval_ms > 0:
+            next_ts = (int(now_ms // interval_ms) + 1) * interval_ms
+
         self._funding_rate_cache[symbol] = {
             "rate": rate,
             "timestamp": data.get("timestamp"),
@@ -1184,6 +1192,10 @@ class ExchangeAdapter:
         # 5) Default 8h
         if detected is None:
             return 8
+
+        # Reject invalid zero intervals — would break timestamp advancement
+        if detected <= 0:
+            return self._funding_intervals.get(symbol) or 8
 
         # ── Change-confirmation guard ──────────────────────────────────
         # If the detected interval differs from the stored one, require it
