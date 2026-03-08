@@ -491,11 +491,17 @@ class ExchangeAdapter:
             return
 
         interval_hours = self._get_funding_interval(symbol, data)
-        # Prefer nextFundingTimestamp (future payment) over fundingTimestamp (current/past).
-        # Bitget and others populate nextFundingTimestamp correctly; fundingTimestamp is past.
-        next_ts = data.get("nextFundingTimestamp") or data.get("fundingTimestamp")
+        # Pick the EARLIEST future timestamp from both CCXT fields.
+        # OKX: fundingTimestamp = upcoming payment, nextFundingTimestamp = the one after.
+        # Bitget/others: fundingTimestamp = past payment, nextFundingTimestamp = upcoming.
+        # By choosing the earliest future value, we handle both conventions correctly.
+        _now_ms_pick = _time.time() * 1000
+        _ts_a = data.get("nextFundingTimestamp")
+        _ts_b = data.get("fundingTimestamp")
+        _future_candidates = [t for t in (_ts_a, _ts_b) if t and t > _now_ms_pick]
+        next_ts = min(_future_candidates) if _future_candidates else (_ts_a or _ts_b)
 
-        now_ms = _time.time() * 1000
+        now_ms = _now_ms_pick
         interval_ms = interval_hours * 3_600_000
 
         # If exchange doesn't provide next funding time, compute it from interval
@@ -984,8 +990,14 @@ class ExchangeAdapter:
         async with self._rest_semaphore:
             data = await self._exchange.fetch_funding_rate(self._resolve_symbol(symbol))
         interval_hours = self._get_funding_interval(symbol, data)
-        # Prefer nextFundingTimestamp (future payment) over fundingTimestamp (current/past)
-        next_ts = data.get("nextFundingTimestamp") or data.get("fundingTimestamp")
+        # Pick the EARLIEST future timestamp from both CCXT fields.
+        # OKX: fundingTimestamp = upcoming payment, nextFundingTimestamp = the one after.
+        # Bitget/others: fundingTimestamp = past payment, nextFundingTimestamp = upcoming.
+        _now_ms_pick = _time.time() * 1000
+        _ts_a = data.get("nextFundingTimestamp")
+        _ts_b = data.get("fundingTimestamp")
+        _future_candidates = [t for t in (_ts_a, _ts_b) if t and t > _now_ms_pick]
+        next_ts = min(_future_candidates) if _future_candidates else (_ts_a or _ts_b)
         rate = Decimal(str(data.get("fundingRate", 0)))
         
         # 🔍 DEBUG: Log REST fetch
