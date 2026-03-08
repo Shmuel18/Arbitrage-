@@ -192,7 +192,9 @@ export function useMarketData(): MarketDataState {
           summRes.status === 'fulfilled' && summRes.value?.total_trades != null
             ? summRes.value
             : prev.summary,
-        positions: httpPositions.length > 0 ? httpPositions : prev.positions,
+        // Trust a successful HTTP response even if it returns [] (trade closed).
+        // Only keep prev when the request itself failed (non-fulfilled).
+        positions: posRes.status === 'fulfilled' ? httpPositions : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         dailyPnl:
           dailyPnlRes.status === 'fulfilled' ? dailyPnlRes.value.total_pnl || 0 : prev.dailyPnl,
@@ -259,6 +261,8 @@ export function useMarketData(): MarketDataState {
             })();
 
             const newPositions = (() => {
+              // posArr === null  → field absent from WS payload (keep prev)
+              // posArr.length === 0 → explicitly empty (trade closed — clear!)
               let posArr: PositionRow[] | null = null;
               if (Array.isArray(d.positions)) {
                 posArr = d.positions;
@@ -269,7 +273,8 @@ export function useMarketData(): MarketDataState {
               ) {
                 posArr = (d.positions as any).positions;
               }
-              if (!posArr || posArr.length === 0) return prev.positions;
+              if (posArr === null) return prev.positions;  // field absent — keep prev
+              if (posArr.length === 0) return [];           // server says 0 positions — clear
               const prevKey = prev.positions.map((p) => p.id || p.symbol || '').join(',');
               const newKey = posArr.map((p) => p.id || p.symbol || '').join(',');
               return prevKey === newKey ? prev.positions : posArr;
