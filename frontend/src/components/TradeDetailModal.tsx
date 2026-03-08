@@ -88,6 +88,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const openedAt = trade.opened_at || trade.open_time || null;
   const closedAt = trade.closed_at || trade.close_time || null;
   const fundingCollections = trade.funding_collections ?? 0;
+  const confidenceFrom = (v: number): number => Math.max(0, Math.min(100, Math.round(v)));
+  const spreadAbs = Math.abs(Number(trade.entry_spread ?? 0));
+  const totalPnlAbs = Math.abs(Number(totalPnl ?? 0));
 
   const timelineEvents: TimelineEvent[] = [
     {
@@ -95,12 +98,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
       label: 'Execution Started',
       detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} pair opened`,
       timeLabel: formatDate(openedAt),
+      confidence: confidenceFrom(openedAt ? 92 : 70),
       status: 'done',
     },
     {
       id: 'mark',
       label: 'Spread Captured',
       detail: `Entry edge ${formatFundingRateN(trade.entry_spread, 4)} | Basis ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
+      confidence: confidenceFrom(55 + Math.min(40, spreadAbs * 2000)),
       status: 'done',
     },
     {
@@ -110,6 +115,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         fundingCollections > 0
           ? `${fundingCollections} collection(s), net ${formatUsd(trade.funding_collected_usd)}`
           : 'No funding settlement recorded',
+      confidence: confidenceFrom(fundingCollections > 0 ? 88 : trade.status === 'closed' ? 50 : 72),
       status: fundingCollections > 0 ? 'done' : trade.status === 'closed' ? 'pending' : 'live',
     },
     {
@@ -117,12 +123,14 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
       label: 'Exit & Attribution',
       detail: trade.exit_reason || 'Awaiting exit trigger',
       timeLabel: closedAt ? formatDate(closedAt) : undefined,
+      confidence: confidenceFrom(closedAt ? 90 : 68),
       status: trade.status === 'closed' ? 'done' : 'live',
     },
     {
       id: 'final',
       label: 'Net Result',
       detail: `${formatUsd(totalPnl)} total | hold ${formatDuration(trade.hold_minutes)}`,
+      confidence: confidenceFrom(trade.status === 'closed' ? 70 + Math.min(25, totalPnlAbs * 2.5) : 55),
       status: trade.status === 'closed' ? 'done' : 'pending',
     },
   ];

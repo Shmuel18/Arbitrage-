@@ -7,6 +7,7 @@ export interface TimelineEvent {
   label: string;
   detail: string;
   timeLabel?: string;
+  confidence?: number;
   status: TimelineStatus;
 }
 
@@ -37,9 +38,24 @@ const ExecutionTimeline: React.FC<ExecutionTimelineProps> = ({ title, events }) 
               <div className="nx-timeline__content">
                 <div className="nx-timeline__head">
                   <span className="nx-timeline__label">{event.label}</span>
-                  {event.timeLabel && (
-                    <span className="nx-timeline__time mono">{event.timeLabel}</span>
-                  )}
+                  <div className="nx-timeline__meta">
+                    {typeof event.confidence === 'number' && (
+                      <span
+                        className={`nx-timeline__confidence ${
+                          event.confidence >= 80
+                            ? 'nx-timeline__confidence--high'
+                            : event.confidence >= 60
+                            ? 'nx-timeline__confidence--mid'
+                            : 'nx-timeline__confidence--low'
+                        }`}
+                      >
+                        {event.confidence}%
+                      </span>
+                    )}
+                    {event.timeLabel && (
+                      <span className="nx-timeline__time mono">{event.timeLabel}</span>
+                    )}
+                  </div>
                 </div>
                 <div className="nx-timeline__detail">{event.detail}</div>
               </div>

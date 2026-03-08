@@ -2985,6 +2985,12 @@ code, .mono {
   gap: 8px;
 }
 
+.nx-timeline__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .nx-timeline__label {
   font-size: 12px;
   font-weight: 700;
@@ -2994,6 +3000,33 @@ code, .mono {
 .nx-timeline__time {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.nx-timeline__confidence {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.nx-timeline__confidence--high {
+  color: #10b981;
+  border-color: rgba(16,185,129,0.34);
+  background: rgba(16,185,129,0.12);
+}
+
+.nx-timeline__confidence--mid {
+  color: #f59e0b;
+  border-color: rgba(245,158,11,0.34);
+  background: rgba(245,158,11,0.12);
+}
+
+.nx-timeline__confidence--low {
+  color: #ef4444;
+  border-color: rgba(239,68,68,0.34);
+  background: rgba(239,68,68,0.12);
 }
 
 .nx-timeline__detail {

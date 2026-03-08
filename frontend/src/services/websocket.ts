@@ -1,6 +1,7 @@
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
+let manualClose = false;
 const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
 
@@ -15,6 +16,7 @@ function isValidWsMessage(v: unknown): v is Record<string, unknown> {
   if (typeof msg['type'] !== 'string') return false;
   // 'full_update' messages must carry a non-null data object
   if (msg['type'] === 'full_update' && (msg['data'] == null || typeof msg['data'] !== 'object')) return false;
+  if (msg['type'] === 'status_update' && (msg['data'] == null || typeof msg['data'] !== 'object')) return false;
   return true;
 }
 
@@ -32,6 +34,8 @@ export const connectWebSocket = (
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+
+  manualClose = false;
 
   // Dynamic WebSocket URL — works on localhost AND via ngrok/any host
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -64,6 +68,10 @@ export const connectWebSocket = (
   ws.onclose = () => {
     console.log('❌ WebSocket disconnected');
     ws = null;
+    if (manualClose) {
+      onConnectionChange?.('disconnected');
+      return;
+    }
     onConnectionChange?.('reconnecting');
     // Exponential backoff with jitter, capped at MAX_RECONNECT_DELAY
     if (!reconnectTimer) {
@@ -74,7 +82,7 @@ export const connectWebSocket = (
       reconnectAttempts++;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
-        connectWebSocket(onMessage);
+        connectWebSocket(onMessage, onConnectionChange);
       }, delay);
     }
   };
@@ -86,6 +94,7 @@ export const disconnectWebSocket = () => {
     reconnectTimer = null;
   }
   reconnectAttempts = 0;
+  manualClose = true;
   if (ws) {
     ws.close();
     ws = null;

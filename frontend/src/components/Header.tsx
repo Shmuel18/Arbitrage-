@@ -19,6 +19,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
   const { t, lang, setLang, theme, setTheme } = useSettings();
   const secsRef = useRef<HTMLElement>(null);
   const wsSecsRef = useRef<HTMLElement>(null);
+  const wsAgePillRef = useRef<HTMLDivElement>(null);
   const startRef = useRef(Date.now());
   const wsStartRef = useRef<number>(Date.now());
 
@@ -28,6 +29,11 @@ const Header: React.FC<HeaderProps> = React.memo(({
     wsStartRef.current = lastWsMessageAt ?? Date.now();
   }, [lastWsMessageAt]);
 
+  useEffect(() => {
+    if (!wsAgePillRef.current) return;
+    wsAgePillRef.current.className = 'nx-health-pill nx-health-pill--ok';
+  }, [lastWsMessageAt]);
+
   // Update DOM directly every second — no React re-render
   useEffect(() => {
     const id = setInterval(() => {
@@ -35,7 +41,16 @@ const Header: React.FC<HeaderProps> = React.memo(({
         secsRef.current.textContent = Math.floor((Date.now() - startRef.current) / 1000) + 's';
       }
       if (wsSecsRef.current) {
-        wsSecsRef.current.textContent = Math.floor((Date.now() - wsStartRef.current) / 1000) + 's';
+        const wsAgeSec = Math.floor((Date.now() - wsStartRef.current) / 1000);
+        wsSecsRef.current.textContent = wsAgeSec + 's';
+        if (wsAgePillRef.current) {
+          wsAgePillRef.current.className =
+            wsAgeSec <= 10
+              ? 'nx-health-pill nx-health-pill--ok'
+              : wsAgeSec <= 20
+              ? 'nx-health-pill nx-health-pill--warn'
+              : 'nx-health-pill nx-health-pill--down';
+        }
       }
     }, 1000);
     return () => clearInterval(id);
@@ -45,14 +60,6 @@ const Header: React.FC<HeaderProps> = React.memo(({
     wsConnection === 'connected'
       ? 'nx-health-pill nx-health-pill--ok'
       : wsConnection === 'reconnecting'
-      ? 'nx-health-pill nx-health-pill--warn'
-      : 'nx-health-pill nx-health-pill--down';
-
-  const stalenessSec = Math.floor((Date.now() - (lastFetchedAt ?? Date.now())) / 1000);
-  const stalenessClass =
-    stalenessSec <= 10
-      ? 'nx-health-pill nx-health-pill--ok'
-      : stalenessSec <= 20
       ? 'nx-health-pill nx-health-pill--warn'
       : 'nx-health-pill nx-health-pill--down';
 
@@ -87,7 +94,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
           <span className="nx-health-pill__dot" />WS {wsConnection}
         </div>
 
-        <div className={stalenessClass} title="Time since last websocket message">
+        <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
           WS age: <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
         </div>
       </div>

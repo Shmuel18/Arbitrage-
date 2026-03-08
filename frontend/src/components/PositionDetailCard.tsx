@@ -146,18 +146,22 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
   };
 
   const fundingCollections = position.funding_collections ?? 0;
+  const confidenceFrom = (v: number): number => Math.max(0, Math.min(100, Math.round(v)));
+  const targetDistance = targetMove != null ? Math.abs(Number(targetMove)) : null;
   const timelineEvents: TimelineEvent[] = [
     {
       id: 'entry',
       label: 'Position Opened',
       detail: `Entry spread ${formatPct(position.entry_edge_pct, 3)} | Basis ${formatPct(position.entry_basis_pct, 3)}`,
       timeLabel: formatDate(position.opened_at),
+      confidence: confidenceFrom(position.opened_at ? 90 : 68),
       status: 'done',
     },
     {
       id: 'mark',
       label: 'Mark-to-Market',
       detail: `Current spread ${formatPct(position.current_spread_pct, 3)} | Price PnL ${formatPct(position.price_pnl_pct, 3)}`,
+      confidence: confidenceFrom(62 + Math.min(24, Math.abs(Number(position.current_spread_pct ?? 0)) * 1200)),
       status: 'live',
     },
     {
@@ -167,6 +171,7 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
         fundingCollections > 0
           ? `${fundingCollections} collection(s), net ${formatUsd(position.funding_collected_usd)}`
           : `Next window ${formatCountdown(position.next_funding_ms)}`,
+      confidence: confidenceFrom(fundingCollections > 0 ? 86 : 72),
       status: fundingCollections > 0 ? 'done' : 'live',
     },
     {
@@ -178,6 +183,10 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
             ? 'Target reached'
             : `${Number(targetMove).toFixed(3)}% remaining`
           : 'Target tracking unavailable',
+      confidence:
+        targetDistance == null
+          ? 52
+          : confidenceFrom(Number(targetMove) <= 0 ? 93 : 68 + Math.max(0, 20 - targetDistance * 8)),
       status:
         targetMove == null ? 'pending' : Number(targetMove) <= 0 ? 'done' : 'live',
     },
@@ -185,6 +194,7 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
       id: 'state',
       label: 'Execution State',
       detail: position.state ? position.state.toUpperCase() : 'ACTIVE',
+      confidence: confidenceFrom(position.state ? 80 : 60),
       status: 'live',
     },
   ];
