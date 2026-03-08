@@ -246,6 +246,10 @@ class _CloseMixin:
                 )
 
             await self._redis.delete_trade_state(trade.trade_id)
+            # Cooldown prevents immediate re-entry into same symbol
+            cooldown_sec = self._cfg.trading_params.cooldown_after_close_seconds
+            if cooldown_sec > 0:
+                await self._redis.set_cooldown(trade.symbol, cooldown_sec)
             self._deregister_trade(trade)
 
             # ── Detailed trade summary ────────────────────────

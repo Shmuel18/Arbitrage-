@@ -257,12 +257,18 @@ class _ExitLogicMixin:
 
         # ── 3. PROFIT TARGET CHECK ───────────────────────────────
         profit_target = tp.profit_target_pct
-        if total_pnl_pct >= profit_target:
+        # Deduct exit slippage buffer — ticker prices overestimate
+        # realisable PnL on illiquid coins because actual fills are
+        # worse than top-of-book bid/ask.
+        adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
+        if adjusted_pnl >= profit_target:
             _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
             logger.info(
                 f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
-                f"PnL={float(total_pnl_pct):+.4f}% >= {float(profit_target)}% target "
-                f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}%) — "
+                f"PnL={float(total_pnl_pct):+.4f}% (adj={float(adjusted_pnl):+.4f}%) "
+                f">= {float(profit_target)}% target "
+                f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}% "
+                f"slippage_buf=-{float(tp.exit_slippage_buffer_pct):.4f}%) — "
                 f"exiting after {hold_min}min",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_exit"},
             )

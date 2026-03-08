@@ -30,6 +30,7 @@ class TradingParams(BaseModel):
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
     cooldown_after_orphan_hours: int = 2
+    cooldown_after_close_seconds: int = 120  # Block re-entry into same symbol after any close
     max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
@@ -43,6 +44,7 @@ class TradingParams(BaseModel):
     tier_bad_max_adverse_spread: Decimal = Decimal("2.0")  # BAD tier: max adverse price spread %
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
+    exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
 

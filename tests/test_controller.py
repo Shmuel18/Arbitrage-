@@ -323,9 +323,9 @@ class TestHoldOrExit:
             adapter.get_funding_rate.return_value = data
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Set prices: long up 0.7% → profit target hit
-        # entry: 50000, current long: 50350 → PnL = 350/50000 * 100 = 0.7%
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50350.0}
+        # Set prices: long up 1.0% → after exit_slippage_buffer (0.3%) → adj PnL 0.7% = target
+        # entry: 50000, current long: 50500 → PnL = 500/50000 * 100 = 1.0%
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50500.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
@@ -738,8 +738,8 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Long price rose enough for 0.8% PnL (above 0.7% target)
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50400.0}
+        # Long price rose enough for 1.1% PnL → adj 0.8% (above 0.7% target)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50550.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
