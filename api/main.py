@@ -236,115 +236,141 @@ async def broadcast_updates():
     """Background task to broadcast updates to all connected clients"""
     import time as _time  # import once at top of function, not inside loop
 
+    _heartbeat_json = lambda: json.dumps({  # noqa: E731
+        "type": "heartbeat",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
     while True:
+        # ── Always sleep 2s per cycle regardless of success/failure ──
         try:
-            if manager.active_connections and redis_client:
-                rc = redis_client  # local alias
+            if not manager.active_connections:
+                await asyncio.sleep(2)
+                continue
 
-                # ── Parallel Redis reads (single round of awaits) ────────
-                (
-                    status_data, positions_data, balances_data,
-                    opportunities_data, logs_data, pnl_latest,
-                ) = await asyncio.gather(
-                    rc.get("trinity:status"),
-                    rc.get("trinity:positions"),
-                    rc.get("trinity:balances"),
-                    rc.get("trinity:opportunities"),
-                    rc.lrange("trinity:logs", 0, 19),
-                    rc.get("trinity:pnl:latest"),
+            if not redis_client:
+                # No Redis yet — heartbeat only so WS AGE stays green.
+                await manager.broadcast(_heartbeat_json())
+                await asyncio.sleep(2)
+                continue
+
+            rc = redis_client  # local alias
+
+            # ── Parallel Redis reads — return_exceptions=True prevents a
+            #    single Redis hiccup from crashing the entire broadcast cycle ──
+            results = await asyncio.gather(
+                rc.get("trinity:status"),
+                rc.get("trinity:positions"),
+                rc.get("trinity:balances"),
+                rc.get("trinity:opportunities"),
+                rc.lrange("trinity:logs", 0, 19),
+                rc.get("trinity:pnl:latest"),
+                return_exceptions=True,
+            )
+            (
+                status_data, positions_data, balances_data,
+                opportunities_data, logs_data, pnl_latest,
+            ) = [None if isinstance(r, Exception) else r for r in results]
+
+            # Log any gather errors (once each) so operators notice Redis issues.
+            for key, res in zip(
+                ("status", "positions", "balances", "opportunities", "logs", "pnl_latest"),
+                results,
+            ):
+                if isinstance(res, Exception):
+                    print(f"[broadcast] Redis read error for '{key}': {res}")
+
+            # Summary needs its own sequential reads (zrange) — run in parallel with trades
+            summary_task = asyncio.create_task(
+                _compute_summary(rc), name="_compute_summary"
+            )
+            summary_task.add_done_callback(_task_done_handler)
+
+            # Build proper pnl structure from closed trades (last 24h)
+            pnl_struct = None
+            try:
+                cutoff = _time.time() - 86400
+                trades_raw = await rc.zrangebyscore(
+                    "trinity:trades:history", cutoff, float('inf'), withscores=True
                 )
+                dp = []
+                cumulative = 0.0
+                for item in trades_raw:
+                    tj, ts = item
+                    t = json.loads(tj)
+                    pnl_val = float(t.get('total_pnl') or t.get('net_profit') or 0)
+                    cumulative += pnl_val
+                    dp.append({"pnl": pnl_val, "cumulative_pnl": cumulative, "timestamp": float(ts), "symbol": t.get('symbol', '?')})
+                unrealized = float(json.loads(pnl_latest).get('unrealized_pnl', 0)) if pnl_latest else 0.0
+                pnl_struct = {"data_points": dp, "total_pnl": cumulative + unrealized, "realized_pnl": cumulative, "unrealized_pnl": unrealized}
+            except Exception as exc:
+                print(f"PnL structure build error: {exc}")
 
-                # Summary needs its own sequential reads (zrange) — run in parallel with trades
-                summary_task = asyncio.create_task(
-                    _compute_summary(rc), name="_compute_summary"
-                )
-                summary_task.add_done_callback(_task_done_handler)
+            # Build normalized trades list for frontend
+            trades_list = []
+            try:
+                recent_raw = await rc.zrange("trinity:trades:history", -20, -1)
+                for item in reversed(recent_raw):
+                    t = json.loads(item)
+                    invested = float(t.get('invested') or 0)
+                    total_pnl_t = float(t.get('total_pnl') or 0)
+                    pnl_pct = (total_pnl_t / invested) if invested > 0 else 0.0
+                    entry_edge = t.get('entry_edge_pct')
+                    trades_list.append({
+                        **t,
+                        'pnl': total_pnl_t,
+                        'pnl_percentage': pnl_pct,
+                        'open_time': t.get('opened_at'),
+                        'close_time': t.get('closed_at'),
+                        'exchanges': {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
+                        'size': f"${invested:,.0f}",
+                        'entry_spread': float(entry_edge) / 100 if entry_edge else None,
+                        'entry_basis_pct': float(t['entry_basis_pct']) / 100 if t.get('entry_basis_pct') is not None else None,
+                        'exit_spread': None,
+                        'price_pnl': float(t.get('price_pnl') or 0),
+                        'funding_net': float(t.get('funding_net') or 0),
+                        'invested': invested,
+                        'mode': t.get('mode', 'hold'),
+                        'exit_reason': t.get('exit_reason'),
+                        'funding_collections': int(t.get('funding_collections') or 0),
+                        'funding_collected_usd': float(t.get('funding_collected_usd') or 0),
+                    })
+            except Exception as exc:
+                print(f"Trades list build error: {exc}")
 
-                # Build proper pnl structure from closed trades (last 24h)
-                pnl_struct = None
-                try:
-                    cutoff = _time.time() - 86400
-                    trades_raw = await rc.zrangebyscore(
-                        "trinity:trades:history", cutoff, float('inf'), withscores=True
-                    )
-                    dp = []
-                    cumulative = 0.0
-                    for item in trades_raw:
-                        tj, ts = item
-                        t = json.loads(tj)
-                        pnl_val = float(t.get('total_pnl') or t.get('net_profit') or 0)
-                        cumulative += pnl_val
-                        dp.append({"pnl": pnl_val, "cumulative_pnl": cumulative, "timestamp": float(ts), "symbol": t.get('symbol', '?')})
-                    unrealized = float(json.loads(pnl_latest).get('unrealized_pnl', 0)) if pnl_latest else 0.0
-                    pnl_struct = {"data_points": dp, "total_pnl": cumulative + unrealized, "realized_pnl": cumulative, "unrealized_pnl": unrealized}
-                except Exception as exc:
-                    print(f"PnL structure build error: {exc}")
+            summary = await summary_task
 
-                # Build normalized trades list for frontend
-                trades_list = []
-                try:
-                    recent_raw = await rc.zrange("trinity:trades:history", -20, -1)
-                    for item in reversed(recent_raw):
-                        t = json.loads(item)
-                        invested = float(t.get('invested') or 0)
-                        total_pnl_t = float(t.get('total_pnl') or 0)
-                        pnl_pct = (total_pnl_t / invested) if invested > 0 else 0.0
-                        entry_edge = t.get('entry_edge_pct')
-                        trades_list.append({
-                            **t,
-                            'pnl': total_pnl_t,
-                            'pnl_percentage': pnl_pct,
-                            'open_time': t.get('opened_at'),
-                            'close_time': t.get('closed_at'),
-                            'exchanges': {'long': t.get('long_exchange'), 'short': t.get('short_exchange')},
-                            'size': f"${invested:,.0f}",
-                            'entry_spread': float(entry_edge) / 100 if entry_edge else None,
-                            'entry_basis_pct': float(t['entry_basis_pct']) / 100 if t.get('entry_basis_pct') is not None else None,
-                            'exit_spread': None,
-                            'price_pnl': float(t.get('price_pnl') or 0),
-                            'funding_net': float(t.get('funding_net') or 0),
-                            'invested': invested,
-                            'mode': t.get('mode', 'hold'),
-                            'exit_reason': t.get('exit_reason'),
-                            'funding_collections': int(t.get('funding_collections') or 0),
-                            'funding_collected_usd': float(t.get('funding_collected_usd') or 0),
-                        })
-                except Exception as exc:
-                    print(f"Trades list build error: {exc}")
+            # ── Normalize positions to always be a flat list ──────
+            positions_parsed = json.loads(positions_data) if positions_data else []
+            if isinstance(positions_parsed, dict):
+                positions_parsed = positions_parsed.get("positions", [])
 
-                summary = await summary_task
+            update = {
+                "type": "full_update",
+                "data": {
+                    "status": json.loads(status_data) if status_data else None,
+                    "positions": positions_parsed,
+                    "balances": json.loads(balances_data) if balances_data else None,
+                    "opportunities": json.loads(opportunities_data) if opportunities_data else None,
+                    "summary": summary,
+                    "pnl": pnl_struct,
+                    "logs": [json.loads(l) for l in logs_data] if logs_data else [],
+                    "trades": trades_list,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            await manager.broadcast(json.dumps(update))
 
-                # ── Normalize positions to always be a flat list ──────
-                positions_parsed = json.loads(positions_data) if positions_data else []
-                if isinstance(positions_parsed, dict):
-                    positions_parsed = positions_parsed.get("positions", [])
-
-                update = {
-                    "type": "full_update",
-                    "data": {
-                        "status": json.loads(status_data) if status_data else None,
-                        "positions": positions_parsed,
-                        "balances": json.loads(balances_data) if balances_data else None,
-                        "opportunities": json.loads(opportunities_data) if opportunities_data else None,
-                        "summary": summary,
-                        "pnl": pnl_struct,
-                        "logs": [json.loads(l) for l in logs_data] if logs_data else [],
-                        "trades": trades_list,
-                    },
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-                await manager.broadcast(json.dumps(update))
-            elif manager.active_connections:
-                # No Redis yet, but keep clients alive with explicit heartbeat.
-                await manager.broadcast(json.dumps({
-                    "type": "heartbeat",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }))
-            
-            await asyncio.sleep(2)
         except Exception as e:
             print(f"Error in broadcast_updates: {e}")
-            await asyncio.sleep(5)
+            # Even on error — send a heartbeat so WS AGE stays green.
+            try:
+                if manager.active_connections:
+                    await manager.broadcast(_heartbeat_json())
+            except Exception:
+                pass
+
+        await asyncio.sleep(2)
 
 
 # ── Serve React build (must be LAST — after all API routes) ──────
