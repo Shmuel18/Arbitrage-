@@ -128,21 +128,36 @@ class Scanner:
                     now_ts = time.time()
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
-                        logger.info(
-                            "📊 TOP 5 OPPORTUNITIES (near-term first, then by Net)",
-                            extra={"action": "top_opportunities"},
-                        )
+                        if display_qualified:
+                            logger.info(
+                                "📊 TOP 5 OPPORTUNITIES (near-term first, then by Net)",
+                                extra={"action": "top_opportunities"},
+                            )
+                        else:
+                            best_net = float(all_opps[0].net_edge_pct) if all_opps else 0.0
+                            logger.info(
+                                f"⚠️ No qualified opportunities now (best display net={best_net:+.4f}%). Showing display-only top 5.",
+                                extra={"action": "top_opportunities_empty"},
+                            )
                         for idx, opp in enumerate(display_top, 1):
                             immediate_spread = (
                                 (-opp.long_funding_rate) + opp.short_funding_rate
                             ) * Decimal("100")
                             q_mark = "✅" if opp.qualified else "○ "
+                            reject_reason = ""
+                            if not opp.qualified:
+                                if opp.net_edge_pct <= Decimal("0"):
+                                    reject_reason = " [REJECT: NET<=0]"
+                                elif opp.entry_tier == "adverse":
+                                    reject_reason = " [REJECT: ADVERSE]"
+                                else:
+                                    reject_reason = " [REJECT: RULES]"
                             tier_mark = f" [{opp.entry_tier.upper()}]" if opp.entry_tier else ""
                             price_mark = f" P={float(opp.price_spread_pct):+.2f}%" if opp.price_spread_pct else ""
                             logger.info(
                                 f"  {idx}. {q_mark} {opp.symbol} | {opp.long_exchange}↔{opp.short_exchange} | "
                                 f"L={opp.long_funding_rate:.6f} S={opp.short_funding_rate:.6f} | "
-                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}%{tier_mark}{price_mark} | "
+                                f"Spread: {immediate_spread:.4f}% | Net: {opp.net_edge_pct:.4f}%{tier_mark}{price_mark}{reject_reason} | "
                                 f"/h: {opp.hourly_rate_pct:.4f}% ({opp.min_interval_hours}h)",
                                 extra={
                                     "action": "opportunity",
