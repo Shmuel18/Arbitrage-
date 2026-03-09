@@ -2,14 +2,42 @@
 Bot Controls API Routes
 """
 
+from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Any, Optional
 import json
+import logging
 import os
+import time
+
+logger = logging.getLogger("trinity.api.controls")
 
 redis_client = None
+
+# ── Simple in-memory rate limiter ──────────────────────────────────
+_rate_limit_ledger: dict[str, list[float]] = {}
+_RATE_LIMIT_WINDOW = 60.0   # seconds
+_RATE_LIMIT_MAX_CALLS = 10  # max calls per window per endpoint
+
+
+def _check_rate_limit(endpoint: str) -> None:
+    """Raise 429 if this endpoint has been called too often."""
+    now = time.monotonic()
+    timestamps = _rate_limit_ledger.setdefault(endpoint, [])
+    # Prune old entries outside the window
+    cutoff = now - _RATE_LIMIT_WINDOW
+    _rate_limit_ledger[endpoint] = [ts for ts in timestamps if ts > cutoff]
+    timestamps = _rate_limit_ledger[endpoint]
+    if len(timestamps) >= _RATE_LIMIT_MAX_CALLS:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {_RATE_LIMIT_MAX_CALLS} calls "
+                   f"per {int(_RATE_LIMIT_WINDOW)}s for {endpoint}",
+        )
+    timestamps.append(now)
 
 
 def _require_admin_token(x_admin_token: Optional[str]) -> None:
@@ -63,6 +91,7 @@ async def send_command(command: BotCommand, x_admin_token: Optional[str] = Heade
             raise HTTPException(status_code=503, detail="Redis not connected")
         
         _require_admin_token(x_admin_token)
+        _check_rate_limit("command")
 
         command_data = {
             "action": command.action,
@@ -90,6 +119,7 @@ async def update_config(update: ConfigUpdate, x_admin_token: Optional[str] = Hea
             raise HTTPException(status_code=503, detail="Redis not connected")
 
         _require_admin_token(x_admin_token)
+        _check_rate_limit("config")
 
         if update.key not in _ALLOWED_CONFIG_KEYS:
             raise HTTPException(
@@ -130,6 +160,7 @@ async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
     expected = os.environ.get("EMERGENCY_TOKEN")
     if expected and x_emergency_token != expected:
         raise HTTPException(status_code=403, detail="Invalid or missing emergency token")
+    _check_rate_limit("emergency_stop")
     try:
         if not redis_client:
             raise HTTPException(status_code=503, detail="Redis not connected")

@@ -6,12 +6,15 @@ Publishes bot data to Redis for API consumption
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Any
 import asyncio
 
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
+
+logger = logging.getLogger("trinity.publisher")
 
 
 class APIPublisher:
@@ -79,11 +82,33 @@ class APIPublisher:
         await self.redis.set("trinity:summary", json.dumps(summary))
     
     def record_trade(self, is_win: bool, pnl: float = 0.0) -> None:
-        """Record a trade result for win rate and PnL tracking."""
+        """Record a trade result for win rate and PnL tracking.
+
+        Also persists incremental counters to Redis so the broadcast
+        loop can read them without recomputing from full history.
+        """
         self._total_trades += 1
         self._total_realized_pnl += pnl
         if is_win:
             self._winning_trades += 1
+        # Fire-and-forget counter updates in Redis — best effort.
+        asyncio.ensure_future(self._update_redis_counters(pnl, is_win))
+
+    async def _update_redis_counters(self, pnl: float, is_win: bool) -> None:
+        """Atomically increment trade counters in Redis."""
+        try:
+            await asyncio.gather(
+                self.redis.incr("trinity:stats:trade_count"),
+                self.redis.incrbyfloat("trinity:stats:total_pnl", pnl),
+                *(
+                    [self.redis.incr("trinity:stats:win_count")]
+                    if is_win
+                    else []
+                ),
+                return_exceptions=True,
+            )
+        except Exception as exc:
+            logger.debug("Failed to update Redis counters: %s", exc)
     
     async def publish_positions(self, positions: List[Dict[str, Any]]):
         """Publish active positions"""

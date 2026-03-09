@@ -1,0 +1,86 @@
+/**
+ * useSnapshotPoller — REST polling hook with AbortController.
+ *
+ * Fires an immediate fetch on mount, then polls every 5 s.
+ * Each cycle cancels the previous in-flight request.
+ */
+import { useCallback, useEffect, useRef } from 'react';
+import axios from 'axios';
+import {
+  getBalances,
+  getLogs,
+  getOpportunities,
+  getPnL,
+  getPositions,
+  getStatus,
+  getSummary,
+  getTrades,
+} from '../services/api';
+import { MarketAction } from './useMarketReducer';
+
+const _POLL_INTERVAL_MS = 5000;
+
+export function useSnapshotPoller(
+  dispatch: (action: MarketAction) => void,
+  pnlHoursRef: React.MutableRefObject<number>,
+) {
+  const abortCtrlRef = useRef<AbortController | null>(null);
+  const dispatchRef = useRef(dispatch);
+  dispatchRef.current = dispatch;
+
+  const fetchAll = useCallback(async () => {
+    abortCtrlRef.current?.abort();
+    const ctrl = new AbortController();
+    abortCtrlRef.current = ctrl;
+    const { signal } = ctrl;
+
+    try {
+      const hours = pnlHoursRef.current;
+      const pnlPromise = getPnL(hours, signal);
+      const dailyPnlPromise = hours === 24 ? pnlPromise : getPnL(24, signal);
+
+      const [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, dailyPnlRes, tradesRes] =
+        await Promise.allSettled([
+          getStatus(signal),
+          getBalances(signal),
+          getOpportunities(signal),
+          getLogs(50, signal),
+          getSummary(signal),
+          getPositions(signal),
+          pnlPromise,
+          dailyPnlPromise,
+          getTrades(20, undefined, signal),
+        ]);
+
+      if (signal.aborted) return;
+
+      dispatchRef.current({
+        type: 'HTTP_FETCH_RESULT',
+        payload: {
+          status: statusRes,
+          balances: balRes,
+          opportunities: oppRes,
+          logs: logsRes,
+          summary: summRes,
+          positions: posRes,
+          pnl: pnlRes,
+          dailyPnl: dailyPnlRes,
+          trades: tradesRes,
+        },
+      });
+    } catch (error) {
+      if (!axios.isCancel(error)) {
+        console.error('Error fetching data:', error);
+      }
+    }
+  }, [pnlHoursRef]);
+
+  useEffect(() => {
+    fetchAll();
+    const interval = setInterval(fetchAll, _POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      abortCtrlRef.current?.abort();
+    };
+  }, [fetchAll]);
+}

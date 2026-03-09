@@ -185,6 +185,17 @@ export interface Translations {
   pdCollections: string;
   pdTargetReached: string;
   pdToTarget: string;
+
+  // Risk Radar
+  rrTitle: string;
+  rrMaxDrawdown: string;
+  rrMarginUsed: string;
+  rrSymbolConc: string;
+  rrExchangeConc: string;
+  rrLow: string;
+  rrModerate: string;
+  rrHigh: string;
+  rrNoData: string;
 }
 
 const en: Translations = {
@@ -360,6 +371,17 @@ const en: Translations = {
   pdCollections: 'Collections',
   pdTargetReached: 'Reached!',
   pdToTarget: 'to target',
+
+  // Risk Radar
+  rrTitle: 'RISK RADAR',
+  rrMaxDrawdown: 'MAX DRAWDOWN',
+  rrMarginUsed: 'MARGIN UTILIZATION',
+  rrSymbolConc: 'SYMBOL CONCENTRATION',
+  rrExchangeConc: 'EXCHANGE CONCENTRATION',
+  rrLow: 'Low risk',
+  rrModerate: 'Moderate',
+  rrHigh: 'High risk',
+  rrNoData: 'No data yet',
 };
 
 const he: Translations = {
@@ -535,6 +557,17 @@ const he: Translations = {
   pdCollections: 'גביות',
   pdTargetReached: 'הושג!',
   pdToTarget: 'ליעד',
+
+  // Risk Radar
+  rrTitle: 'ראדר סיכון',
+  rrMaxDrawdown: 'ירידה מקסימלית',
+  rrMarginUsed: 'ניצולת מרג׳ין',
+  rrSymbolConc: 'ריכוז סימבול',
+  rrExchangeConc: 'ריכוז בורסה',
+  rrLow: 'סיכון נמוך',
+  rrModerate: 'בינוני',
+  rrHigh: 'סיכון גבוה',
+  rrNoData: 'אין נתונים עדיין',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

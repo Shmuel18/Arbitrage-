@@ -11,6 +11,7 @@ import RecentTradesPanel from './RecentTradesPanel';
 import RightPanel from './RightPanel';
 import SystemLogs from './SystemLogs';
 import SignalTape from './SignalTape';
+import RiskRadar from './RiskRadar';
 
 export const SECTION_IDS = {
   dashboard: 'section-dashboard',
@@ -105,6 +106,13 @@ const Dashboard: React.FC<DashboardProps> = ({
                 avgPnl={data.summary?.avg_pnl ?? 0}
               />
             </div>
+
+            <RiskRadar
+              positions={data.positions || []}
+              totalBalance={data.balances?.total ?? 0}
+              dailyPnl={data.dailyPnl}
+              allTimePnl={data.summary?.all_time_pnl ?? 0}
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               <div className="lg:col-span-2" id={SECTION_IDS.positions}>

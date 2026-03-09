@@ -16,7 +16,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
   wsConnection,
   lastWsMessageAt,
 }) => {
-  const { t, lang, setLang } = useSettings();
+  const { t, lang, setLang, theme, setTheme } = useSettings();
   const secsRef = useRef<HTMLElement>(null);
   const wsSecsRef = useRef<HTMLElement>(null);
   const wsAgePillRef = useRef<HTMLDivElement>(null);
@@ -68,6 +68,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
       : 'nx-health-pill nx-health-pill--down';
 
   const toggleLang = () => setLang(lang === 'en' ? 'he' : 'en');
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   return (
     <header className="top-bar">
@@ -109,6 +110,10 @@ const Header: React.FC<HeaderProps> = React.memo(({
       <div className="top-bar-right">
         <button onClick={toggleLang} className="nx-topbar-btn" title={t.language}>
           {lang === 'en' ? 'עב' : 'EN'}
+        </button>
+
+        <button onClick={toggleTheme} className="nx-topbar-btn" title={t.theme}>
+          {theme === 'dark' ? '☀️' : '🌙'}
         </button>
       </div>
     </header>

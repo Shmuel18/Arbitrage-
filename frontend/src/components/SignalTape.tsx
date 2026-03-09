@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 
 interface LogEntry {
   timestamp: string;
@@ -20,11 +20,20 @@ const LEVEL_COLOR: Record<string, string> = {
 const levelColor = (level: string): string =>
   LEVEL_COLOR[level.toUpperCase()] ?? '#475569';
 
-const SignalTape: React.FC<SignalTapeProps> = memo(({ logs }) => {
-  if (!logs || logs.length === 0) return null;
+/** Compute a scroll duration that stays visually comfortable regardless of
+ *  how many items are in the tape. Roughly 3s per item, clamped 15–120s. */
+function computeTapeDuration(itemCount: number): string {
+  const secs = Math.max(15, Math.min(120, itemCount * 3));
+  return `${secs}s`;
+}
 
+const SignalTape: React.FC<SignalTapeProps> = memo(({ logs }) => {
   // Take the 30 most recent entries; filter out noise.
-  const items = logs.slice(0, 30);
+  const items = (logs ?? []).slice(0, 30);
+
+  const tapeDuration = useMemo(() => computeTapeDuration(items.length), [items.length]);
+
+  if (items.length === 0) return null;
 
   // Duplicate items so the marquee loops seamlessly:
   // The inner container is 200% wide, second half mirrors the first.
@@ -44,7 +53,10 @@ const SignalTape: React.FC<SignalTapeProps> = memo(({ logs }) => {
     <div className="signal-tape" aria-hidden="true">
       <div className="signal-tape__label">FEED</div>
       <div className="signal-tape__track">
-        <div className="signal-tape__inner">
+        <div
+          className="signal-tape__inner"
+          style={{ '--tape-duration': tapeDuration } as React.CSSProperties}
+        >
           {renderItems('a')}
           {renderItems('b')}
         </div>

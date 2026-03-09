@@ -961,11 +961,13 @@ code, .mono {
 }
 
 .xcards-grid--secondary .xcard-value {
-  font-size: 20px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .xcards-grid--secondary .xcard-label {
-  font-size: 9.5px;
+  font-size: 9px;
+  font-weight: 700;
 }
 
 .xcards-grid--secondary .xcard::after {
@@ -1090,7 +1092,7 @@ code, .mono {
 
 .xcard-value {
   font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
@@ -3720,7 +3722,7 @@ button:focus-visible {
 
 /* ── Responsive secondary stats row ──────────────────────────── */
 @media (max-width: 1280px) {
-  .xcards-grid--secondary .xcard-value { font-size: 17px; }
+  .xcards-grid--secondary .xcard-value { font-size: 16px; }
 }
 
 @media (max-width: 1024px) {
@@ -3735,7 +3737,7 @@ button:focus-visible {
   .xcards-grid--secondary {
     grid-template-columns: 1fr;
   }
-  .xcards-grid--secondary .xcard-value { font-size: 20px; }
+  .xcards-grid--secondary .xcard-value { font-size: 16px; }
 }
 
 /* ── Staggered grid entrance ─────────────────────────────────── */
@@ -3745,12 +3747,12 @@ button:focus-visible {
 }
 
 .nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(1) { animation-delay: 0ms; }
-.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(2) { animation-delay: 60ms; }
-.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(3) { animation-delay: 120ms; }
-.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(4) { animation-delay: 180ms; }
-.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(1) { animation-delay: 220ms; }
-.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(2) { animation-delay: 280ms; }
-.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(3) { animation-delay: 340ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(2) { animation-delay: 100ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(3) { animation-delay: 200ms; }
+.nx-stats-layout > .xcards-grid--primary > .xcard:nth-child(4) { animation-delay: 300ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(1) { animation-delay: 380ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(2) { animation-delay: 480ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(3) { animation-delay: 580ms; }
 
 /* ══════════════════════════════════════════
    SIGNAL TAPE — Live event marquee
@@ -3796,7 +3798,7 @@ button:focus-visible {
 .signal-tape__inner {
   display: flex;
   white-space: nowrap;
-  animation: tape-scroll 60s linear infinite;
+  animation: tape-scroll var(--tape-duration, 60s) linear infinite;
   will-change: transform;
 }
 
@@ -3839,4 +3841,167 @@ button:focus-visible {
   color: var(--text-muted);
   font-size: 11px;
 }
-.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(4) { animation-delay: 400ms; }
+.nx-stats-layout > .xcards-grid--secondary > .xcard:nth-child(4) { animation-delay: 680ms; }
+
+/* ══════════════════════════════════════════
+   RISK RADAR — Risk posture strip
+   ══════════════════════════════════════════ */
+.risk-radar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(4, 8, 15, 0.65);
+  border: 1px solid rgba(96, 165, 250, 0.07);
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+
+.risk-radar__title {
+  grid-column: 1 / -1;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.risk-radar__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(96, 165, 250, 0.06);
+  border-radius: 8px;
+}
+
+.risk-radar__label {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.risk-radar__value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.risk-radar__bar-bg {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  margin-top: 2px;
+}
+
+.risk-radar__bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+
+@media (max-width: 768px) {
+  .risk-radar {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .risk-radar {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ══════════════════════════════════════════
+   CHART CROSSHAIR & TOOLTIP
+   ══════════════════════════════════════════ */
+.nx-chart-container {
+  position: relative;
+  cursor: crosshair;
+}
+
+.nx-chart-crosshair {
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  pointer-events: none;
+}
+
+.nx-chart-tooltip {
+  position: absolute;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.nx-chart-tooltip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nx-chart-tooltip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Light mode: new component overrides ─────────────────────── */
+[data-theme="light"] .risk-radar {
+  background: rgba(37, 99, 235, 0.03);
+  border-color: rgba(37, 99, 235, 0.10);
+}
+
+[data-theme="light"] .risk-radar__cell {
+  background: #fff;
+  border-color: rgba(37, 99, 235, 0.10);
+}
+
+[data-theme="light"] .risk-radar__label {
+  color: #64748b;
+}
+
+[data-theme="light"] .risk-radar__value {
+  color: #0f172a;
+}
+
+[data-theme="light"] .risk-radar__bar-bg {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .nx-chart-tooltip {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(37, 99, 235, 0.15);
+  color: #0f172a;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.10);
+}
+
+[data-theme="light"] .nx-chart-crosshair {
+  stroke: rgba(37, 99, 235, 0.25);
+}
+
+[data-theme="light"] .signal-tape {
+  background: rgba(37, 99, 235, 0.04);
+  border-color: rgba(37, 99, 235, 0.10);
+}
+
+[data-theme="light"] .signal-tape__label {
+  color: #475569;
+  background: rgba(37, 99, 235, 0.06);
+}

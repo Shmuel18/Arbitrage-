@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { formatCurrency } from '../utils/format';
 
@@ -17,12 +17,19 @@ interface AnalyticsPanelProps {
   totalBalance?: number;
 }
 
+function formatTime(ts: number): string {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange, totalBalance }) => {
   const { t } = useSettings();
   const points = pnl?.data_points ?? [];
   const total = pnl?.total_pnl ?? 0;
   const unrealized = pnl?.unrealized_pnl ?? 0;
   const realized = pnl?.realized_pnl ?? 0;
+
+  const [hover, setHover] = useState<{ x: number; y: number; idx: number } | null>(null);
 
   const width = 600;
   const height = 160;
@@ -53,6 +60,26 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
   // Stroke: gradient that switches color at zero line
   const zeroFrac = zeroY / height; // 0 = top, 1 = bottom
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const mouseX = ((e.clientX - rect.left) / rect.width) * width;
+    // Find nearest data point
+    if (values.length <= 1) return;
+    const idx = Math.round((mouseX / width) * (values.length - 1));
+    const clampedIdx = Math.max(0, Math.min(values.length - 1, idx));
+    setHover({
+      x: scaleX(clampedIdx),
+      y: scaleY(values[clampedIdx]),
+      idx: clampedIdx,
+    });
+  };
+
+  const handleMouseLeave = () => setHover(null);
+
+  // Current hovered chart point data
+  const hoverPoint = hover ? chartPoints[hover.idx] : null;
 
   return (
     <div className="card p-5" style={{ position: 'relative' }}>
@@ -122,8 +149,15 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
       <div className="nx-chart-area">
         {values.length > 1 ? (
-          <>
-            <svg width="100%" height="160" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+          <div className="nx-chart-container">
+            <svg
+              width="100%"
+              height="160"
+              viewBox={`0 0 ${width} ${height}`}
+              preserveAspectRatio="none"
+              onMouseMove={handleMouseMove}
+              onMouseLeave={handleMouseLeave}
+            >
               <defs>
                 {/* Clip to above-zero region (green area) */}
                 <clipPath id="clip-above">
@@ -147,8 +181,35 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
               <path d={closedFillPath} fill="rgba(239,68,68,0.15)" clipPath="url(#clip-below)" />
               {/* Line with split color */}
               <path d={path} fill="none" stroke="url(#line-grad)" strokeWidth="2" filter="drop-shadow(0 0 3px rgba(255,255,255,0.2))" />
+              {/* Crosshair */}
+              {hover && (
+                <>
+                  <line x1={hover.x} y1={0} x2={hover.x} y2={height} className="nx-chart-crosshair" />
+                  <line x1={0} y1={hover.y} x2={width} y2={hover.y} className="nx-chart-crosshair" />
+                  <circle cx={hover.x} cy={hover.y} r="4" fill={values[hover.idx] >= 0 ? '#22c55e' : '#ef4444'} stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" />
+                </>
+              )}
             </svg>
-          </>
+            {/* Tooltip */}
+            {hover && hoverPoint && (
+              <div
+                className="nx-chart-tooltip"
+                style={{
+                  left: `${(hover.x / width) * 100}%`,
+                  top: hover.y > height / 2 ? 8 : undefined,
+                  bottom: hover.y <= height / 2 ? 8 : undefined,
+                }}
+              >
+                <div className="nx-chart-tooltip__row">
+                  <span className="nx-chart-tooltip__dot" style={{ background: hoverPoint.cumulative_pnl >= 0 ? '#22c55e' : '#ef4444' }} />
+                  {formatCurrency(hoverPoint.cumulative_pnl)}
+                </div>
+                <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>
+                  {formatTime(hoverPoint.timestamp)}
+                </div>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="text-muted text-xs" style={{ padding: '40px 0', textAlign: 'center' }}>{t.waitingPnl}</div>
         )}

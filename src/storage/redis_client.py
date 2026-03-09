@@ -63,6 +63,14 @@ class RedisClient:
         """Add to a sorted set (no prefix applied). Returns number of elements added."""
         return await self._client.zadd(key, mapping)
 
+    async def incr(self, key: str) -> int:
+        """Atomically increment an integer key by 1. Returns new value."""
+        return await self._client.incr(key)
+
+    async def incrbyfloat(self, key: str, amount: float) -> float:
+        """Atomically increment a key by a float amount. Returns new value."""
+        return await self._client.incrbyfloat(key, amount)
+
     async def zrangebyscore(
         self, key: str, min_score: float, max_score: float,
         *, withscores: bool = False,

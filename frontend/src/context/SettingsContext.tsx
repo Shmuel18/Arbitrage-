@@ -31,9 +31,9 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
   const [lang, setLang] = useState<Lang>(() => {
     return (localStorage.getItem('trinity_lang') as Lang) || 'en';
   });
-  // Dark-only: theme toggle is removed. Always force dark mode.
-  const theme: Theme = 'dark';
-  const setTheme = (_t: Theme) => { /* intentionally no-op — dark only */ };
+  const [theme, setTheme] = useState<Theme>(() => {
+    return (localStorage.getItem('trinity_theme') as Theme) || 'dark';
+  });
 
   const isRtl = lang === 'he';
   const t = translations[lang];
@@ -44,12 +44,17 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) 
     document.documentElement.lang = lang;
   }, [lang, isRtl]);
 
-  // Always enforce dark theme — colour scheme is dark-only.
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    document.body.classList.add('dark-theme');
-    document.body.classList.remove('light-theme');
-  }, []);
+    localStorage.setItem('trinity_theme', theme);
+    document.documentElement.setAttribute('data-theme', theme);
+    if (theme === 'light') {
+      document.body.classList.add('light-theme');
+      document.body.classList.remove('dark-theme');
+    } else {
+      document.body.classList.add('dark-theme');
+      document.body.classList.remove('light-theme');
+    }
+  }, [theme]);
 
   return (
     <SettingsContext.Provider value={{ lang, setLang, theme, setTheme, t, isRtl }}>
