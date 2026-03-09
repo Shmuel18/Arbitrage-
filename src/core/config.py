@@ -46,6 +46,7 @@ class TradingParams(BaseModel):
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
+    basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
     liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
 
 

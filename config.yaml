@@ -30,6 +30,7 @@ trading_params:
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional
   exit_slippage_buffer_pct: 0.3 # Extra margin deducted from PnL before profit target check
   basis_recovery_timeout_minutes: 30 # After funding, wait up to 30min for price basis to recover
+  basis_recovery_tolerance_pct: 0.10 # Allow basis to be 0.10% below entry and still exit (avoid waiting forever)
   liquidation_safety_pct: 5.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)
 
 execution:

@@ -170,7 +170,7 @@ class TradeRecord:
     funding_collected_usd: Decimal = Decimal("0")  # cumulative USD received
     # Price basis at entry: (entry_long_price − entry_short_price) / entry_short_price × 100
     # Positive = long was more expensive at entry. Used as the exit break-even threshold:
-    # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≤ entry_basis_pct
+    # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≥ entry_basis_pct
     entry_basis_pct: Optional[Decimal] = None
     # Tier-based entry classification
     entry_tier: Optional[str] = None       # TOP / MEDIUM / BAD (see EntryTier)

@@ -302,16 +302,56 @@ class ExchangeAdapter:
         )
 
     async def verify_credentials(self) -> bool:
-        """Test an authenticated call. Returns False if keys are invalid."""
-        try:
-            await self._exchange.fetch_balance()
-            return True
-        except Exception as e:
-            logger.warning(
-                f"Credentials invalid for {self.exchange_id}: {e}",
-                extra={"exchange": self.exchange_id, "action": "auth_fail"},
-            )
-            return False
+        """Test an authenticated call. Returns False only if keys are truly invalid.
+
+        Retries up to 3 times on network errors before giving up.
+        Distinguishes auth failures (wrong API key) from transient
+        network issues (timeout, DNS, rate-limit).
+        """
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                await self._exchange.fetch_balance()
+                return True
+            except (
+                ccxtpro.AuthenticationError,
+                ccxtpro.PermissionDenied,
+                ccxtpro.AccountNotEnabled,
+            ) as e:
+                logger.warning(
+                    f"Credentials invalid for {self.exchange_id}: {e}",
+                    extra={"exchange": self.exchange_id, "action": "auth_fail"},
+                )
+                return False
+            except (
+                ccxtpro.NetworkError,
+                ccxtpro.RequestTimeout,
+                ccxtpro.ExchangeNotAvailable,
+                ccxtpro.DDoSProtection,
+                OSError,
+            ) as e:
+                if attempt < max_retries:
+                    wait = 5 * attempt
+                    logger.warning(
+                        f"Network error verifying {self.exchange_id} "
+                        f"(attempt {attempt}/{max_retries}): {e} — retrying in {wait}s",
+                        extra={"exchange": self.exchange_id, "action": "auth_retry"},
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error(
+                        f"Could not verify {self.exchange_id} after {max_retries} "
+                        f"attempts (network issue, NOT invalid keys): {e}",
+                        extra={"exchange": self.exchange_id, "action": "auth_network_fail"},
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(
+                    f"Unexpected error verifying {self.exchange_id}: {e}",
+                    extra={"exchange": self.exchange_id, "action": "auth_fail"},
+                )
+                return False
+        return False  # unreachable but satisfies type checker
 
     def _resolve_symbol(self, symbol: str) -> str:
         """Return the original exchange symbol for ccxt API calls.

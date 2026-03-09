@@ -194,7 +194,7 @@ class TestHoldOrExit:
     async def test_holds_when_spread_above_threshold(
         self, controller, config, mock_exchange_mgr
     ):
-        """After funding, basis is adverse (current > entry) so should HOLD while waiting for recovery."""
+        """After funding, basis is adverse (current < entry) so should HOLD while waiting for recovery."""
         config.trading_params.exit_offset_seconds = 0  # instant for testing
         config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
 
@@ -220,10 +220,10 @@ class TestHoldOrExit:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Entry basis = 0%, but current long is higher → adverse basis
+        # Entry basis = 0%, current long dropped → adverse basis (price loss)
         trade.entry_basis_pct = Decimal("0")
-        # Long price went up more than short → basis widened (adverse)
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50100.0}
+        # Long price dropped, short stayed → basis below entry (adverse)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 49800.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
@@ -296,8 +296,8 @@ class TestHoldOrExit:
         trade.entry_basis_pct = Decimal("0")
         trade._funding_paid_long = True
         trade._funding_paid_short = True
-        # Adverse basis: long went up more than short
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50200.0}
+        # Adverse basis: long dropped → basis below entry (price loss)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 49700.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
@@ -648,8 +648,8 @@ class TestCherryPickHardExit:
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
         trade.entry_basis_pct = Decimal("0")
-        # Adverse basis so it doesn't trigger basis_recovery exit
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50150.0}
+        # Adverse basis (long dropped) so it doesn't trigger basis_recovery exit
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 49800.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)
@@ -676,8 +676,8 @@ class TestBasisGuard:
             data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
             adapter._funding_rate_cache["BTC/USDT"] = data
 
-        # Adverse basis: long went up → current basis > entry basis
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50100.0}
+        # Adverse basis: long dropped → current basis < entry basis (price loss)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 49800.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         trade = _make_trade(controller, spread_pct="1.0")
@@ -836,8 +836,8 @@ class TestNonQuickCyclePath:
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
         trade.entry_basis_pct = Decimal("0")
-        # Adverse: long went up, basis widened
-        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50200.0}
+        # Adverse: long dropped → basis below entry (price loss)
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 49700.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
 
         await controller._check_exit(trade)

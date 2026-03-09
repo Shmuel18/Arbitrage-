@@ -123,14 +123,15 @@ async def main() -> None:
 
     # ── Embedded API server (runs inside bot process — never dies separately) ──
     from api.main import app as api_app, manager as ws_manager
-    # Inject the bot's own Redis client into the API routes
+    from api.broadcast_service import BroadcastService
     from api.routes import positions as pos_route, trades as trades_route
     from api.routes import controls as ctrl_route, analytics as ana_route
+    # Inject the bot's own Redis client into the API routes
     pos_route.set_redis_client(redis)
     trades_route.set_redis_client(redis)
     ctrl_route.set_redis_client(redis)
     ana_route.set_redis_client(redis)
-    # Store reference so broadcast_updates() can use it
+    # Store reference so API module can use it
     import api.main as api_module
     api_module.redis_client = redis
 
@@ -144,9 +145,20 @@ async def main() -> None:
     uvicorn_server = uvicorn.Server(uvicorn_config)
 
     api_task = asyncio.create_task(uvicorn_server.serve(), name="api-server")
-    # Start the WebSocket broadcast loop (normally started by lifespan)
-    from api.main import broadcast_updates
-    broadcast_task = asyncio.create_task(broadcast_updates(), name="ws-broadcast")
+    # Start the WebSocket broadcast loop (extracted to BroadcastService)
+    broadcast_svc = BroadcastService(ws_manager, redis)
+    broadcast_task = asyncio.create_task(
+        broadcast_svc.run_forever(), name="ws-broadcast",
+    )
+
+    def _broadcast_done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.error(f"Task {t.get_name()} failed: {exc}")
+
+    broadcast_task.add_done_callback(_broadcast_done)
     logger.info("Embedded API server started on port 8000",
                 extra={"action": "api_started"})
 

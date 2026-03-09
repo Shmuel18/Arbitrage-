@@ -6,8 +6,10 @@ Exit rules (in priority order):
   3. CHERRY_PICK HARD:   exit BEFORE costly funding payment
   4. BASIS RECOVERY:     after funding is collected, exit when the cross-exchange
                          price basis (long-short)/short returns to entry level or
-                         better (favorable).  This ensures we don't give back
-                         funding profits to adverse price movements.
+                         better (within tolerance).  If current_basis >= entry_basis
+                         - tolerance, price PnL ≈ 0 → funding profit is preserved.
+                         This ensures we don't give back funding profits to adverse
+                         price movements.
   5. BASIS HARD STOP:    if basis doesn't recover within basis_recovery_timeout_minutes
                          (default 30min), exit immediately -- don't hold indefinitely.
   6. TIME-BASED:         if exit_timeout_hours after funding payment and no basis
@@ -415,16 +417,20 @@ class _ExitLogicMixin:
         if l_price > 0 and s_price > 0:
             _current_basis = (l_price - s_price) / s_price * Decimal("100")
 
-        # Favorable = current basis ≤ entry basis (spread narrowed or reversed)
-        # entry_basis is (long−short)/short at entry.  If it shrinks, we profit.
-        _basis_favorable = _current_basis <= _entry_basis
+        # Favorable = current basis ≥ entry basis (spread returned to entry level)
+        # Price PnL ≈ (current_basis − entry_basis) × notional.
+        # When current ≥ entry → price PnL ≥ 0 → safe to exit with funding profit.
+        # Small tolerance avoids waiting forever for exact recovery.
+        _tolerance = getattr(tp, 'basis_recovery_tolerance_pct', Decimal("0.10"))
+        _basis_favorable = _current_basis >= (_entry_basis - _tolerance)
 
         if _basis_favorable:
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
             logger.info(
                 f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "
                 f"entry_basis={float(_entry_basis):+.4f}% → current={float(_current_basis):+.4f}% "
-                f"(favorable ✔) | PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
+                f"(recovered ✔, tolerance={float(_tolerance):.2f}%) | "
+                f"PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_exit"},
             )
             trade._exit_reason = _reason
