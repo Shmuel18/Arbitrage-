@@ -241,6 +241,39 @@ class _ExitLogicMixin:
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
                 )
 
+            # ── Sign validation ──────────────────────────────────
+            # Some exchanges (e.g. Bybit) return funding amounts with
+            # reversed sign (negative = received instead of positive = received).
+            # Validate using funding rate direction:
+            #   Long:  income when rate < 0 → amount should be positive
+            #   Short: income when rate > 0 → amount should be positive
+            _long_rate_for_sign = float(trade.long_funding_rate or 0)
+            _short_rate_for_sign = float(trade.short_funding_rate or 0)
+
+            if _long_actual_used and _long_usd != _ZERO and abs(_long_rate_for_sign) > 0.00005:
+                _expect_long_positive = _long_rate_for_sign < 0  # negative rate → long receives
+                if (_long_usd > _ZERO) != _expect_long_positive:
+                    logger.warning(
+                        f"[{trade.symbol}] Funding sign correction on "
+                        f"{trade.long_exchange} (long): API=${float(_long_usd):+.4f} "
+                        f"vs entry_rate={_long_rate_for_sign:.6f} — flipping sign",
+                        extra={"trade_id": trade.trade_id},
+                    )
+                    _long_usd = -_long_usd
+                    trade._actual_long_funding_sum = -(trade._actual_long_funding_sum)  # type: ignore[attr-defined]
+
+            if _short_actual_used and _short_usd != _ZERO and abs(_short_rate_for_sign) > 0.00005:
+                _expect_short_positive = _short_rate_for_sign > 0  # positive rate → short receives
+                if (_short_usd > _ZERO) != _expect_short_positive:
+                    logger.warning(
+                        f"[{trade.symbol}] Funding sign correction on "
+                        f"{trade.short_exchange} (short): API=${float(_short_usd):+.4f} "
+                        f"vs entry_rate={_short_rate_for_sign:.6f} — flipping sign",
+                        extra={"trade_id": trade.trade_id},
+                    )
+                    _short_usd = -_short_usd
+                    trade._actual_short_funding_sum = -(trade._actual_short_funding_sum)  # type: ignore[attr-defined]
+
             # Fallback to rate-based estimate if exchange history unavailable
             if long_just_paid and not _long_actual_used:
                 _live_long = long_adapter.get_funding_rate_cached(trade.symbol)
