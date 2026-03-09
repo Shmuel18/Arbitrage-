@@ -291,6 +291,7 @@ class _MonitorMixin(_ExitLogicMixin):
                 if cand_symbol != trade.symbol:
                     self._risk_guard.mark_trade_opened(cand_symbol)
                 logger.info(f"✅ Grace period re-armed for {upgrade_type} on {trade.symbol}")
+            trade._exit_reason = ExitReason.UPGRADE_EXIT.value
             await self._close_trade(trade)
             # Set upgrade cooldown so the closed symbol doesn't immediately re-enter
             cooldown_sec = self._cfg.trading_params.upgrade_cooldown_seconds
