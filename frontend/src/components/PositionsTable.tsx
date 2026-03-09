@@ -140,7 +140,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
       </div>
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {positions.map((p) => {
+        {positions.map((p, posIndex) => {
           const mode = getModeConfig(p.mode, t);
           const tier = getTierInfo(p.entry_tier, t);
           const progress = getTargetProgress(p);
@@ -155,7 +155,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
               style={{
                 borderRadius: 14,
                 overflow: 'hidden',
-                animationDelay: `${positions.indexOf(p) * 80}ms`,
+                animationDelay: `${posIndex * 80}ms`,
               }}
             >
               {/* ── Top accent line ── */}

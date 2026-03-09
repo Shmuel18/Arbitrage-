@@ -4,9 +4,12 @@ WebSocket Connection Manager
 
 from __future__ import annotations
 
+import logging
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 from typing import List
+
+logger = logging.getLogger("trinity.api.ws")
 
 
 class ConnectionManager:
@@ -38,7 +41,7 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except Exception as exc:
-                print(f"WebSocket send failed; dropping connection: {exc}")
+                logger.warning("WebSocket send failed; dropping connection: %s", exc)
                 dead.append(connection)
         for conn in dead:
             await self.disconnect(conn, close_socket=True)

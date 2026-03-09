@@ -1,35 +1,10 @@
 import React, { useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { TierBadge, formatCountdown, formatFundingRateN } from '../utils/format';
-
-interface Opportunity {
-  symbol: string;
-  long_exchange: string;
-  short_exchange: string;
-  long_rate: number;
-  short_rate: number;
-  net_pct: number;
-  gross_pct: number;
-  funding_spread_pct?: number;
-  immediate_spread_pct?: number;
-  hourly_rate_pct?: number;
-  min_interval_hours?: number;
-  next_funding_ms?: number | null;
-  long_next_funding_ms?: number | null;
-  short_next_funding_ms?: number | null;
-  long_interval_hours?: number;
-  short_interval_hours?: number;
-  qualified?: boolean;
-  price: number;
-  mode: string;
-  fees_pct?: number;
-  immediate_net_pct?: number;
-  entry_tier?: string | null;
-  price_spread_pct?: number | null;
-}
+import type { Opportunity, OpportunitySet } from '../hooks/useMarketReducer';
 
 interface RightPanelProps {
-  opportunities: { opportunities: Opportunity[]; count: number } | null;
+  opportunities: OpportunitySet | null;
   status?: { min_funding_spread?: number; [key: string]: any } | null;
 }
 
@@ -226,7 +201,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
 
         {/* ── Mode badge ── */}
         <td className="text-end nx-cell-mode">
-          {renderModeBadge(opp.mode)}
+          {renderModeBadge(opp.mode ?? 'hold')}
         </td>
 
         {/* ── Funding countdown ── */}

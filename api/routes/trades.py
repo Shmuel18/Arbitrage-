@@ -2,14 +2,20 @@
 Trades History API Routes
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
+
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta, timezone
 import json
-from typing import Optional
 
-redis_client = None
+if TYPE_CHECKING:
+    from src.storage.redis_client import RedisClient
 
-def set_redis_client(client):
+redis_client: RedisClient | None = None
+
+def set_redis_client(client: RedisClient) -> None:
     global redis_client
     redis_client = client
 

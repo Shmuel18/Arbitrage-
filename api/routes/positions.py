@@ -2,14 +2,21 @@
 Positions API Routes
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, HTTPException
 from datetime import datetime, timezone
 import json
 
-# Will be set by main.py during startup
-redis_client = None
+if TYPE_CHECKING:
+    from src.storage.redis_client import RedisClient
 
-def set_redis_client(client):
+# Will be set by main.py during startup
+redis_client: RedisClient | None = None
+
+def set_redis_client(client: RedisClient) -> None:
     global redis_client
     redis_client = client
 

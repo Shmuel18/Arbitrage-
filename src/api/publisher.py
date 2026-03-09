@@ -5,11 +5,12 @@ Publishes bot data to Redis for API consumption
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Dict, List, Any
-import asyncio
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
@@ -25,7 +26,7 @@ class APIPublisher:
         self.start_time = datetime.now(timezone.utc)
         self._total_trades: int = 0
         self._winning_trades: int = 0
-        self._total_realized_pnl: float = 0.0
+        self._total_realized_pnl: Decimal = Decimal("0")
     
     async def publish_status(self, running: bool, exchanges: List[str], positions_count: int, min_funding_spread: float = 0.5):
         """Publish bot status"""
@@ -73,7 +74,7 @@ class APIPublisher:
         uptime = round((datetime.now(timezone.utc) - self.start_time).total_seconds() / 3600, 2)
         
         summary = {
-            "total_pnl": self._total_realized_pnl,
+            "total_pnl": float(self._total_realized_pnl),
             "total_trades": self._total_trades,
             "win_rate": round(win_rate, 3),
             "active_positions": positions_count,
@@ -88,11 +89,21 @@ class APIPublisher:
         loop can read them without recomputing from full history.
         """
         self._total_trades += 1
-        self._total_realized_pnl += pnl
+        self._total_realized_pnl += Decimal(str(pnl))
         if is_win:
             self._winning_trades += 1
-        # Fire-and-forget counter updates in Redis — best effort.
-        asyncio.ensure_future(self._update_redis_counters(pnl, is_win))
+        # Supervised fire-and-forget counter updates in Redis.
+        task = asyncio.ensure_future(self._update_redis_counters(pnl, is_win))
+        task.add_done_callback(self._counter_task_done)
+
+    @staticmethod
+    def _counter_task_done(t: asyncio.Task) -> None:
+        """Log failures from fire-and-forget Redis counter updates."""
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.debug("Redis counter update task failed: %s", exc)
 
     async def _update_redis_counters(self, pnl: float, is_win: bool) -> None:
         """Atomically increment trade counters in Redis."""

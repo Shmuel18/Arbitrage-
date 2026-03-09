@@ -7,15 +7,18 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 import json
 import logging
 import os
 import time
 
+if TYPE_CHECKING:
+    from src.storage.redis_client import RedisClient
+
 logger = logging.getLogger("trinity.api.controls")
 
-redis_client = None
+redis_client: RedisClient | None = None
 
 # ── Simple in-memory rate limiter ──────────────────────────────────
 _rate_limit_ledger: dict[str, list[float]] = {}
@@ -61,7 +64,7 @@ async def _audit_control_action(action: str, payload: dict[str, Any]) -> None:
         # Audit should not break control paths.
         pass
 
-def set_redis_client(client):
+def set_redis_client(client: RedisClient) -> None:
     global redis_client
     redis_client = client
 

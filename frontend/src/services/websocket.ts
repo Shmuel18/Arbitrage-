@@ -5,6 +5,8 @@ let manualClose = false;
 const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
 const WS_SCHEMA_VERSION = 1;
+/** Circuit breaker: stop reconnecting after this many consecutive failures. */
+const MAX_RECONNECT_ATTEMPTS = 20;
 
 export type WsConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 
@@ -78,6 +80,12 @@ export const connectWebSocket = (
       return;
     }
     onConnectionChange?.('reconnecting');
+    // Circuit breaker — stop after MAX_RECONNECT_ATTEMPTS consecutive failures.
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.warn(`WebSocket: circuit breaker open after ${reconnectAttempts} attempts — giving up`);
+      onConnectionChange?.('disconnected');
+      return;
+    }
     // Exponential backoff with jitter, capped at MAX_RECONNECT_DELAY
     if (!reconnectTimer) {
       const delay = Math.min(

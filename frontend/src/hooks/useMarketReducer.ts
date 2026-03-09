@@ -27,8 +27,35 @@ export interface PositionRow {
   [k: string]: unknown;
 }
 
+export interface Opportunity {
+  symbol?: string;
+  long_exchange?: string;
+  short_exchange?: string;
+  long_rate?: number;
+  short_rate?: number;
+  net_pct?: number;
+  gross_pct?: number;
+  funding_spread_pct?: number;
+  immediate_spread_pct?: number;
+  hourly_rate_pct?: number;
+  min_interval_hours?: number;
+  next_funding_ms?: number | null;
+  long_next_funding_ms?: number | null;
+  short_next_funding_ms?: number | null;
+  long_interval_hours?: number;
+  short_interval_hours?: number;
+  qualified?: boolean;
+  price?: number;
+  mode?: string;
+  fees_pct?: number;
+  immediate_net_pct?: number;
+  entry_tier?: string | null;
+  price_spread_pct?: number | null;
+  [k: string]: unknown;
+}
+
 export interface OpportunitySet {
-  opportunities: any[];
+  opportunities: Opportunity[];
   count: number;
 }
 
