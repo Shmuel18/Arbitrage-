@@ -209,3 +209,55 @@ export const ModeBadge: React.FC<{ mode?: string | null; t?: ModeTranslations }>
     </span>
   );
 };
+
+/* ── Exit reason badge ───────────────────────────────────────────── */
+interface ExitReasonConfig {
+  emoji: string;
+  label: string;
+  color: string;
+  bg: string;
+}
+
+const _exitReasonMap: Record<string, ExitReasonConfig> = {
+  profit_target:          { emoji: '🎯', label: 'Profit',       color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
+  basis_recovery:         { emoji: '✅', label: 'Recovery',     color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
+  spread_below_threshold: { emoji: '📉', label: 'Low Spread',   color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
+  upgrade_exit:           { emoji: '⬆️', label: 'Upgrade',      color: '#3b82f6', bg: 'rgba(59,130,246,0.10)' },
+  cherry_hard_stop:       { emoji: '🍒', label: 'Cherry Stop',  color: '#f97316', bg: 'rgba(249,115,22,0.10)' },
+  basis_hard_stop:        { emoji: '⏱️', label: 'Basis Timeout', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  negative_funding:       { emoji: '⚠️', label: 'Neg. Funding',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  exit_timeout:           { emoji: '⏰', label: 'Timeout',      color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
+  liquidation_risk:       { emoji: '🚨', label: 'Liquidation',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  manual_close:           { emoji: '🛑', label: 'Manual',       color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' },
+};
+
+const _getExitReasonConfig = (reason?: string | null): ExitReasonConfig => {
+  if (!reason) return { emoji: '', label: '--', color: 'var(--text-muted)', bg: 'transparent' };
+  // Match prefix for dynamic reasons (e.g. "basis_recovery_+0.0123pct", "profit_target_+0.85pct")
+  for (const [key, cfg] of Object.entries(_exitReasonMap)) {
+    if (reason === key || reason.startsWith(key + '_')) return cfg;
+  }
+  // Unknown reason — show raw text
+  return { emoji: '❓', label: reason.replace(/_/g, ' '), color: 'var(--text-secondary)', bg: 'rgba(148,163,184,0.06)' };
+};
+
+export const ExitReasonBadge: React.FC<{ reason?: string | null }> = ({ reason }) => {
+  const cfg = _getExitReasonConfig(reason);
+  if (!reason) return <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>--</span>;
+  return (
+    <span title={reason} style={{
+      background: cfg.bg,
+      color: cfg.color,
+      borderRadius: 4,
+      padding: '1px 6px',
+      fontSize: 10,
+      fontWeight: 700,
+      whiteSpace: 'nowrap',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 3,
+    }}>
+      {cfg.emoji} {cfg.label}
+    </span>
+  );
+};

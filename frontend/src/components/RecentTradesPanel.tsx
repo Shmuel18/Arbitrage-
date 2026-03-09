@@ -2,7 +2,7 @@ import React, { useState, memo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import TradeDetailModal from './TradeDetailModal';
-import { TierBadge, formatCurrency, formatDate, formatDuration } from '../utils/format';
+import { TierBadge, ExitReasonBadge, formatCurrency, formatDate, formatDuration } from '../utils/format';
 
 interface RecentTradesPanelProps {
   trades: Trade[];
@@ -46,12 +46,13 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
       <div className="overflow-auto scrollbar-thin">
         <table className="corp-table" style={{ tableLayout: 'fixed', width: '100%' }}>
           <colgroup>
-            <col style={{ width: '22%' }} />
             <col style={{ width: '18%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '12%' }} />
             <col style={{ width: '14%' }} />
-            <col style={{ width: '14%' }} />
-            <col style={{ width: '9%' }} />
-            <col style={{ width: '23%' }} />
+            <col style={{ width: '8%' }} />
+            <col style={{ width: '21%' }} />
           </colgroup>
           <thead>
             <tr>
@@ -59,6 +60,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
               <th>{t.longShort}</th>
               <th className="text-end">{t.netPnl}</th>
               <th className="text-end">{t.fundingNet}</th>
+              <th className="text-end">{t.exitReasonLabel}</th>
               <th className="text-end">{t.duration}</th>
               <th className="text-end">{t.closed}</th>
             </tr>
@@ -66,7 +68,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center text-secondary py-8">
+                <td colSpan={7} className="text-center text-secondary py-8">
                     {tradesLoaded ? t.noTradesYet : '...'}
                   </td>
               </tr>
@@ -101,6 +103,9 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                     <span className={`nx-trades-funding ${fundingNet >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>
                       {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
                     </span>
+                  </td>
+                  <td className="text-end" style={{ whiteSpace: 'nowrap' }}>
+                    <ExitReasonBadge reason={tr.exit_reason} />
                   </td>
                   <td className="text-end nx-trades-duration" style={{ whiteSpace: 'nowrap' }}>
                     {formatDuration(tr.hold_minutes)}
