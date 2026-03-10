@@ -1898,6 +1898,52 @@ class ExchangeAdapter:
             extra={"exchange": self.exchange_id, "action": "warm_up"},
         )
 
+    async def warm_up_trading_settings(self, symbols: List[str]) -> int:
+        """Apply margin-mode / leverage / position-mode for ALL symbols at startup.
+
+        Runs with bounded parallelism (semaphore) so REST rate-limits
+        are respected.  Returns the count of symbols successfully configured.
+
+        After this call, every symbol is in ``_settings_applied`` and
+        ``ensure_trading_settings`` returns instantly (~0 ms) for all
+        subsequent entry paths — no per-trade latency penalty.
+        """
+        if not symbols:
+            return 0
+
+        sem = asyncio.Semaphore(5)  # conservative — 3 REST calls per symbol
+        ok_count = 0
+        fail_count = 0
+
+        async def _apply(symbol: str) -> bool:
+            async with sem:
+                try:
+                    await self.ensure_trading_settings(symbol)
+                    return True
+                except Exception as exc:
+                    logger.debug(
+                        f"Trading settings warm-up failed for "
+                        f"{self.exchange_id}/{symbol}: {exc}",
+                    )
+                    return False
+
+        results = await asyncio.gather(
+            *[_apply(s) for s in symbols], return_exceptions=True,
+        )
+        for res in results:
+            if res is True:
+                ok_count += 1
+            else:
+                fail_count += 1
+
+        logger.info(
+            f"Trading settings warm-up on {self.exchange_id}: "
+            f"{ok_count}/{len(symbols)} symbols configured "
+            f"(margin=cross, {fail_count} failed)",
+            extra={"exchange": self.exchange_id, "action": "settings_warm_up"},
+        )
+        return ok_count
+
 
 # ── Manager ──────────────────────────────────────────────────────
 

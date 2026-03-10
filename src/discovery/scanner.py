@@ -212,16 +212,6 @@ class Scanner:
                                 f"Top 5 updated: {len(qualified_opps)} qualified, {len(all_opps) - len(qualified_opps)} display-only"
                             )
                     
-                    # ── Pre-warm trading settings for qualified symbols ──
-                    # ensure_trading_settings makes 3 REST calls per exchange
-                    # (margin mode, leverage, position mode) which takes 2-7s on
-                    # first use.  Pre-warming here means the entry path skips
-                    # Phase 3 entirely, saving 3-7s of latency.
-                    # The call is idempotent (cached via _settings_applied set),
-                    # so repeated pre-warms are free.
-                    if qualified_opps:
-                        await self._prewarm_trading_settings(qualified_opps[:5])
-
                     # Send opportunities to controller
                     execute_only_best = self._cfg.trading_params.execute_only_best_opportunity
                     
@@ -268,40 +258,6 @@ class Scanner:
         for adapter in self._exchanges.all().values():
             for task in adapter._ws_tasks:
                 task.cancel()
-
-    # ── Pre-warm ─────────────────────────────────────────────────
-
-    async def _prewarm_trading_settings(
-        self,
-        opps: List[OpportunityCandidate],
-    ) -> None:
-        """Pre-apply margin/leverage/position-mode for upcoming entries.
-
-        Called with the top qualified opportunities each scan cycle so
-        that ``ensure_trading_settings`` is already cached by the time
-        ``handle_opportunity`` fires.  Saves 3-7 s of entry latency on
-        the first trade per symbol.
-
-        Each call is idempotent — symbols already in the adapter's
-        ``_settings_applied`` set return immediately (~0 ms).
-        """
-        adapters = self._exchanges.all()
-        tasks: list[asyncio.coroutines] = []
-        for opp in opps:
-            long_adapter = adapters.get(opp.long_exchange)
-            short_adapter = adapters.get(opp.short_exchange)
-            if long_adapter:
-                tasks.append(long_adapter.ensure_trading_settings(opp.symbol))
-            if short_adapter:
-                tasks.append(short_adapter.ensure_trading_settings(opp.symbol))
-
-        if not tasks:
-            return
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for idx, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.debug(f"Pre-warm settings failed (task {idx}): {result}")
 
     # ── Scan logic ───────────────────────────────────────────────
 

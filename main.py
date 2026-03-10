@@ -112,6 +112,18 @@ async def main() -> None:
         await adapter.warm_up_funding_rates(adapter_symbols)
     logger.info("Funding rate cache ready", extra={"action": "funding_batch_done"})
 
+    # Apply trading settings (cross margin, leverage, position mode) for ALL symbols
+    # at startup — eliminates 3-7s per-symbol latency on first trade.
+    logger.info("Applying trading settings (cross margin) on all exchanges...",
+                extra={"action": "settings_warm_start"})
+    settings_tasks = []
+    for adapter in mgr.all().values():
+        adapter_symbols = [s for s in common_symbols if s in adapter.symbols]
+        settings_tasks.append(adapter.warm_up_trading_settings(adapter_symbols))
+    await asyncio.gather(*settings_tasks)  # all exchanges in parallel
+    logger.info("Trading settings applied on all exchanges",
+                extra={"action": "settings_warm_done"})
+
     # ── Components ───────────────────────────────────────────────
     publisher = APIPublisher(redis)
     guard = RiskGuard(cfg, mgr, redis)
