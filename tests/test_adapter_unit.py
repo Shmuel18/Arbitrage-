@@ -274,6 +274,149 @@ def _time_ms() -> float:
     return time.time() * 1000
 
 
+# ── fetch_fill_details_from_trades ────────────────────────────────
+
+class TestFetchFillDetails:
+    """Tests for the new fetch_fill_details_from_trades method."""
+
+    @pytest.mark.asyncio
+    async def test_returns_exact_fee_and_price(self):
+        """When myTrades returns fills with fee data, extract exact values."""
+        import asyncio
+
+        a = _adapter()
+        mock_xch = MagicMock()
+        a._exchange = mock_xch
+        a._rest_semaphore = asyncio.Semaphore(10)
+
+        mock_trades = [
+            {
+                "order": "order123",
+                "price": 0.05512,
+                "amount": 1000,
+                "fee": {"cost": 0.05512, "currency": "USDT"},
+                "timestamp": _time_ms(),
+            },
+        ]
+
+        async def _mock_fetch_my_trades(*args, **kwargs):
+            return mock_trades
+
+        mock_xch.fetch_my_trades = _mock_fetch_my_trades
+
+        result = await a.fetch_fill_details_from_trades("TEST/USDT:USDT", "order123")
+        assert result is not None
+        assert result["avg_price"] == Decimal("0.05512")
+        assert result["total_fee"] == Decimal("0.05512")
+        assert result["filled"] == Decimal("1000")
+
+    @pytest.mark.asyncio
+    async def test_converts_base_currency_fee(self):
+        """Fees in base currency should be converted to USDT using fill price."""
+        import asyncio
+
+        a = _adapter()
+        mock_xch = MagicMock()
+        a._exchange = mock_xch
+        a._rest_semaphore = asyncio.Semaphore(10)
+
+        mock_trades = [
+            {
+                "order": "order456",
+                "price": 100.0,
+                "amount": 10,
+                "fee": {"cost": 0.01, "currency": "ETH"},
+                "timestamp": _time_ms(),
+            },
+        ]
+
+        async def _mock_fetch_my_trades(*args, **kwargs):
+            return mock_trades
+
+        mock_xch.fetch_my_trades = _mock_fetch_my_trades
+
+        result = await a.fetch_fill_details_from_trades("ETH/USDT:USDT", "order456")
+        assert result is not None
+        # 0.01 ETH × $100 = $1.00
+        assert result["total_fee"] == Decimal("0.01") * Decimal("100.0")
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_trades(self):
+        """Returns None when no trades are found."""
+        import asyncio
+
+        a = _adapter()
+        mock_xch = MagicMock()
+        a._exchange = mock_xch
+        a._rest_semaphore = asyncio.Semaphore(10)
+
+        async def _mock_fetch_my_trades(*args, **kwargs):
+            return []
+
+        mock_xch.fetch_my_trades = _mock_fetch_my_trades
+
+        result = await a.fetch_fill_details_from_trades("BTC/USDT:USDT", "order789")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_on_api_error(self):
+        """Returns None gracefully when API call fails."""
+        import asyncio
+
+        a = _adapter()
+        mock_xch = MagicMock()
+        a._exchange = mock_xch
+        a._rest_semaphore = asyncio.Semaphore(10)
+
+        async def _mock_fetch_my_trades(*args, **kwargs):
+            raise Exception("Network timeout")
+
+        mock_xch.fetch_my_trades = _mock_fetch_my_trades
+
+        result = await a.fetch_fill_details_from_trades("BTC/USDT:USDT", "order999")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_multiple_fills_aggregated(self):
+        """Multiple partial fills for same order should be aggregated."""
+        import asyncio
+
+        a = _adapter()
+        mock_xch = MagicMock()
+        a._exchange = mock_xch
+        a._rest_semaphore = asyncio.Semaphore(10)
+
+        mock_trades = [
+            {
+                "order": "order_multi",
+                "price": 50.0,
+                "amount": 100,
+                "fee": {"cost": 0.025, "currency": "USDT"},
+                "timestamp": _time_ms(),
+            },
+            {
+                "order": "order_multi",
+                "price": 50.1,
+                "amount": 100,
+                "fee": {"cost": 0.026, "currency": "USDT"},
+                "timestamp": _time_ms(),
+            },
+        ]
+
+        async def _mock_fetch_my_trades(*args, **kwargs):
+            return mock_trades
+
+        mock_xch.fetch_my_trades = _mock_fetch_my_trades
+
+        result = await a.fetch_fill_details_from_trades("DOT/USDT:USDT", "order_multi")
+        assert result is not None
+        assert result["filled"] == Decimal("200")
+        # VWAP: (100*50 + 100*50.1) / 200 = 50.05
+        assert result["avg_price"] == Decimal("10010.0") / Decimal("200")
+        # Total fee: 0.025 + 0.026 = 0.051
+        assert result["total_fee"] == Decimal("0.051")
+
+
 # ── ExchangeManager ───────────────────────────────────────────────
 
 class TestExchangeManager:

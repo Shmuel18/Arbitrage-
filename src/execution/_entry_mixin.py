@@ -458,8 +458,49 @@ class _EntryMixin:
             long_spec = await long_adapter.get_instrument_spec(opp.symbol)
             short_spec = await short_adapter.get_instrument_spec(opp.symbol)
 
-            entry_fees = _h.extract_fee(long_fill, long_spec.taker_fee) + \
-                         _h.extract_fee(short_fill, short_spec.taker_fee)
+            # ── Reconcile entry fees from actual trade data ──────────
+            # createOrder response may lack fee data — fetch from trades API
+            # for exchange-accurate fee totals.
+            _long_oid = long_fill.get("id") if long_fill else None
+            _short_oid = short_fill.get("id") if short_fill else None
+            _entry_details: list = [None, None]  # [long, short]
+            _entry_tasks = []
+            _entry_indices: list[int] = []
+
+            if _long_oid:
+                _entry_tasks.append(
+                    long_adapter.fetch_fill_details_from_trades(
+                        opp.symbol, _long_oid,
+                    )
+                )
+                _entry_indices.append(0)
+            if _short_oid:
+                _entry_tasks.append(
+                    short_adapter.fetch_fill_details_from_trades(
+                        opp.symbol, _short_oid,
+                    )
+                )
+                _entry_indices.append(1)
+
+            if _entry_tasks:
+                _entry_results = await asyncio.gather(
+                    *_entry_tasks, return_exceptions=True,
+                )
+                for idx, res in zip(_entry_indices, _entry_results):
+                    if isinstance(res, dict):
+                        _entry_details[idx] = res
+
+            # Use actual fees from trades API when available, else estimate
+            if _entry_details[0] and _entry_details[0]["total_fee"] > 0:
+                entry_fee_long = _entry_details[0]["total_fee"]
+            else:
+                entry_fee_long = _h.extract_fee(long_fill, long_spec.taker_fee)
+            if _entry_details[1] and _entry_details[1]["total_fee"] > 0:
+                entry_fee_short = _entry_details[1]["total_fee"]
+            else:
+                entry_fee_short = _h.extract_fee(short_fill, short_spec.taker_fee)
+
+            entry_fees = entry_fee_long + entry_fee_short
 
             # Entry price basis: (long_price − short_price) / short_price × 100
             # Positive = long was more expensive than short at entry.

@@ -1628,6 +1628,92 @@ class ExchangeAdapter:
         )
         return vwap
 
+    async def fetch_fill_details_from_trades(
+        self, symbol: str, order_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Decimal]]:
+        """Fetch actual fill details (price + fees) from myTrades API.
+
+        Returns dict with:
+            - avg_price: Decimal (volume-weighted average fill price)
+            - total_fee: Decimal (sum of all fill fees, converted to USDT)
+            - filled: Decimal (total filled quantity in base currency)
+        Or ``None`` if no matching trades are found.
+        """
+        resolved = self._resolve_symbol(symbol)
+        try:
+            async with self._rest_semaphore:
+                raw_trades = await self._exchange.fetch_my_trades(
+                    resolved, limit=20,
+                )
+        except Exception as exc:
+            logger.warning(
+                f"fetchMyTrades (details) failed on {self.exchange_id}/{symbol}: {exc}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return None
+
+        if not raw_trades:
+            return None
+
+        # Match by order_id first
+        matched = [
+            t for t in raw_trades
+            if order_id and t.get("order") == order_id
+        ] if order_id else []
+
+        if not matched:
+            # Fallback: most recent trade within 30s
+            most_recent = raw_trades[-1]
+            trade_ts = most_recent.get("timestamp") or 0
+            now_ms = int(_time.time() * 1000)
+            if now_ms - trade_ts > 30_000:
+                return None
+            matched = [most_recent]
+
+        # Compute VWAP and total fees
+        total_cost = Decimal("0")
+        total_qty = Decimal("0")
+        total_fee = Decimal("0")
+
+        for t in matched:
+            qty = Decimal(str(t.get("amount", 0) or 0))
+            price = Decimal(str(t.get("price", 0) or 0))
+            if qty <= 0 or price <= 0:
+                continue
+            total_cost += qty * price
+            total_qty += qty
+
+            # Extract fee — convert base-currency fees to USDT
+            fee_info = t.get("fee")
+            if isinstance(fee_info, dict) and fee_info.get("cost") is not None:
+                fee_cost = Decimal(str(fee_info["cost"]))
+                fee_currency = (fee_info.get("currency") or "").upper()
+                if fee_currency and fee_currency not in (
+                    "USDT", "BUSD", "USDC", "USD",
+                ):
+                    # Fee in base asset — convert using fill price
+                    fee_cost = abs(fee_cost) * price
+                else:
+                    fee_cost = abs(fee_cost)
+                total_fee += fee_cost
+
+        if total_qty <= 0:
+            return None
+
+        vwap = total_cost / total_qty
+        logger.info(
+            f"[{self.exchange_id}/{symbol}] Fill details from trades API: "
+            f"price={vwap:.6f}  fee=${float(total_fee):.6f}  "
+            f"qty={total_qty} ({len(matched)} fill(s), order_id={order_id})",
+            extra={"exchange": self.exchange_id, "symbol": symbol,
+                   "action": "fill_details_from_trades"},
+        )
+        return {
+            "avg_price": vwap,
+            "total_fee": total_fee,
+            "filled": total_qty,
+        }
+
     # ── Order execution ──────────────────────────────────────────
 
     async def place_order(self, req: OrderRequest) -> Dict[str, Any]:
@@ -1723,7 +1809,7 @@ class ExchangeAdapter:
                     try:
                         await asyncio.sleep(1)
                         updated = await self._exchange.fetch_order(
-                            order["id"], _resolved, _fetch_params if _fetch_params else None,
+                            order["id"], _resolved, _fetch_params,
                         )
                         if updated is None:
                             logger.warning(

@@ -112,10 +112,55 @@ class _CloseMixin:
                 except Exception as exc:
                     logger.debug(f"[{trade.symbol}] Short exit price recovery failed: {exc}")
 
+            # ── Reconcile close fees from actual trade data ────────
+            # The createOrder response for close/reduce orders often has no
+            # fee data (exchanges skip fetchOrder retries for speed).  Fetch
+            # actual per-fill fees from myTrades API for exchange-accurate PnL.
+            _long_order_id = long_fill.get("id") if long_fill else None
+            _short_order_id = short_fill.get("id") if short_fill else None
+
+            _settled_details: list = [None, None]  # [long, short]
+            _settle_tasks = []
+            _settle_indices: list[int] = []
+
+            if long_adapter and _long_order_id:
+                _settle_tasks.append(
+                    long_adapter.fetch_fill_details_from_trades(
+                        trade.symbol, _long_order_id,
+                    )
+                )
+                _settle_indices.append(0)
+            if short_adapter and _short_order_id:
+                _settle_tasks.append(
+                    short_adapter.fetch_fill_details_from_trades(
+                        trade.symbol, _short_order_id,
+                    )
+                )
+                _settle_indices.append(1)
+
+            if _settle_tasks:
+                _settle_results = await asyncio.gather(
+                    *_settle_tasks, return_exceptions=True,
+                )
+                for idx, res in zip(_settle_indices, _settle_results):
+                    if isinstance(res, dict):
+                        _settled_details[idx] = res
+                    elif isinstance(res, BaseException):
+                        logger.debug(
+                            f"[{trade.symbol}] Fill details fetch failed "
+                            f"({'long' if idx == 0 else 'short'}): {res}",
+                        )
+
+            # Update exit prices from settled data if original was missing
+            if _settled_details[0] and trade.exit_price_long is None:
+                trade.exit_price_long = _settled_details[0]["avg_price"]
+            if _settled_details[1] and trade.exit_price_short is None:
+                trade.exit_price_short = _settled_details[1]["avg_price"]
+
             # Use stored taker fees as fallback for extract_fee
             fallback_long = trade.long_taker_fee
             fallback_short = trade.short_taker_fee
-            
+
             # If not in record (old trades), fetch from adapter
             if fallback_long is None and long_adapter:
                 _ls = await long_adapter.get_instrument_spec(trade.symbol)
@@ -124,10 +169,31 @@ class _CloseMixin:
                 _ss = await short_adapter.get_instrument_spec(trade.symbol)
                 fallback_short = _ss.taker_fee
 
-            close_fees = _h.extract_fee(long_fill, fallback_long) + \
-                         _h.extract_fee(short_fill, fallback_short)
+            # Prefer actual exchange fees from trades API, fall back to
+            # extract_fee (order response → taker_rate estimate).
+            if _settled_details[0] and _settled_details[0]["total_fee"] > 0:
+                close_fee_long = _settled_details[0]["total_fee"]
+            else:
+                close_fee_long = _h.extract_fee(long_fill, fallback_long)
+            if _settled_details[1] and _settled_details[1]["total_fee"] > 0:
+                close_fee_short = _settled_details[1]["total_fee"]
+            else:
+                close_fee_short = _h.extract_fee(short_fill, fallback_short)
+
+            close_fees = close_fee_long + close_fee_short
             total_fees = (trade.fees_paid_total or Decimal("0")) + close_fees
             trade.fees_paid_total = total_fees
+
+            # Log fee source for debugging
+            _long_src = "trades_api" if (_settled_details[0] and _settled_details[0]["total_fee"] > 0) else "estimate"
+            _short_src = "trades_api" if (_settled_details[1] and _settled_details[1]["total_fee"] > 0) else "estimate"
+            logger.info(
+                f"[{trade.symbol}] Close fees: "
+                f"{trade.long_exchange}=${float(close_fee_long):.6f} [{_long_src}]  "
+                f"{trade.short_exchange}=${float(close_fee_short):.6f} [{_short_src}]  "
+                f"total_fees=${float(total_fees):.6f}",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
             if trade.funding_paid_total is None and trade.funding_received_total is None:
                 if trade.funding_collected_usd != 0:
                     # Use actual accumulated collection total — multi-payment aware.

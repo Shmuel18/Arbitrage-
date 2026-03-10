@@ -223,7 +223,9 @@ class StatusPublisher:
         pos_entry["funding_collected_usd"] = str(trade.funding_collected_usd)
         pos_entry["fees_paid_total"] = str(trade.fees_paid_total) if trade.fees_paid_total is not None else None
         pos_entry["funding_collections"] = trade.funding_collections
-        pos_entry["profit_target_pct"] = str(self._cfg.trading_params.profit_target_pct)
+        # Real exit threshold = profit_target + slippage buffer (matches _exit_logic_mixin)
+        tp = self._cfg.trading_params
+        pos_entry["profit_target_pct"] = str(tp.profit_target_pct + tp.exit_slippage_buffer_pct)
 
         return pos_entry
 
