@@ -243,8 +243,14 @@ class _ExitLogicMixin:
 
             # ── Sign validation ──────────────────────────────────
             # Some exchanges (e.g. Bybit) return funding amounts with
-            # reversed sign (negative = received instead of positive = received).
-            # Validate using funding rate direction:
+            # reversed sign (positive = paid instead of positive = received).
+            # We validate using TWO signals:
+            #   1. Entry rate direction (trade.long/short_funding_rate)
+            #   2. Rate-based estimate as cross-check
+            # If the exchange amount sign disagrees with the rate direction,
+            # flip the sign.  Log a cross-check comparison for debugging.
+            #
+            # Rate direction rules:
             #   Long:  income when rate < 0 → amount should be positive
             #   Short: income when rate > 0 → amount should be positive
             _long_rate_for_sign = float(trade.long_funding_rate or 0)
@@ -274,42 +280,61 @@ class _ExitLogicMixin:
                     _short_usd = -_short_usd
                     trade._actual_short_funding_sum = -(trade._actual_short_funding_sum)  # type: ignore[attr-defined]
 
-            # Fallback to rate-based estimate if exchange history unavailable
+            # ── Cross-check: compare exchange amount vs rate-based estimate ──
+            # Catches cases where sign correction alone isn't enough (e.g.
+            # rate changed between entry and settlement, or magnitude is off).
+            if _long_actual_used and abs(_long_rate_for_sign) > 0.00005:
+                _l_est = float((trade.entry_price_long or _ZERO) * trade.long_qty) * (-_long_rate_for_sign)
+                if abs(_l_est) > 0.01 and abs(float(_long_usd) - _l_est) / abs(_l_est) > 0.5:
+                    logger.warning(
+                        f"[{trade.symbol}] Long funding cross-check MISMATCH: "
+                        f"exchange=${float(_long_usd):+.4f} vs rate_estimate=${_l_est:+.4f} "
+                        f"(>{50}% deviation) — rate may have changed since entry",
+                        extra={"trade_id": trade.trade_id},
+                    )
+            if _short_actual_used and abs(_short_rate_for_sign) > 0.00005:
+                _s_est = float((trade.entry_price_short or _ZERO) * trade.short_qty) * _short_rate_for_sign
+                if abs(_s_est) > 0.01 and abs(float(_short_usd) - _s_est) / abs(_s_est) > 0.5:
+                    logger.warning(
+                        f"[{trade.symbol}] Short funding cross-check MISMATCH: "
+                        f"exchange=${float(_short_usd):+.4f} vs rate_estimate=${_s_est:+.4f} "
+                        f"(>{50}% deviation) — rate may have changed since entry",
+                        extra={"trade_id": trade.trade_id},
+                    )
+
+            # Fallback to rate-based estimate if exchange history unavailable.
+            # IMPORTANT: Use the ENTRY rate (trade.long/short_funding_rate), NOT
+            # the live cached rate.  After settlement, get_funding_rate_cached()
+            # returns the NEXT period's rate — which can be wildly different from
+            # the rate that was just settled.  The entry rate is the best available
+            # approximation of what actually settled (unless the rate was dynamic
+            # and changed mid-period, but that's rare and unavoidable without
+            # exchange history data).
             if long_just_paid and not _long_actual_used:
-                _live_long = long_adapter.get_funding_rate_cached(trade.symbol)
-                _lr = (
-                    Decimal(str(_live_long["rate"]))
-                    if (_live_long and "rate" in _live_long)
-                    else trade.long_funding_rate
-                )
+                _lr = trade.long_funding_rate
                 _long_usd = (
                     (trade.entry_price_long or _ZERO) * trade.long_qty
                     * (-(Decimal(str(_lr or 0))))
                 ) if _lr else _ZERO
-                if _lr == trade.long_funding_rate:
-                    logger.warning(
-                        f"[{trade.symbol}] Long funding using ENTRY rate fallback: "
-                        f"{_lr} — actual settlement may differ",
-                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                    )
+                logger.warning(
+                    f"[{trade.symbol}] Long funding estimated from entry rate: "
+                    f"rate={float(_lr or 0):.6f} → ${float(_long_usd):+.4f} "
+                    f"(exchange history unavailable)",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
 
             if short_just_paid and not _short_actual_used:
-                _live_short = short_adapter.get_funding_rate_cached(trade.symbol)
-                _sr = (
-                    Decimal(str(_live_short["rate"]))
-                    if (_live_short and "rate" in _live_short)
-                    else trade.short_funding_rate
-                )
+                _sr = trade.short_funding_rate
                 _short_usd = (
                     (trade.entry_price_short or _ZERO) * trade.short_qty
                     * (Decimal(str(_sr or 0)))
                 ) if _sr else _ZERO
-                if _sr == trade.short_funding_rate:
-                    logger.warning(
-                        f"[{trade.symbol}] Short funding using ENTRY rate fallback: "
-                        f"{_sr} — actual settlement may differ",
-                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                    )
+                logger.warning(
+                    f"[{trade.symbol}] Short funding estimated from entry rate: "
+                    f"rate={float(_sr or 0):.6f} → ${float(_short_usd):+.4f} "
+                    f"(exchange history unavailable)",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
 
             _net_usd = _long_usd + _short_usd
 

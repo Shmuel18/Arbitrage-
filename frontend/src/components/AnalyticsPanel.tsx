@@ -52,7 +52,10 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
   // Zero baseline in Y coordinates (clamped to chart bounds)
   const zeroY = Math.max(0, Math.min(height, scaleY(0)));
-  const accentColor = total >= 0 ? '#22c55e' : '#ef4444'; // for header accent only
+  const accentColor = '#3b82f6';
+  const posColor = '#22a06b';
+  const negColor = '#c65a58';
+  const neutralColor = '#64748b';
 
   const closedFillPath = values.length > 1
     ? `${path} L ${scaleX(values.length - 1)} ${zeroY} L ${scaleX(0)} ${zeroY} Z`
@@ -60,6 +63,8 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
   // Stroke: gradient that switches color at zero line
   const zeroFrac = zeroY / height; // 0 = top, 1 = bottom
+  const prevValueAtHover = hover && hover.idx > 0 ? values[hover.idx - 1] : null;
+  const hoverDelta = hover && prevValueAtHover != null ? values[hover.idx] - prevValueAtHover : null;
 
   const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
     const svg = e.currentTarget;
@@ -169,24 +174,36 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
                 </clipPath>
                 {/* Line gradient: green above zero, red below */}
                 <linearGradient id="line-grad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset={`${zeroFrac * 100}%`} stopColor="#22c55e" />
-                  <stop offset={`${zeroFrac * 100}%`} stopColor="#ef4444" />
+                  <stop offset={`${zeroFrac * 100}%`} stopColor={posColor} />
+                  <stop offset={`${zeroFrac * 100}%`} stopColor={negColor} />
                 </linearGradient>
               </defs>
+              {[0.2, 0.4, 0.6, 0.8].map((ratio) => {
+                const y = height * ratio;
+                return (
+                  <line
+                    key={`grid-${ratio}`}
+                    x1="0"
+                    y1={y}
+                    x2={width}
+                    y2={y}
+                    className="nx-chart-gridline"
+                  />
+                );
+              })}
               {/* Zero baseline */}
-              <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4 4" />
+              <line x1="0" y1={zeroY} x2={width} y2={zeroY} stroke="rgba(148,163,184,0.35)" strokeWidth="1" strokeDasharray="4 4" />
               {/* Green fill — above zero */}
-              <path d={closedFillPath} fill="rgba(34,197,94,0.15)" clipPath="url(#clip-above)" />
+              <path d={closedFillPath} fill="rgba(34,160,107,0.09)" clipPath="url(#clip-above)" />
               {/* Red fill — below zero */}
-              <path d={closedFillPath} fill="rgba(239,68,68,0.15)" clipPath="url(#clip-below)" />
+              <path d={closedFillPath} fill="rgba(198,90,88,0.09)" clipPath="url(#clip-below)" />
               {/* Line with split color */}
-              <path d={path} fill="none" stroke="url(#line-grad)" strokeWidth="2" filter="drop-shadow(0 0 3px rgba(255,255,255,0.2))" />
+              <path d={path} fill="none" stroke="url(#line-grad)" strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round" />
               {/* Crosshair */}
               {hover && (
                 <>
                   <line x1={hover.x} y1={0} x2={hover.x} y2={height} className="nx-chart-crosshair" />
-                  <line x1={0} y1={hover.y} x2={width} y2={hover.y} className="nx-chart-crosshair" />
-                  <circle cx={hover.x} cy={hover.y} r="4" fill={values[hover.idx] >= 0 ? '#22c55e' : '#ef4444'} stroke="rgba(255,255,255,0.8)" strokeWidth="1.5" />
+                  <circle cx={hover.x} cy={hover.y} r="4" fill={values[hover.idx] >= 0 ? posColor : negColor} stroke="rgba(241,245,249,0.9)" strokeWidth="1.25" />
                 </>
               )}
             </svg>
@@ -201,9 +218,14 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
                 }}
               >
                 <div className="nx-chart-tooltip__row">
-                  <span className="nx-chart-tooltip__dot" style={{ background: hoverPoint.cumulative_pnl >= 0 ? '#22c55e' : '#ef4444' }} />
+                  <span className="nx-chart-tooltip__dot" style={{ background: hoverPoint.cumulative_pnl >= 0 ? posColor : negColor }} />
                   {formatCurrency(hoverPoint.cumulative_pnl)}
                 </div>
+                {hoverDelta != null && (
+                  <div className="nx-chart-tooltip__delta" style={{ color: hoverDelta >= 0 ? posColor : negColor }}>
+                    {hoverDelta >= 0 ? '+' : ''}{formatCurrency(hoverDelta)}
+                  </div>
+                )}
                 <div style={{ fontSize: 9, opacity: 0.6, marginTop: 2 }}>
                   {formatTime(hoverPoint.timestamp)}
                 </div>
@@ -211,7 +233,7 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
             )}
           </div>
         ) : (
-          <div className="text-muted text-xs" style={{ padding: '40px 0', textAlign: 'center' }}>{t.waitingPnl}</div>
+          <div className="text-muted text-xs" style={{ padding: '40px 0', textAlign: 'center', color: neutralColor }}>{t.waitingPnl}</div>
         )}
       </div>
     </div>

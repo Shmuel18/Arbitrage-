@@ -2528,17 +2528,17 @@ code, .mono {
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  transition: text-shadow 0.3s ease;
+  transition: color 0.25s ease;
 }
 
 .nx-analytics-total--positive {
-  color: var(--green);
-  text-shadow: 0 0 28px rgba(16,185,129,0.3);
+  color: #22a06b;
+  text-shadow: none;
 }
 
 .nx-analytics-total--negative {
-  color: var(--red);
-  text-shadow: 0 0 28px rgba(239,68,68,0.3);
+  color: #c65a58;
+  text-shadow: none;
 }
 
 .nx-analytics-breakdown {
@@ -2566,8 +2566,8 @@ code, .mono {
   display: flex;
   gap: 4px;
   padding: 3px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid rgba(255,255,255,0.04);
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 10px;
 }
 
@@ -2591,14 +2591,14 @@ code, .mono {
 }
 
 .nx-time-btn:hover {
-  background: rgba(96,165,250,0.08);
-  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.12);
+  color: #93c5fd;
 }
 
 .nx-time-btn--active {
-  background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
-  color: #fff !important;
-  box-shadow: 0 2px 10px rgba(59,130,246,0.35);
+  background: linear-gradient(135deg, #1e3a8a, #1d4ed8) !important;
+  color: #e2e8f0 !important;
+  box-shadow: 0 1px 6px rgba(37, 99, 235, 0.22);
 }
 
 [data-theme="light"] .nx-time-btn--active {
@@ -2606,8 +2606,8 @@ code, .mono {
 }
 
 .nx-chart-area {
-  background: rgba(4, 8, 16, 0.5);
-  border: 1px solid rgba(96, 165, 250, 0.04);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.82), rgba(15, 23, 42, 0.68));
+  border: 1px solid rgba(100, 116, 139, 0.26);
   border-radius: 12px;
   padding: 16px;
   position: relative;
@@ -2624,7 +2624,7 @@ code, .mono {
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(96,165,250,0.15), transparent);
+  background: linear-gradient(90deg, transparent, rgba(148,163,184,0.18), transparent);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -3925,8 +3925,13 @@ button:focus-visible {
   cursor: crosshair;
 }
 
+.nx-chart-gridline {
+  stroke: rgba(148, 163, 184, 0.12);
+  stroke-width: 1;
+}
+
 .nx-chart-crosshair {
-  stroke: rgba(255, 255, 255, 0.18);
+  stroke: rgba(148, 163, 184, 0.32);
   stroke-width: 1;
   stroke-dasharray: 3 3;
   pointer-events: none;
@@ -3935,8 +3940,8 @@ button:focus-visible {
 .nx-chart-tooltip {
   position: absolute;
   transform: translateX(-50%);
-  background: rgba(15, 23, 42, 0.92);
-  border: 1px solid rgba(96, 165, 250, 0.15);
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(100, 116, 139, 0.34);
   border-radius: 6px;
   padding: 6px 10px;
   font-family: 'JetBrains Mono', monospace;
@@ -3946,13 +3951,19 @@ button:focus-visible {
   pointer-events: none;
   white-space: nowrap;
   z-index: 10;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 14px rgba(2, 6, 23, 0.32);
 }
 
 .nx-chart-tooltip__row {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.nx-chart-tooltip__delta {
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .nx-chart-tooltip__dot {
@@ -3994,6 +4005,10 @@ button:focus-visible {
 
 [data-theme="light"] .nx-chart-crosshair {
   stroke: rgba(37, 99, 235, 0.25);
+}
+
+[data-theme="light"] .nx-chart-gridline {
+  stroke: rgba(37, 99, 235, 0.12);
 }
 
 [data-theme="light"] .signal-tape {

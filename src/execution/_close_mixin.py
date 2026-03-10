@@ -229,23 +229,35 @@ class _CloseMixin:
                         )
                         _short_net = -_short_net
 
-                # If only one side responded but the other didn't, log which is missing
+                # If only one side responded but the other didn't, estimate
+                # the missing side independently using rate × notional.
+                # NEVER back-calculate from funding_collected_usd — that total
+                # may itself be wrong (sign-correction bugs, stale rates), making
+                # the reconciliation circular and useless.
                 if _long_hist_ok and not _short_hist_ok:
+                    _s_notional = float((trade.entry_price_short or Decimal("0")) * trade.short_qty)
+                    _s_rate = float(trade.short_funding_rate or 0)
+                    # Short receives when rate > 0, pays when rate < 0
+                    _short_net = _s_notional * _s_rate * max(trade.funding_collections, 1)
                     logger.warning(
                         f"[{trade.symbol}] Real funding: {trade.long_exchange} responded "
                         f"(${_long_net:+.4f}) but {trade.short_exchange} unavailable — "
-                        f"using estimate for short side",
+                        f"estimating short from rate ({_s_rate:.6f} × ${_s_notional:.2f} "
+                        f"× {max(trade.funding_collections, 1)} collections = ${_short_net:+.4f})",
                         extra={"trade_id": trade.trade_id},
                     )
-                    _short_net = float(trade.funding_received_total or 0) - float(trade.funding_paid_total or 0) - _long_net
                 elif _short_hist_ok and not _long_hist_ok:
+                    _l_notional = float((trade.entry_price_long or Decimal("0")) * trade.long_qty)
+                    _l_rate = float(trade.long_funding_rate or 0)
+                    # Long receives when rate < 0, pays when rate > 0
+                    _long_net = _l_notional * (-_l_rate) * max(trade.funding_collections, 1)
                     logger.warning(
                         f"[{trade.symbol}] Real funding: {trade.short_exchange} responded "
                         f"(${_short_net:+.4f}) but {trade.long_exchange} unavailable — "
-                        f"using estimate for long side",
+                        f"estimating long from rate ({_l_rate:.6f} × ${_l_notional:.2f} "
+                        f"× {max(trade.funding_collections, 1)} collections = ${_long_net:+.4f})",
                         extra={"trade_id": trade.trade_id},
                     )
-                    _long_net = float(trade.funding_received_total or 0) - float(trade.funding_paid_total or 0) - _short_net
 
                 _real_net_total = _long_net + _short_net
                 _est_net = float((trade.funding_received_total or Decimal("0")) - (trade.funding_paid_total or Decimal("0")))
