@@ -1,17 +1,24 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { FullData } from '../hooks/useMarketData';
 import { WsConnectionState } from '../services/websocket';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
-import AnalyticsPanel from './AnalyticsPanel';
 import ExchangeBalances from './ExchangeBalances';
-import RecentTradesPanel from './RecentTradesPanel';
-import RightPanel from './RightPanel';
-import SystemLogs from './SystemLogs';
 import SignalTape from './SignalTape';
 import RiskRadar from './RiskRadar';
+import {
+  SkeletonRightPanel,
+  SkeletonAnalyticsPanel,
+  SkeletonRecentTrades,
+} from './Skeleton';
+
+// Below-the-fold sections are lazily loaded — reduces initial JS parse time.
+const RightPanel    = React.lazy(() => import('./RightPanel'));
+const AnalyticsPanel = React.lazy(() => import('./AnalyticsPanel'));
+const RecentTradesPanel = React.lazy(() => import('./RecentTradesPanel'));
+const SystemLogs    = React.lazy(() => import('./SystemLogs'));
 
 export const SECTION_IDS = {
   dashboard: 'section-dashboard',
@@ -30,6 +37,7 @@ interface DashboardProps {
   onPnlHoursChange: (hours: number) => void;
   wsConnection: WsConnectionState;
   lastWsMessageAt: number | null;
+  wsAttempts: number;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
@@ -38,7 +46,23 @@ const Dashboard: React.FC<DashboardProps> = ({
   onPnlHoursChange,
   wsConnection,
   lastWsMessageAt,
+  wsAttempts,
 }) => {
+  // True only before the very first data payload arrives — both stay null
+  // until WS sends the initial full_update. Once set, never goes back to null.
+  const isLoading = data.balances === null && data.summary === null;
+
+  // Stable array reference — `data.positions` changes only when positions list
+  // actually mutates, preventing spurious re-renders of memo'd children.
+  const positions = useMemo(() => data.positions ?? [], [data.positions]);
+  const trades    = useMemo(() => data.trades    ?? [], [data.trades]);
+
+  // Surface the most recent ERROR-level logs as a top-of-page banner.
+  const errorLogs = useMemo(
+    () => (data.logs ?? []).filter((l) => l.level.toUpperCase() === 'ERROR').slice(0, 5),
+    [data.logs],
+  );
+
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -88,13 +112,34 @@ const Dashboard: React.FC<DashboardProps> = ({
           lastFetchedAt={data.lastFetchedAt}
           wsConnection={wsConnection}
           lastWsMessageAt={lastWsMessageAt}
+          wsAttempts={wsAttempts}
         />
-        <SignalTape logs={data.logs} />
+        <SignalTape
+          logs={data.logs}
+          onSignalClick={(key) => scrollToSection(
+            (SECTION_IDS as Record<string, SectionId>)[key] ?? SECTION_IDS.dashboard
+          )}
+        />
 
         <div className="content-area" ref={contentRef}>
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />
           <div className="space-y-5">
             <div id={SECTION_IDS.dashboard}>
+              {errorLogs.length > 0 && (
+                <div className="nx-error-banner">
+                  <span className="nx-error-banner__icon">🚨</span>
+                  <span className="nx-error-banner__msg">{errorLogs[0].message}</span>
+                  {errorLogs.length > 1 && (
+                    <span className="nx-error-banner__count">+{errorLogs.length - 1}</span>
+                  )}
+                  <button
+                    className="nx-error-banner__btn"
+                    onClick={() => scrollToSection(SECTION_IDS.logs)}
+                  >
+                    View Logs ↓
+                  </button>
+                </div>
+              )}
               <StatsCards
                 totalBalance={data.balances?.total ?? 0}
                 dailyPnl={data.dailyPnl}
@@ -104,11 +149,12 @@ const Dashboard: React.FC<DashboardProps> = ({
                 totalTrades={data.summary?.total_trades ?? 0}
                 allTimePnl={data.summary?.all_time_pnl ?? 0}
                 avgPnl={data.summary?.avg_pnl ?? 0}
+                isLoading={isLoading}
               />
             </div>
 
             <RiskRadar
-              positions={data.positions || []}
+              positions={positions}
               totalBalance={data.balances?.total ?? 0}
               dailyPnl={data.dailyPnl}
               allTimePnl={data.summary?.all_time_pnl ?? 0}
@@ -116,7 +162,7 @@ const Dashboard: React.FC<DashboardProps> = ({
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               <div className="lg:col-span-2" id={SECTION_IDS.positions}>
-                <PositionsTable positions={data.positions || []} />
+                <PositionsTable positions={positions} isLoading={isLoading} />
               </div>
               <div id={SECTION_IDS.balances}>
                 <ExchangeBalances balances={data.balances} />
@@ -124,22 +170,30 @@ const Dashboard: React.FC<DashboardProps> = ({
             </div>
 
             <div id={SECTION_IDS.opportunities}>
-              <RightPanel opportunities={data.opportunities} status={data.status} />
+              <Suspense fallback={<SkeletonRightPanel rows={8} />}>
+                <RightPanel opportunities={data.opportunities} status={data.status} />
+              </Suspense>
             </div>
 
-            <AnalyticsPanel
-              pnl={data.pnl}
-              pnlHours={pnlHours}
-              onPnlHoursChange={onPnlHoursChange}
-              totalBalance={data.balances?.total ?? 0}
-            />
+            <Suspense fallback={<SkeletonAnalyticsPanel />}>
+              <AnalyticsPanel
+                pnl={data.pnl}
+                pnlHours={pnlHours}
+                onPnlHoursChange={onPnlHoursChange}
+                totalBalance={data.balances?.total ?? 0}
+              />
+            </Suspense>
 
             <div id={SECTION_IDS.trades}>
-              <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />
+              <Suspense fallback={<SkeletonRecentTrades rows={6} />}>
+                <RecentTradesPanel trades={trades} tradesLoaded={data.tradesLoaded} />
+              </Suspense>
             </div>
 
             <div id={SECTION_IDS.logs}>
-              <SystemLogs logs={data.logs} summary={data.summary} />
+              <Suspense fallback={<div style={{ height: 280, borderRadius: 14 }} className="card skeleton-shimmer" />}>
+                <SystemLogs logs={data.logs} summary={data.summary} />
+              </Suspense>
             </div>
           </div>
         </div>

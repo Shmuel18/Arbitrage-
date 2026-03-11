@@ -55,6 +55,8 @@ async def main() -> None:
     redis = RedisClient(
         url=cfg.redis.url,
         prefix=cfg.redis.key_prefix,
+        password=cfg.redis.password_plaintext,
+        tls=cfg.redis.tls,
     )
     await redis.connect()
 
@@ -65,7 +67,7 @@ async def main() -> None:
         if not exc_cfg:
             logger.warning(f"No config for exchange {eid}, skipping")
             continue
-        exc_dict = exc_cfg.model_dump()
+        exc_dict = exc_cfg.to_adapter_dict()  # unwraps SecretStr at boundary
         exc_dict["max_sane_funding_rate"] = float(cfg.trading_params.max_sane_funding_rate)
         mgr.register(eid, exc_dict)
 

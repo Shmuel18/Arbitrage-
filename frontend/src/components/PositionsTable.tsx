@@ -1,6 +1,18 @@
 import React, { useState } from 'react';
+import { AnimatePresence, m } from 'framer-motion';
 import { useSettings } from '../context/SettingsContext';
 import PositionDetailCard from './PositionDetailCard';
+import { SkeletonPositionsTable } from './Skeleton';
+
+// ── State-based accent color for the top border stripe ──────────
+// Consumes CSS design-system tokens — colors are theme-aware.
+const _STATE_ACCENT: Record<string, string> = {
+  CLOSING: 'var(--state-closing-accent)',
+  CLOSED:  'var(--state-closed-accent)',
+};
+function getStateAccent(state: string): string {
+  return _STATE_ACCENT[state?.toUpperCase()] ?? 'var(--state-open-accent)';
+}
 import {
   parseNum,
   formatPct,
@@ -54,9 +66,10 @@ interface PositionRow {
 
 interface PositionsTableProps {
   positions: PositionRow[];
+  isLoading?: boolean;
 }
 
-const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
+const PositionsTable: React.FC<PositionsTableProps> = ({ positions, isLoading = false }) => {
   const { t } = useSettings();
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -69,12 +82,12 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   const fundingCountdownStyle = (ms?: number | null): React.CSSProperties => {  // keep: returns style object, not a string
     if (!ms) return { color: 'var(--text-muted)' };
     const diff = ms - Date.now();
-    if (diff <= 0) return { color: '#10b981', fontWeight: 700 };
+    if (diff <= 0) return { color: 'var(--green)', fontWeight: 700 };
     const mins = diff / 60000;
-    if (mins < 2) return { color: '#ef4444', fontWeight: 700, animation: 'funding-blink 0.8s ease-in-out infinite' };
-    if (mins < 5) return { color: '#f97316', fontWeight: 600 };
-    if (mins < 15) return { color: '#eab308', fontWeight: 500 };
-    return { color: '#10b981' };
+    if (mins < 2)  return { color: 'var(--red)',    fontWeight: 700, animation: 'funding-blink 0.8s ease-in-out infinite' };
+    if (mins < 5)  return { color: 'var(--orange)', fontWeight: 600 };
+    if (mins < 15) return { color: 'var(--yellow)', fontWeight: 500 };
+    return { color: 'var(--green)' };
   };
 
   const getTargetProgress = (p: PositionRow) => {
@@ -91,6 +104,9 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     if (price == null || qty == null) return '--';
     return '$' + (qty * price).toLocaleString('en-US', { maximumFractionDigits: 0 });
   };
+
+  // ── Render: loading skeleton ───────────────────────────────
+  if (isLoading) return <SkeletonPositionsTable rows={3} />;
 
   // ── Render: empty state ─────────────────────────────────────
   if (positions.length === 0) {
@@ -109,8 +125,10 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           </div>
           {t.activePositions}
         </div>
-        <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-          {t.noOpenPositions}
+        <div className="nx-pos-empty">
+          <div className="nx-pos-empty__icon">🔍</div>
+          <div className="nx-pos-empty__title">{t.subScanningMarkets}</div>
+          <div className="nx-pos-empty__sub">{t.noOpenPositions}</div>
         </div>
       </div>
     );
@@ -131,15 +149,16 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           </svg>
         </div>
         {t.activePositions}
-        <span className="xcard-live" style={{ marginLeft: 2 }}>
+        <span className="xcard-live" style={{ marginInlineStart: 2 }}>
           <span className="xcard-live-dot" />LIVE
         </span>
-        <span className="nx-section-badge" style={{ marginLeft: 'auto' }}>
+        <span className="nx-section-badge" style={{ marginInlineStart: 'auto' }}>
           {positions.length} position{positions.length !== 1 ? 's' : ''}
         </span>
       </div>
 
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <AnimatePresence mode="popLayout" initial={false}>
         {positions.map((p, posIndex) => {
           const mode = getModeConfig(p.mode, t);
           const tier = getTierInfo(p.entry_tier, t);
@@ -147,23 +166,29 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
           const pnlVal = parseNum(p.unrealized_pnl_pct);
           const isProfit = pnlVal != null && pnlVal >= 0;
           const isExpanded = expandedId === p.id;
+          const stateAccent = getStateAccent(p.state);
+
+          // WOW-2: heartbeat trigger when funding is < 2 minutes away
+          const msToFunding = p.next_funding_ms != null ? p.next_funding_ms - Date.now() : null;
+          const fundingUrgent = msToFunding != null && msToFunding > 0 && msToFunding < 120_000;
 
           return (
-            <div
+            <m.div
               key={p.id}
-              className={`active-trade-card nx-pos-card ${isProfit ? 'nx-pos-card--profit' : 'nx-pos-card--loss'}`}
-              style={{
-                borderRadius: 14,
-                overflow: 'hidden',
-                animationDelay: `${posIndex * 80}ms`,
-              }}
+              layout="position"
+              className={`active-trade-card nx-pos-card ${isProfit ? 'nx-pos-card--profit' : 'nx-pos-card--loss'}${
+                p.state?.toUpperCase() === 'CLOSING' ? ' nx-pos-card--closing' : ''
+              }`}
+              style={{ borderRadius: 14, overflow: 'hidden' }}
+              initial={{ opacity: 0, x: -14, scale: 0.97 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 14, scale: 0.97, transition: { duration: 0.2 } }}
+              transition={{ type: 'spring', stiffness: 300, damping: 28 }}
             >
-              {/* ── Top accent line ── */}
+              {/* ── Top accent line: color encodes trade state ── */}
               <div style={{
                 height: 2,
-                background: isProfit
-                  ? 'linear-gradient(90deg, transparent, rgba(16,185,129,0.5), transparent)'
-                  : 'linear-gradient(90deg, transparent, rgba(239,68,68,0.5), transparent)',
+                background: `linear-gradient(90deg, transparent, ${stateAccent}, transparent)`,
               }} />
 
               {/* ── Main card content (clickable) ── */}
@@ -209,12 +234,13 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                     </div>
                   </div>
 
-                  {/* Right: PnL big number */}
+                  {/* Right: PnL big number — key change triggers remount + flash animation */}
                   <div style={{ textAlign: 'end', display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span className={`mono nx-pos-pnl ${isProfit ? 'nx-pos-pnl--positive' : 'nx-pos-pnl--negative'}`} style={{
-                      fontSize: '1.5rem', fontWeight: 800,
-                      lineHeight: 1.1,
-                    }}>
+                    <span
+                      key={p.unrealized_pnl_pct ?? undefined}
+                      className={`mono nx-pos-pnl ${isProfit ? 'nx-pos-pnl--positive nx-pnl-flash--pos' : 'nx-pos-pnl--negative nx-pnl-flash--neg'}`}
+                      style={{ fontSize: '1.5rem', fontWeight: 800, lineHeight: 1.1 }}
+                    >
                       {formatPct(p.unrealized_pnl_pct)}
                     </span>
                     <span className="mono" style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
@@ -279,7 +305,18 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       {t.nextPayout}
                     </div>
                     <div className="nx-pos-stat-value" style={{ ...fundingCountdownStyle(p.next_funding_ms) }}>
-                      {formatCountdown(p.next_funding_ms)}
+                      {/* WOW-2: heartbeat pulse when funding is imminent */}
+                      {fundingUrgent ? (
+                        <m.span
+                          animate={{ scale: [1, 1.12, 1] }}
+                          transition={{ repeat: Infinity, duration: 0.75, ease: 'easeInOut' }}
+                          style={{ display: 'inline-block', transformOrigin: 'center' }}
+                        >
+                          {formatCountdown(p.next_funding_ms)}
+                        </m.span>
+                      ) : (
+                        formatCountdown(p.next_funding_ms)
+                      )}
                     </div>
                   </div>
                 </div>
@@ -349,9 +386,15 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                   <PositionDetailCard position={p} onClose={() => setExpandedId(null)} />
                 </div>
               )}
-            </div>
+
+              {/* ── CLOSING state: amber sweep beam at bottom ── */}
+              {p.state?.toUpperCase() === 'CLOSING' && (
+                <div className="nx-pos-closing-beam" aria-hidden />
+              )}
+            </m.div>
           );
         })}
+        </AnimatePresence>
       </div>
     </div>
   );

@@ -218,7 +218,7 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
           {t.feesDetail}: <span style={{ color: 'var(--red)' }}>-{formatPct(position.fees_pct, 3)}</span>
         </span>
         {targetMove != null && (
-          <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginLeft: 'auto' }}>
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginInlineStart: 'auto' }}>
             {t.pdTarget}: <span style={{ color: Number(targetMove) <= 0 ? 'var(--green)' : '#eab308', fontWeight: 600 }}>
               {Number(targetMove) <= 0 ? '✅' : `${Number(targetMove).toFixed(3)}%`}
             </span>

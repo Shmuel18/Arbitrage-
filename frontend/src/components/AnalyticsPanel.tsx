@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { formatCurrency } from '../utils/format';
+import { SkeletonAnalyticsPanel } from './Skeleton';
 
 interface PnlPoint {
   pnl: number;
@@ -36,60 +37,6 @@ function formatShortDate(ts: number, mode: 'time' | 'datetime' | 'date'): string
   }
 }
 
-/* ── Milestone detection: find peaks & valleys ─────────────────── */
-interface Milestone {
-  idx: number;
-  value: number;
-  type: 'peak' | 'valley';
-}
-
-function findMilestones(values: number[], maxCount: number = 5): Milestone[] {
-  if (values.length < 5) return [];
-  const milestones: Milestone[] = [];
-  const windowSize = Math.max(8, Math.floor(values.length / 6));
-
-  for (let i = windowSize; i < values.length - windowSize; i++) {
-    const windowSlice = values.slice(i - windowSize, i + windowSize + 1);
-    const localMax = Math.max(...windowSlice);
-    const localMin = Math.min(...windowSlice);
-
-    if (values[i] === localMax && values[i] > 0) {
-      milestones.push({ idx: i, value: values[i], type: 'peak' });
-    } else if (values[i] === localMin && values[i] < 0) {
-      milestones.push({ idx: i, value: values[i], type: 'valley' });
-    }
-  }
-
-  // Deduplicate: keep milestones that are far enough apart
-  const minDistance = Math.floor(values.length / (maxCount + 1));
-  const filtered: Milestone[] = [];
-  for (const m of milestones) {
-    if (filtered.length === 0 || Math.abs(m.idx - filtered[filtered.length - 1].idx) >= minDistance) {
-      filtered.push(m);
-    }
-  }
-
-  // Always include the global max and min if not already present
-  const globalMax = Math.max(...values);
-  const globalMin = Math.min(...values);
-  const globalMaxIdx = values.indexOf(globalMax);
-  const globalMinIdx = values.indexOf(globalMin);
-
-  const hasMax = filtered.some(m => m.idx === globalMaxIdx);
-  const hasMin = filtered.some(m => m.idx === globalMinIdx);
-
-  if (!hasMax && globalMax > 0) {
-    filtered.push({ idx: globalMaxIdx, value: globalMax, type: 'peak' });
-  }
-  if (!hasMin && globalMin < 0) {
-    filtered.push({ idx: globalMinIdx, value: globalMin, type: 'valley' });
-  }
-
-  // Sort by index and limit
-  filtered.sort((a, b) => a.idx - b.idx);
-  return filtered.slice(0, maxCount);
-}
-
 /* ── Smooth path via Catmull-Rom → cubic Bezier ──────────────── */
 function smoothPath(points: { x: number; y: number }[], tension: number = 0.3): string {
   if (points.length < 2) return '';
@@ -115,12 +62,13 @@ function smoothPath(points: { x: number; y: number }[], tension: number = 0.3): 
 }
 
 /* ── Main component ───────────────────────────────────────────── */
-const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange, totalBalance }) => {
+const AnalyticsPanelInner: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHoursChange, totalBalance }) => {
   const { t } = useSettings();
-  const points = pnl?.data_points ?? [];
-  const total = pnl?.total_pnl ?? 0;
-  const unrealized = pnl?.unrealized_pnl ?? 0;
-  const realized = pnl?.realized_pnl ?? 0;
+
+  const points = (pnl as NonNullable<typeof pnl>).data_points ?? [];
+  const total = (pnl as NonNullable<typeof pnl>).total_pnl ?? 0;
+  const unrealized = (pnl as NonNullable<typeof pnl>).unrealized_pnl ?? 0;
+  const realized = (pnl as NonNullable<typeof pnl>).realized_pnl ?? 0;
 
   const [hover, setHover] = useState<{ x: number; y: number; idx: number } | null>(null);
 
@@ -175,9 +123,6 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
     return `${curvePath} L ${curvePoints[curvePoints.length - 1].x} ${zeroY} L ${curvePoints[0].x} ${zeroY} Z`;
   }, [curvePath, curvePoints, zeroY]);
 
-  // Milestones
-  const milestones = useMemo(() => findMilestones(values), [values]);
-
   // Y-axis gridlines
   const gridLines = useMemo(() => {
     const lines: { value: number; y: number }[] = [];
@@ -222,6 +167,21 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
 
   // Zero fraction for gradient split
   const zeroFrac = (zeroY - PADDING_TOP) / chartH;
+
+  // Zero crossings: x positions where cumulative PnL transitions + ↔ −
+  const zeroCrossings = useMemo(() => {
+    if (values.length < 2) return [];
+    const cxs: number[] = [];
+    for (let i = 1; i < values.length; i++) {
+      const pv = values[i - 1];
+      const cv = values[i];
+      if ((pv < 0 && cv >= 0) || (pv >= 0 && cv < 0)) {
+        const frac = Math.abs(pv) / (Math.abs(pv) + Math.abs(cv));
+        cxs.push(scaleX(i - 1) + frac * (scaleX(i) - scaleX(i - 1)));
+      }
+    }
+    return cxs;
+  }, [values, scaleX]);
 
   // Current value (last point)
   const currentValue = values.length > 0 ? values[values.length - 1] : 0;
@@ -394,14 +354,27 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
                 strokeDasharray="6 4"
               />
 
+              {/* Zero-crossing glow markers — pulse ring where PnL flips sign */}
+              {zeroCrossings.map((cx, ci) => (
+                <g key={`zcross-${ci}`}>
+                  <circle cx={cx} cy={zeroY} r="8" fill="none"
+                    stroke="#2dd4a0" strokeWidth="1.5"
+                    className="nx-zero-pulse" opacity="0.65" />
+                  <circle cx={cx} cy={zeroY} r="2.5" fill="#2dd4a0" opacity="0.95" />
+                </g>
+              ))}
+
               {/* Green fill — above zero */}
               <path d={fillPathAbove} fill="url(#wh-fill-pos)" clipPath="url(#wh-clip-above)" />
               {/* Red fill — below zero */}
               <path d={fillPathAbove} fill="url(#wh-fill-neg)" clipPath="url(#wh-clip-below)" />
 
-              {/* Main line with glow */}
+              {/* Main line with glow — re-keyed on data change to retrigger draw animation */}
               <path
+                key={`draw-glow-${pnlHours}-${points.length}`}
                 d={curvePath}
+                className="wh-path-animated"
+                pathLength="1"
                 fill="none"
                 stroke="url(#wh-line-grad)"
                 strokeWidth="2.5"
@@ -411,57 +384,16 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
               />
               {/* Sharp line on top */}
               <path
+                key={`draw-sharp-${pnlHours}-${points.length}`}
                 d={curvePath}
+                className="wh-path-animated"
+                pathLength="1"
                 fill="none"
                 stroke="url(#wh-line-grad)"
                 strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-
-              {/* ── Milestone annotations ────────────────────────── */}
-              {milestones.map((m, i) => {
-                const mx = scaleX(m.idx);
-                const my = scaleY(m.value);
-                const isAbove = m.type === 'peak';
-                const labelY = isAbove ? my - 14 : my + 18;
-                const color = m.value >= 0 ? posColor : negColor;
-
-                return (
-                  <g key={`ms-${i}`} className="wh-milestone">
-                    {/* Connecting line */}
-                    <line
-                      x1={mx}
-                      y1={my}
-                      x2={mx}
-                      y2={isAbove ? my - 8 : my + 8}
-                      stroke={color}
-                      strokeWidth="1"
-                      strokeDasharray="2 2"
-                      opacity="0.6"
-                    />
-                    {/* Dot */}
-                    <circle
-                      cx={mx}
-                      cy={my}
-                      r="3"
-                      fill={color}
-                      stroke="rgba(15, 23, 42, 0.8)"
-                      strokeWidth="1.5"
-                    />
-                    {/* Value label */}
-                    <text
-                      x={mx}
-                      y={labelY}
-                      textAnchor="middle"
-                      className="wh-milestone-label"
-                      fill={color}
-                    >
-                      {formatCurrency(m.value)}
-                    </text>
-                  </g>
-                );
-              })}
 
               {/* ── Current value dashed line + badge ─────────────── */}
               {values.length > 1 && (
@@ -575,6 +507,12 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
       </div>
     </div>
   );
+};
+
+// Wrapper: guards null before mounting the inner component (avoids putting hooks after a conditional return).
+const AnalyticsPanel: React.FC<AnalyticsPanelProps> = (props) => {
+  if (props.pnl === null) return <SkeletonAnalyticsPanel />;
+  return <AnalyticsPanelInner {...props} />;
 };
 
 export default AnalyticsPanel;

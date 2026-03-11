@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useSettings } from '../context/SettingsContext';
 
 interface LogEntry {
@@ -17,6 +18,13 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
 
+  const logVirtualizer = useVirtualizer({
+    count: logs.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => 26,
+    overscan: 12,
+  });
+
   // Track whether user is near the bottom (within 60px)
   useEffect(() => {
     const el = containerRef.current;
@@ -28,12 +36,13 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Only auto-scroll when user is near the bottom (don't hijack their scroll position)
+  // Auto-scroll to newest entry when user is near the bottom
   useEffect(() => {
-    if (containerRef.current && isNearBottomRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [logs]);
+    if (!isNearBottomRef.current || logs.length === 0) return;
+    logVirtualizer.scrollToIndex(logs.length - 1, { align: 'end' });
+  // logVirtualizer identity is stable between renders — safe to omit
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logs.length]);
 
   const getLevelClass = (level: string) => {
     switch (level.toUpperCase()) {
@@ -83,21 +92,40 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
         </div>
       </div>
 
-      <div ref={containerRef} className="flex-1 overflow-auto px-5 py-3 scrollbar-thin">
+      <div ref={containerRef} className="flex-1 overflow-auto px-5 py-3 scrollbar-thin" style={{ contain: 'content' }}>
         {logs.length === 0 ? (
           <div className="text-muted text-sm">{t.waitingLogs}</div>
         ) : (
-          logs.map((log, index) => (
-            <div key={index} className="nx-log-entry mb-1">
-              <span className="nx-log-timestamp">[{log.timestamp}]</span>
-              <span className={`nx-log-level ${getLevelClass(log.level)}`}>{log.level}</span>
-              <span className="nx-log-message" style={{ color: getLevelColor(log.level) }}>{log.message}</span>
-            </div>
-          ))
+          <div style={{ height: `${logVirtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {logVirtualizer.getVirtualItems().map((vRow) => {
+              const log = logs[vRow.index];
+              return (
+                <div
+                  key={vRow.index}
+                  className="nx-log-entry mb-1"
+                  style={{
+                    position: 'absolute', top: vRow.start, width: '100%',
+                    borderLeft: `2px solid ${getLevelColor(log.level)}`,
+                    paddingLeft: 6,
+                    borderRadius: '0 2px 2px 0',
+                    background: log.level.toUpperCase() === 'ERROR'
+                      ? 'rgba(239,68,68,0.04)'
+                      : log.level.toUpperCase() === 'WARNING'
+                      ? 'rgba(245,158,11,0.03)'
+                      : 'transparent',
+                  }}
+                >
+                  <span className="nx-log-timestamp">[{log.timestamp}]</span>
+                  <span className={`nx-log-level ${getLevelClass(log.level)}`}>{log.level}</span>
+                  <span className="nx-log-message" style={{ color: getLevelColor(log.level) }}>{log.message}</span>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
   );
 };
 
-export default SystemLogs;
+export default React.memo(SystemLogs);

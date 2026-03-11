@@ -246,7 +246,10 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
           pFirst?.long_exchange === nFirst?.long_exchange &&
           pLast?.symbol === nLast?.symbol &&
           pLast?.long_exchange === nLast?.long_exchange &&
-          prev.opportunities?.count === d.opportunities.count
+          prev.opportunities?.count === d.opportunities.count &&
+          // Also compare net_pct of first + last — catches rate changes with same set of symbols
+          pFirst?.net_pct === nFirst?.net_pct &&
+          pLast?.net_pct === nLast?.net_pct
         ) {
           return prev.opportunities;
         }
@@ -288,8 +291,18 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         return d.logs;
       })();
 
-      const newSummary =
-        d.summary && d.summary.all_time_pnl !== undefined ? d.summary : prev.summary;
+      // Guard: two sources (WS counter vs HTTP zrange scan) can temporarily
+      // disagree on total_trades. Trade count only ever goes up — keep the max.
+      const newSummary = (() => {
+        if (!d.summary || d.summary.all_time_pnl === undefined) return prev.summary;
+        if (
+          prev.summary &&
+          d.summary.total_trades < prev.summary.total_trades
+        ) {
+          return { ...d.summary, total_trades: prev.summary.total_trades };
+        }
+        return d.summary;
+      })();
       const newPnl =
         d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0
           ? d.pnl
@@ -366,10 +379,15 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         opportunities:
           oppRes.status === 'fulfilled' ? (oppRes.value as OpportunitySet) : prev.opportunities,
         logs: logsRes.status === 'fulfilled' ? logsRes.value.logs || [] : prev.logs,
-        summary:
-          summRes.status === 'fulfilled' && summRes.value?.total_trades != null
-            ? summRes.value
-            : prev.summary,
+        summary: (() => {
+          if (summRes.status !== 'fulfilled' || summRes.value?.total_trades == null) return prev.summary;
+          const incoming = summRes.value as SummaryData;
+          // Never let an HTTP poll overwrite a higher count already known from WS.
+          if (prev.summary && incoming.total_trades < prev.summary.total_trades) {
+            return { ...incoming, total_trades: prev.summary.total_trades };
+          }
+          return incoming;
+        })(),
         positions: posRes.status === 'fulfilled' ? httpPositions : prev.positions,
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         dailyPnl:

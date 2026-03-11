@@ -229,8 +229,13 @@ async def websocket_endpoint(websocket: WebSocket):
 # ── Serve React build (must be LAST — after all API routes) ──────
 _build_dir = os.path.join("frontend", "build")
 if os.path.exists(_build_dir):
-    # Serve /static/... assets
-    app.mount("/static", StaticFiles(directory=os.path.join(_build_dir, "static")), name="static")
+    # Serve /assets/... (Vite build output) or /static/... (CRA build output)
+    _assets_dir = os.path.join(_build_dir, "assets")
+    _static_dir = os.path.join(_build_dir, "static")
+    if os.path.exists(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="static")
+    elif os.path.exists(_static_dir):
+        app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):

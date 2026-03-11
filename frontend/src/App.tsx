@@ -1,9 +1,112 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { LazyMotion, domAnimation, m } from 'framer-motion';
 import Dashboard from './components/Dashboard';
 import { useMarketData } from './hooks/useMarketData';
 import './App.css';
 
-/* ── Error Boundary ──────────────────────────────────────────────── */
+/* ── Error Fallback (functional — enables motion + CSS vars) ─────── */
+function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => void }) {
+  return (
+    <m.div
+      initial={{ opacity: 0, y: 24 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: 'easeOut' }}
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg)',
+        padding: 'var(--space-6)',
+      }}
+    >
+      <div
+        className="card xcard"
+        style={{
+          maxWidth: 480,
+          width: '100%',
+          textAlign: 'center',
+          padding: 'var(--space-8)',
+        }}
+      >
+        {/* Icon */}
+        <m.div
+          initial={{ scale: 0.6, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ delay: 0.15, type: 'spring', stiffness: 280, damping: 22 }}
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 'var(--radius-full)',
+            background: 'rgba(239,68,68,0.12)',
+            border: '1.5px solid rgba(239,68,68,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto var(--space-5)',
+            fontSize: 26,
+          }}
+        >
+          ⚠
+        </m.div>
+
+        <h2 style={{
+          fontSize: 'var(--text-lg)',
+          fontWeight: 'var(--fw-semibold)',
+          color: 'var(--text)',
+          marginBottom: 'var(--space-3)',
+        }}>
+          Something went wrong
+        </h2>
+
+        <p style={{
+          fontSize: 'var(--text-sm)',
+          color: 'var(--muted)',
+          marginBottom: 'var(--space-4)',
+        }}>
+          An unexpected error occurred in the UI. The bot process is unaffected.
+        </p>
+
+        {error?.message && (
+          <pre style={{
+            fontSize: 'var(--text-2xs)',
+            color: 'var(--muted)',
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-md)',
+            padding: 'var(--space-3)',
+            marginBottom: 'var(--space-6)',
+            textAlign: 'left',
+            overflowX: 'auto',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}>
+            {error.message}
+          </pre>
+        )}
+
+        <button
+          onClick={onReload}
+          style={{
+            padding: 'var(--space-2) var(--space-6)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--accent)',
+            color: '#fff',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 'var(--fw-medium)',
+            letterSpacing: '0.02em',
+          }}
+        >
+          Reload Page
+        </button>
+      </div>
+    </m.div>
+  );
+}
+
+/* ── Error Boundary (class — required for getDerivedStateFromError) ─ */
 interface ErrorBoundaryState { hasError: boolean; error?: Error }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
@@ -20,18 +123,10 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: 40, textAlign: 'center', color: '#ef4444' }}>
-          <h2>Something went wrong</h2>
-          <pre style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>
-            {this.state.error?.message}
-          </pre>
-          <button
-            onClick={() => window.location.reload()}
-            style={{ marginTop: 20, padding: '8px 20px', borderRadius: 8, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
-          >
-            Reload
-          </button>
-        </div>
+        <ErrorFallback
+          error={this.state.error}
+          onReload={() => window.location.reload()}
+        />
       );
     }
     return this.props.children;
@@ -39,22 +134,25 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 }
 
 function App() {
-  const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt } = useMarketData();
+  const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt, wsAttempts } = useMarketData();
 
   return (
-    <ErrorBoundary>
-      <div className="App min-h-screen bg-slate-900">
-        {/* RateBridge status beam — stretches full width at very top */}
-        <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
-        <Dashboard
-          data={data}
-          pnlHours={pnlHours}
-          onPnlHoursChange={handlePnlHoursChange}
-          wsConnection={wsConnection}
-          lastWsMessageAt={lastWsMessageAt}
-        />
-      </div>
-    </ErrorBoundary>
+    <LazyMotion features={domAnimation}>
+      <ErrorBoundary>
+        <div className="App min-h-screen bg-slate-900">
+          {/* RateBridge status beam — stretches full width at very top */}
+          <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
+          <Dashboard
+            data={data}
+            pnlHours={pnlHours}
+            onPnlHoursChange={handlePnlHoursChange}
+            wsConnection={wsConnection}
+            lastWsMessageAt={lastWsMessageAt}
+            wsAttempts={wsAttempts}
+          />
+        </div>
+      </ErrorBoundary>
+    </LazyMotion>
   );
 }
 

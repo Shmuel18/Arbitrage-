@@ -82,7 +82,7 @@ const RiskRadar: React.FC<RiskRadarProps> = memo(({
     return { drawdownPct, marginPct, symbolConc, exchangeConc };
   }, [positions, totalBalance, dailyPnl]);
 
-  const cells = [
+  const cells = useMemo(() => [
     {
       label: t.rrMaxDrawdown,
       value: `${metrics.drawdownPct}%`,
@@ -111,7 +111,7 @@ const RiskRadar: React.FC<RiskRadarProps> = memo(({
       accent: riskColor(metrics.exchangeConc),
       hint: riskLabel(metrics.exchangeConc, t),
     },
-  ];
+  ], [metrics, positions.length, t]);
 
   return (
     <div className="risk-radar">
@@ -139,8 +139,20 @@ const RiskRadar: React.FC<RiskRadarProps> = memo(({
       ))}
     </div>
   );
-});
+}, riskRadarPropsEqual);
 
 RiskRadar.displayName = 'RiskRadar';
+
+/** Custom equality guard — skip re-render when primitive props and position
+ *  array reference are all unchanged. Avoids wasted diffing after WS pings
+ *  that don't affect positions data. */
+function riskRadarPropsEqual(prev: RiskRadarProps, next: RiskRadarProps): boolean {
+  return (
+    prev.positions  === next.positions  &&
+    prev.totalBalance === next.totalBalance &&
+    prev.dailyPnl   === next.dailyPnl   &&
+    prev.allTimePnl === next.allTimePnl
+  );
+}
 
 export default RiskRadar;

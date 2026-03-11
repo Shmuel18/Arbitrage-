@@ -21,6 +21,7 @@ interface MarketDataState {
   handlePnlHoursChange: (hours: number) => void;
   wsConnection: WsConnectionState;
   lastWsMessageAt: number | null;
+  wsAttempts: number;
 }
 
 export function useMarketData(): MarketDataState {
@@ -28,7 +29,7 @@ export function useMarketData(): MarketDataState {
   const pnlHoursRef = useRef<number>(pnlHours);
 
   const { data, dispatch } = useMarketReducer();
-  const { wsConnection, lastWsMessageAt } = useWsFeed(dispatch);
+  const { wsConnection, lastWsMessageAt, wsAttempts } = useWsFeed(dispatch);
   useSnapshotPoller(dispatch, pnlHoursRef);
 
   const handlePnlHoursChange = useCallback((hours: number) => {
@@ -52,5 +53,6 @@ export function useMarketData(): MarketDataState {
     handlePnlHoursChange,
     wsConnection,
     lastWsMessageAt,
+    wsAttempts,
   };
 }

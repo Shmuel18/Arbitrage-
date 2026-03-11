@@ -103,6 +103,7 @@ def mock_adapter(btc_spec):
         "id": "order-123", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
     adapter.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    adapter.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
     # Mock public adapter properties used by scanner and main
     adapter.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
@@ -134,6 +135,7 @@ def mock_exchange_mgr(mock_adapter):
         "id": "order-456", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
     adapter_b.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    adapter_b.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
     # Mock public adapter properties used by scanner and main
     adapter_b.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter_b.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
@@ -157,6 +159,7 @@ def mock_redis():
     r.health_check.return_value = True
     r.set_trade_state = AsyncMock(return_value=True)
     r.set_cooldown = AsyncMock(return_value=True)
+    r.get_cooled_down_symbols.return_value = set()  # sync set — prevents AsyncMock default
     return r
 
 

@@ -28,35 +28,49 @@ interface TierInfo {
 interface TierTranslations {
   tierTop?: string;
   tierMedium?: string;
-  tierBad?: string;
+  tierWeak?: string;
   tierAdverse?: string;
 }
 
 export const getTierInfo = (tier: string | null | undefined, t: TierTranslations): TierInfo | null => {
   if (!tier) return null;
   const key = tier.toLowerCase();
-  if (key === 'top')     return { emoji: '🏆 ', label: t.tierTop     ?? 'TOP',     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' };
-  if (key === 'medium')  return { emoji: '📊 ', label: t.tierMedium  ?? 'MEDIUM',  color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' };
-  if (key === 'bad')     return { emoji: '⚠️ ', label: t.tierBad     ?? 'BAD',     color: '#ef4444', bg: 'rgba(239,68,68,0.12)' };
-  if (key === 'adverse') return { emoji: '',     label: t.tierAdverse ?? 'ADVERSE', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' };
+  if (key === 'top')     return { emoji: '🏆 ', label: t.tierTop     ?? 'TOP',     color: 'var(--tier-top-color)',     bg: 'var(--tier-top-bg)' };
+  if (key === 'medium')  return { emoji: '📊 ', label: t.tierMedium  ?? 'MEDIUM',  color: 'var(--tier-medium-color)',  bg: 'var(--tier-medium-bg)' };
+  if (key === 'weak')    return { emoji: '⚡ ', label: t.tierWeak    ?? 'WEAK',    color: 'var(--tier-weak-color)',    bg: 'var(--tier-weak-bg)' };
+  if (key === 'adverse') return { emoji: '',     label: t.tierAdverse ?? 'ADVERSE', color: 'var(--tier-adverse-color)', bg: 'var(--tier-adverse-bg)' };
   return null;
 };
 
 export const TierBadge: React.FC<{ tier?: string | null; t: TierTranslations }> = ({ tier, t }) => {
   const info = getTierInfo(tier, t);
+  // Pop animation when tier value changes
+  const prevTierRef = React.useRef(tier);
+  const [popped, setPopped] = React.useState(false);
+  React.useEffect(() => {
+    if (prevTierRef.current !== tier) {
+      prevTierRef.current = tier;
+      setPopped(true);
+      const id = setTimeout(() => setPopped(false), 380);
+      return () => clearTimeout(id);
+    }
+  }, [tier]);
   if (!info) return null;
   return (
-    <span style={{
-      background: info.color + '18',
-      color: info.color,
-      border: `1px solid ${info.color}44`,
-      borderRadius: 4,
-      padding: '0px 6px',
-      fontSize: 10,
-      fontWeight: 700,
-      letterSpacing: '0.06em',
-      marginInlineStart: 4,
-    }}>
+    <span
+      className={`nx-tier-badge${popped ? ' nx-tier-badge--pop' : ''}`}
+      style={{
+        background: info.color + '18',
+        color: info.color,
+        border: `1px solid ${info.color}44`,
+        borderRadius: 4,
+        padding: '0px 6px',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: '0.06em',
+        marginInlineStart: 4,
+      }}
+    >
       {info.emoji}{info.label}
     </span>
   );
@@ -105,16 +119,27 @@ export const formatFundingRateN = (rate?: string | number | null, decimals = 4):
 };
 
 /* ── USD formatter (configurable fractions) ─────────────────────── */
+// Cached per fraction count — avoids creating a new Intl instance on every render.
+const _usdFmtCache = new Map<number, Intl.NumberFormat>();
+function _getUsdFmt(fractions: number): Intl.NumberFormat {
+  let fmt = _usdFmtCache.get(fractions);
+  if (!fmt) {
+    fmt = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: fractions,
+      maximumFractionDigits: fractions,
+    });
+    _usdFmtCache.set(fractions, fmt);
+  }
+  return fmt;
+}
+
 export const formatUsd = (value?: string | number | null, fractions = 2): string => {
   if (value == null || value === '') return '--';
   const n = Number(value);
   if (Number.isNaN(n)) return '--';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: fractions,
-    maximumFractionDigits: fractions,
-  }).format(n);
+  return _getUsdFmt(fractions).format(n);
 };
 
 /* ── Price formatter (auto-precision based on magnitude) ────────── */
@@ -185,9 +210,9 @@ interface ModeConfig {
 
 export const getModeConfig = (mode?: string | null, t: ModeTranslations = {}): ModeConfig => {
   const m = (mode ?? '').toLowerCase();
-  if (m === 'cherry_pick') return { emoji: '🍒', label: t.cherry_pick ?? 'CHERRY PICK', color: '#f97316', bg: 'rgba(249,115,22,0.10)', border: 'rgba(249,115,22,0.35)' };
-  if (m === 'pot')         return { emoji: '🍯', label: t.pot ?? 'POT',             color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.40)' };
-  if (m === 'nutcracker')  return { emoji: '🔨🥜', label: t.nutcracker ?? 'NUTCRACKER', color: '#a855f7', bg: 'rgba(168,85,247,0.08)', border: 'rgba(168,85,247,0.35)' };
+  if (m === 'cherry_pick') return { emoji: '🍒', label: t.cherry_pick ?? 'CHERRY PICK', color: 'var(--orange)',  bg: 'var(--orange-bg)',              border: 'var(--orange-border)' };
+  if (m === 'pot')         return { emoji: '🍯', label: t.pot ?? 'POT',             color: 'var(--yellow)', bg: 'var(--yellow-bg)',              border: 'rgba(245,158,11,0.40)' };
+  if (m === 'nutcracker')  return { emoji: '🔨🥜', label: t.nutcracker ?? 'NUTCRACKER', color: 'var(--purple)', bg: 'var(--purple-bg)',              border: 'rgba(168,85,247,0.35)' };
   return { emoji: '🤝', label: t.hold ?? 'HOLD', color: '#22c55e', bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.35)' };
 };
 

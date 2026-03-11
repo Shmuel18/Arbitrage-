@@ -1,8 +1,12 @@
-import React, { useState, memo } from 'react';
+import React, { useState, useRef, memo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import TradeDetailModal from './TradeDetailModal';
+import { SkeletonRecentTrades } from './Skeleton';
 import { TierBadge, ExitReasonBadge, formatCurrency, formatDate, formatDuration } from '../utils/format';
+
+// Module-level formatter — avoids creating a new Intl instance on every render.
+const _fundingFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
 
 interface RecentTradesPanelProps {
   trades: Trade[];
@@ -12,6 +16,22 @@ interface RecentTradesPanelProps {
 const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoaded = true }) => {
   const { t } = useSettings();
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+  // Track which trade IDs have already been seen — new ones get a slide-in animation.
+  // Initialized to null so we can detect the first-render case (no animation on initial load).
+  const knownTradeIds = useRef<Set<string> | null>(null);
+
+  // Show skeleton until the first trades payload loads.
+  if (!tradesLoaded) return <SkeletonRecentTrades rows={6} />;
+
+  // First render: all current trades are "already known" — no entrance animation.
+  if (knownTradeIds.current === null) {
+    knownTradeIds.current = new Set(trades.map((tr) => tr.id));
+  }
+  // Subsequent renders: IDs not in set are genuinely new.
+  const newTradeIds = new Set(
+    trades.filter((tr) => !knownTradeIds.current!.has(tr.id)).map((tr) => tr.id),
+  );
+  trades.forEach((tr) => knownTradeIds.current!.add(tr.id));
 
   const formatPnl = (v?: number | null) => {
     if (v == null) return <span style={{ color: 'var(--text-muted)' }}>--</span>;
@@ -38,7 +58,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
         </div>
         {t.last10Trades}
         {trades.length > 0 && (
-          <span className="nx-section-badge" style={{ marginLeft: 'auto' }}>
+          <span className="nx-section-badge" style={{ marginInlineStart: 'auto' }}>
             {t.clickRowForDetails}
           </span>
         )}
@@ -73,16 +93,22 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   </td>
               </tr>
             ) : (
-              trades.map((tr) => {
+              trades.map((tr, trIdx) => {
                 const received = Number(tr.funding_received_total ?? 0);
                 const paid = Number(tr.funding_paid_total ?? 0);
                 const fundingNet = received - paid;
                 return (
                 <tr
                   key={tr.id}
-                  className="nx-trades-row"
+                  className={`nx-trades-row${
+                    newTradeIds.has(tr.id)
+                      ? Number(tr.total_pnl ?? 0) >= 0
+                        ? ' nx-trades-row--new-pos'
+                        : ' nx-trades-row--new-neg'
+                      : ''
+                  }`}
                   onClick={() => setSelectedTrade(tr)}
-                  style={{ animationDelay: `${trades.indexOf(tr) * 50}ms` }}
+                  style={{ animationDelay: newTradeIds.has(tr.id) ? '0ms' : `${trIdx * 50}ms` }}
                   title="Click for trade details"
                 >
                   <td style={{ overflow: 'hidden' }}>
@@ -101,7 +127,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   <td className="text-end mono">{formatPnl(tr.total_pnl)}</td>
                   <td className="text-end mono">
                     <span className={`nx-trades-funding ${fundingNet >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>
-                      {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
+                      {fundingNet >= 0 ? '+' : ''}{_fundingFmt.format(fundingNet)}
                     </span>
                   </td>
                   <td className="text-end" style={{ whiteSpace: 'nowrap' }}>

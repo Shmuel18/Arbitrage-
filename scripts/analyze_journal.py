@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Tier Performance Analyzer — parse trade_journal.jsonl and produce:
-  • Monthly PnL breakdown by entry tier (TOP / MEDIUM / BAD)
+  • Monthly PnL breakdown by entry tier (TOP / MEDIUM / WEAK)
   • Win-rate, average profit, average duration per tier
-  • Recommendation: should BAD-tier trades be disabled?
+  • Recommendation: should WEAK-tier trades be disabled?
 
 Usage:
     python scripts/analyze_journal.py                # all-time
@@ -201,9 +201,9 @@ def analyze(trades: Dict[str, dict],
 
 # ── Printing ─────────────────────────────────────────────────────
 
-TIER_ORDER = ["top", "medium", "bad", "unknown"]
-TIER_LABELS = {"top": "🏆  TOP", "medium": "📊  MEDIUM", "bad": "⚠️   BAD", "unknown": "❓  UNKNOWN"}
-BAD_TIER_LOSS_THRESHOLD = -0.1  # avg PnL below this → recommend disabling BAD tier
+TIER_ORDER = ["top", "medium", "weak", "unknown"]
+TIER_LABELS = {"top": "🏆  TOP", "medium": "📊  MEDIUM", "weak": "⚡  WEAK", "unknown": "❓  UNKNOWN"}
+WEAK_TIER_LOSS_THRESHOLD = -0.1  # avg PnL below this → recommend disabling WEAK tier
 
 
 def _print_tier_table(stats: Dict[str, TierStats], title: str):
@@ -233,24 +233,24 @@ def _print_tier_table(stats: Dict[str, TierStats], title: str):
 
 
 def _bad_tier_recommendation(all_time: Dict[str, TierStats]):
-    bad = all_time.get("bad")
-    if not bad or bad.closed == 0:
-        print("\n💡 BAD TIER: No closed BAD-tier trades — recommendation not yet available.")
+    weak = all_time.get("weak")
+    if not weak or weak.closed == 0:
+        print("\n💡 WEAK TIER: No closed WEAK-tier trades — recommendation not yet available.")
         return
 
-    print("\n💡 BAD TIER RECOMMENDATION")
+    print("\n💡 WEAK TIER RECOMMENDATION")
     print("─" * 60)
-    print(f"   Closed trades : {bad.closed}")
-    print(f"   Win rate       : {bad.win_rate_str}")
-    print(f"   Avg PnL        : {bad.avg_pnl_str}")
-    print(f"   Total PnL      : {_fmt(bad.total_pnl, '%')}")
+    print(f"   Closed trades : {weak.closed}")
+    print(f"   Win rate       : {weak.win_rate_str}")
+    print(f"   Avg PnL        : {weak.avg_pnl_str}")
+    print(f"   Total PnL      : {_fmt(weak.total_pnl, '%')}")
 
-    if bad.avg_pnl is not None and bad.avg_pnl < BAD_TIER_LOSS_THRESHOLD:
-        print(f"\n   ❌ RECOMMENDATION: DISABLE BAD tier")
-        print(f"      Average PnL ({bad.avg_pnl:.4f}%) is below threshold ({BAD_TIER_LOSS_THRESHOLD}%).")
-        print(f"      Set  tier_bad_max_adverse_spread: 0  in config.yaml to stop BAD entries.")
-    elif bad.avg_pnl is not None and bad.avg_pnl >= 0:
-        print(f"\n   ✅ RECOMMENDATION: KEEP BAD tier — still profitable on average.")
+    if weak.avg_pnl is not None and weak.avg_pnl < WEAK_TIER_LOSS_THRESHOLD:
+        print(f"\n   ❌ RECOMMENDATION: DISABLE WEAK tier")
+        print(f"      Average PnL ({weak.avg_pnl:.4f}%) is below threshold ({WEAK_TIER_LOSS_THRESHOLD}%).")
+        print(f"      Set  weak_min_funding_excess: 99  in config.yaml to stop WEAK entries.")
+    elif weak.avg_pnl is not None and weak.avg_pnl >= 0:
+        print(f"\n   ✅ RECOMMENDATION: KEEP WEAK tier — still profitable on average.")
     else:
         print(f"\n   ⚠️  RECOMMENDATION: MONITOR — marginally negative, not yet conclusive.")
     print("─" * 60)

@@ -80,7 +80,7 @@ class _MonitorMixin(_ExitLogicMixin):
         # ── Minimum hold time: never upgrade within first 3 minutes ──────────
         # Prevents rapid churn where trades are opened and immediately closed
         # for "better" opportunities before any value is captured.
-        _MIN_UPGRADE_HOLD_SECONDS = 180
+        _MIN_UPGRADE_HOLD_SECONDS = self._cfg.trading_params.min_upgrade_hold_seconds
         if trade.opened_at:
             held_secs = (datetime.now(timezone.utc) - trade.opened_at).total_seconds()
             if held_secs < _MIN_UPGRADE_HOLD_SECONDS:

@@ -11,7 +11,7 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_funding_spread: 0.5 # minimum spread of the next imminent payment (%) — no 8h normalization
+  min_funding_spread: 0.3 # minimum spread of the next imminent payment (%) — no 8h normalization
   slippage_buffer_pct: 0.015
   safety_buffer_pct: 0.02
   cooldown_after_orphan_hours: 2
@@ -25,7 +25,7 @@ trading_params:
   upgrade_funding_lock_secs: 900 # Lock upgrades when funding is within N seconds (15 min)
   execute_only_best_opportunity: true
   # Tier-based entry strategy
-  tier_bad_max_adverse_spread: 2.0 # BAD tier: max adverse price spread (%) to still enter
+  weak_min_funding_excess: 0.5 # WEAK tier: funding must exceed adverse price spread by this % to enter
   # Exit strategy
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional
   exit_slippage_buffer_pct: 0.3 # Extra margin deducted from PnL before profit target check
@@ -142,3 +142,4 @@ logging:
 redis:
   key_prefix: "trinity:"
   lock_timeout_sec: 10
+  tls: false # Set to true for cloud Redis (Redis Cloud, Upstash, Azure Cache, etc.)

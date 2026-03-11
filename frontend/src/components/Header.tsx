@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { BotStatus } from '../types';
 import { useSettings } from '../context/SettingsContext';
 import { WsConnectionState } from '../services/websocket';
@@ -8,6 +8,8 @@ interface HeaderProps {
   lastFetchedAt?: number;
   wsConnection: WsConnectionState;
   lastWsMessageAt?: number | null;
+  /** Current reconnect attempt (1-based). 0 = not reconnecting. */
+  wsAttempts?: number;
 }
 
 const Header: React.FC<HeaderProps> = React.memo(({
@@ -15,12 +17,14 @@ const Header: React.FC<HeaderProps> = React.memo(({
   lastFetchedAt,
   wsConnection,
   lastWsMessageAt,
+  wsAttempts = 0,
 }) => {
   const { t, lang, setLang, theme, setTheme } = useSettings();
   const secsRef = useRef<HTMLElement>(null);
   const wsSecsRef = useRef<HTMLElement>(null);
   const wsAgePillRef = useRef<HTMLDivElement>(null);
   const stalePillRef = useRef<HTMLDivElement>(null);
+  const heartbeatRef = useRef<SVGSVGElement>(null);
   const startRef = useRef(Date.now());
   const wsStartRef = useRef<number>(Date.now());
 
@@ -33,6 +37,15 @@ const Header: React.FC<HeaderProps> = React.memo(({
   useEffect(() => {
     if (!wsAgePillRef.current) return;
     wsAgePillRef.current.className = 'nx-health-pill nx-health-pill--ok';
+  }, [lastWsMessageAt]);
+
+  // Heartbeat pulse: direct DOM class toggle on every WS message — zero React re-render.
+  useEffect(() => {
+    const el = heartbeatRef.current;
+    if (!el) return;
+    el.classList.remove('hb-pulse');
+    void el.getBoundingClientRect(); // force reflow so animation restarts
+    el.classList.add('hb-pulse');
   }, [lastWsMessageAt]);
 
   // Update DOM directly every second — no React re-render
@@ -67,8 +80,10 @@ const Header: React.FC<HeaderProps> = React.memo(({
       ? 'nx-health-pill nx-health-pill--warn'
       : 'nx-health-pill nx-health-pill--down';
 
-  const toggleLang = () => setLang(lang === 'en' ? 'he' : 'en');
-  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
+  // Stable toggle callbacks — functional updater form avoids capturing
+  // stale lang/theme values while keeping the dep array minimal.
+  const toggleLang  = useCallback(() => setLang(lang   === 'en'   ? 'he'    : 'en'),    [lang,  setLang]);
+  const toggleTheme = useCallback(() => setTheme(theme === 'dark' ? 'light' : 'dark'), [theme, setTheme]);
 
   return (
     <header className="top-bar">
@@ -95,12 +110,36 @@ const Header: React.FC<HeaderProps> = React.memo(({
         </div>
 
         <div className={wsPillClass} title="WebSocket transport health">
-          <span className="nx-health-pill__dot" />WS {wsConnection}
+          <span className="nx-health-pill__dot" />
+          WS {wsConnection}
+          {wsConnection === 'reconnecting' && wsAttempts > 0 && (
+            <span style={{ opacity: 0.7, marginInlineStart: 4 }}>
+              ({wsAttempts}/20)
+            </span>
+          )}
         </div>
 
         <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
           WS age: <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
         </div>
+
+        {/* Heartbeat: pulses on every WS message via direct DOM class toggle */}
+        <svg
+          ref={heartbeatRef}
+          className="nx-heartbeat"
+          width="28" height="16"
+          viewBox="0 0 28 16"
+          fill="none"
+          aria-hidden
+        >
+          <polyline
+            points="0,8 4,8 6,2 8,14 10,4 12,12 14,8 28,8"
+            stroke="#10b981"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
 
         <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none' }} title="Data may be stale">
           STALE DATA

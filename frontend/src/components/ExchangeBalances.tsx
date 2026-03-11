@@ -1,15 +1,38 @@
-import React from 'react';
+import React, { memo, useMemo } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { formatCurrency } from '../utils/format';
+import { SkeletonExchangeBalances } from './Skeleton';
 
 interface ExchangeBalancesProps {
   balances: { balances: Record<string, number>; total: number } | null;
 }
 
-const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
+/** Canonical display order for exchanges. Known exchanges appear first in
+ *  this order; any unknown exchange is appended alphabetically after. */
+const EXCHANGE_ORDER: readonly string[] = [
+  'binance', 'bybit', 'okx', 'gate', 'bitget', 'mexc', 'kucoin', 'htx',
+] as const;
+
+const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) => {
   const { t } = useSettings();
-  const entries = balances?.balances ? Object.entries(balances.balances) : [];
-  const total = balances?.total ?? 0;
+
+  // Show skeleton until first balances payload arrives.
+  if (balances === null) return <SkeletonExchangeBalances rows={3} />;
+
+  // Memoize derived data — balances object reference only changes when WS pushes
+  // a new payload, so this avoids re-computing on unrelated parent re-renders.
+  const { entries, total } = useMemo(() => {
+    const raw = balances?.balances ? Object.entries(balances.balances) : [];
+    const sorted = [...raw].sort(([a], [b]) => {
+      const ai = EXCHANGE_ORDER.indexOf(a.toLowerCase());
+      const bi = EXCHANGE_ORDER.indexOf(b.toLowerCase());
+      if (ai >= 0 && bi >= 0) return ai - bi;
+      if (ai >= 0) return -1;
+      if (bi >= 0) return 1;
+      return a.localeCompare(b);
+    });
+    return { entries: sorted, total: balances?.total ?? 0 };
+  }, [balances]);
 
   return (
     <div className="card p-5" style={{ position: 'relative' }}>
@@ -58,6 +81,8 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = ({ balances }) => {
       )}
     </div>
   );
-};
+});
+
+ExchangeBalances.displayName = 'ExchangeBalances';
 
 export default ExchangeBalances;

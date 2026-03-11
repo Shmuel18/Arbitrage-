@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -26,7 +26,7 @@ class RiskLimits(BaseModel):
 
 
 class TradingParams(BaseModel):
-    min_funding_spread: Decimal = Decimal("0.5")  # min spread of next imminent payment (%) — no 8h normalization
+    min_funding_spread: Decimal = Decimal("0.3")  # min spread of next imminent payment (%) — no 8h normalization
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
     cooldown_after_orphan_hours: int = 2
@@ -34,14 +34,16 @@ class TradingParams(BaseModel):
     max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
+    min_entry_secs_before_funding: int = 120  # Reject entry if next funding is ≤ N seconds away (too close to hedge properly)
     max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes
     narrow_entry_window_minutes: int = 15  # For MEDIUM/BAD tiers, only enter if funding is within N minutes
     upgrade_spread_delta: Decimal = Decimal("0.5")  # Switch to new opp if spread is +N% better
     upgrade_cooldown_seconds: int = 300  # Block re-entry of upgraded symbol for N seconds
+    min_upgrade_hold_seconds: int = 180  # Minimum hold time (s) before a trade is eligible for upgrade (prevents rapid churn)
     upgrade_funding_lock_secs: int = 180  # Lock upgrades when funding is within N seconds
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy
-    tier_bad_max_adverse_spread: Decimal = Decimal("2.0")  # BAD tier: max adverse price spread %
+    weak_min_funding_excess: Decimal = Decimal("0.5")  # WEAK tier: funding must exceed adverse spread by this %
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
@@ -69,27 +71,53 @@ class ExchangeConfig(BaseModel):
     default_type: str
     rate_limit_ms: int
     max_leverage: int
-    api_key: Optional[str] = None
-    api_secret: Optional[str] = None
-    api_passphrase: Optional[str] = None
+    api_key: Optional[SecretStr] = None
+    api_secret: Optional[SecretStr] = None
+    api_passphrase: Optional[SecretStr] = None
     testnet: bool = False
     leverage: Optional[int] = Field(default=None, ge=1, le=125)
     margin_mode: Optional[str] = None
     position_mode: Optional[str] = None
 
+    def to_adapter_dict(self) -> dict:
+        """Return a plain dict for the ExchangeAdapter, unwrapping SecretStr
+        fields at the only boundary where raw credential values are needed.
+
+        Never call model_dump() on ExchangeConfig directly — it would expose
+        masked fields as '**********' strings rather than the real values.
+        """
+        data = self.model_dump(exclude={"api_key", "api_secret", "api_passphrase"})
+        data["api_key"] = self.api_key.get_secret_value() if self.api_key else None
+        data["api_secret"] = self.api_secret.get_secret_value() if self.api_secret else None
+        data["api_passphrase"] = (
+            self.api_passphrase.get_secret_value() if self.api_passphrase else None
+        )
+        return data
+
 
 class RedisConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
-    password: Optional[str] = None
+    password: Optional[SecretStr] = None  # never embedded in URL — passed as separate kwarg
     db: int = 0
+    tls: bool = False  # Enable TLS (rediss://) — required for remote/cloud Redis (e.g. Redis Cloud, Upstash)
     key_prefix: str = "trinity:"
     lock_timeout_sec: int = 10
 
     @property
     def url(self) -> str:
-        auth = f":{self.password}@" if self.password else ""
-        return f"redis://{auth}{self.host}:{self.port}/{self.db}"
+        """Safe URL with no credentials — suitable for logging.
+
+        Uses ``rediss://`` scheme when tls=True, signalling TLS to aioredis
+        and making the URL self-describing in logs.
+        """
+        scheme = "rediss" if self.tls else "redis"
+        return f"{scheme}://{self.host}:{self.port}/{self.db}"
+
+    @property
+    def password_plaintext(self) -> Optional[str]:
+        """Unwrap the password only at the connection boundary."""
+        return self.password.get_secret_value() if self.password else None
 
 
 class LoggingConfig(BaseModel):

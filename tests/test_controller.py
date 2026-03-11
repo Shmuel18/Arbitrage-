@@ -12,6 +12,69 @@ from src.core.contracts import OrderSide, TradeMode, TradeRecord, TradeState
 from src.execution.controller import ExecutionController
 
 
+# ── MRO structural guards ────────────────────────────────────────────────
+
+class TestExecutionControllerMRO:
+    """Guard against silent method shadowing between ExecutionController mixins."""
+
+    def test_mro_order_is_stable(self):
+        """MRO must list mixins in the expected composition order."""
+        from src.execution._close_finalize_mixin import _CloseFinalizeMixin
+        from src.execution._close_mixin import _CloseMixin
+        from src.execution._entry_mixin import _EntryMixin
+        from src.execution._entry_orders_mixin import _EntryOrdersMixin
+        from src.execution._exit_logic_mixin import _ExitLogicMixin
+        from src.execution._monitor_mixin import _MonitorMixin
+        from src.execution._util_mixin import _UtilMixin
+
+        mro_names = [c.__name__ for c in ExecutionController.__mro__]
+
+        assert mro_names[0] == "ExecutionController"
+        # Parent–child chains must be correctly ordered
+        assert mro_names.index("_EntryMixin") < mro_names.index("_EntryOrdersMixin")
+        assert mro_names.index("_MonitorMixin") < mro_names.index("_ExitLogicMixin")
+        assert mro_names.index("_CloseMixin") < mro_names.index("_CloseFinalizeMixin")
+
+    def test_no_public_method_shadowed_between_sibling_mixins(self):
+        """No two sibling mixins define the same public method."""
+        from src.execution._close_mixin import _CloseMixin
+        from src.execution._entry_mixin import _EntryMixin
+        from src.execution._monitor_mixin import _MonitorMixin
+        from src.execution._util_mixin import _UtilMixin
+
+        siblings = [_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin]
+
+        seen: dict[str, str] = {}
+        conflicts: list[str] = []
+        for mixin in siblings:
+            own_methods = {
+                name for name, val in vars(mixin).items()
+                if callable(val) and not name.startswith("__")
+            }
+            for name in own_methods:
+                if name in seen:
+                    conflicts.append(
+                        f"{name!r} defined in both {seen[name]} and {mixin.__name__}"
+                    )
+                else:
+                    seen[name] = mixin.__name__
+
+        assert not conflicts, (
+            "Silent method shadowing detected between sibling mixins:\n"
+            + "\n".join(f"  • {c}" for c in conflicts)
+        )
+
+    def test_handle_opportunity_owned_by_entry_mixin(self):
+        """handle_opportunity() must resolve to _EntryMixin."""
+        from src.execution._entry_mixin import _EntryMixin
+        assert ExecutionController.handle_opportunity is _EntryMixin.handle_opportunity
+
+    def test_close_trade_owned_by_close_mixin(self):
+        """_close_trade() must resolve to _CloseMixin."""
+        from src.execution._close_mixin import _CloseMixin
+        assert ExecutionController._close_trade is _CloseMixin._close_trade
+
+
 @pytest.fixture
 def controller(config, mock_exchange_mgr, mock_redis):
     return ExecutionController(config, mock_exchange_mgr, mock_redis)

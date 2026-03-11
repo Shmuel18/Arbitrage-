@@ -170,12 +170,23 @@ class BroadcastService:
         except Exception:
             pass
 
-        # Prefer incremental Redis counters (O(1)), fall back to full scan.
-        if stats_trade_count is not None:
-            trade_count = int(stats_trade_count)
+        # Prefer incremental Redis counters (O(1)), but only when they are in
+        # sync with the authoritative history (sorted-set).  If the counter is
+        # lower than the actual history length it means the bot restarted and
+        # the counters were reset — in that case ALL three counter values
+        # (trade_count, total_pnl, win_count) are stale, so we must do a full
+        # scan of the history to get consistent numbers.
+        counter_trade_count = int(stats_trade_count) if stats_trade_count is not None else None
+        history_len = len(all_trades)
+        counter_is_stale = counter_trade_count is None or counter_trade_count < history_len
+
+        if not counter_is_stale:
+            # Counters are fresh — cheap O(1) path.
+            trade_count = counter_trade_count  # type: ignore[assignment]
             all_time_pnl = float(stats_total_pnl or 0)
             winning = int(stats_win_count or 0)
         else:
+            # Counters were reset (restart) — recompute from actual history.
             all_time_pnl = 0.0
             winning = 0
             for td, _ in all_trades:
@@ -183,7 +194,7 @@ class BroadcastService:
                 all_time_pnl += pnl_v
                 if pnl_v > 0:
                     winning += 1
-            trade_count = len(all_trades)
+            trade_count = history_len
 
         base["all_time_pnl"] = round(all_time_pnl, 4)
         base["avg_pnl"] = round(all_time_pnl / trade_count, 4) if trade_count > 0 else 0.0

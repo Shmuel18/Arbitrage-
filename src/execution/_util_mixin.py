@@ -26,7 +26,13 @@ logger = get_logger("execution")
 
 class _UtilMixin:
     async def _place_with_timeout(self, adapter, req: OrderRequest) -> Optional[dict]:
-        """Place order with timeout. Returns fill dict or None."""
+        """Place order with timeout. Returns fill dict or None.
+
+        On TimeoutError the order may have already executed on the exchange side
+        (market orders cannot be cancelled once submitted). This method detects
+        that scenario via a post-timeout position check and immediately triggers
+        an orphan-close if a naked position is found.
+        """
         timeout = self._cfg.execution.order_timeout_ms / 1000
         streak_key = f"{req.symbol}:{req.exchange}"
         try:
@@ -42,6 +48,55 @@ class _UtilMixin:
                 f"(streak {count}/{self._TIMEOUT_BLACKLIST_THRESHOLD})",
                 extra={"exchange": req.exchange, "symbol": req.symbol, "action": "order_timeout"},
             )
+
+            # ── Post-timeout orphan check ─────────────────────────────────
+            # Market orders are fire-and-forget on the exchange side — the
+            # order may have filled while we were waiting for the response.
+            # Only ENTRY orders can create a naked position; a timed-out close
+            # simply means the position is still open (no new orphan created).
+            if not req.reduce_only and hasattr(adapter, "check_timed_out_fill"):
+                await asyncio.sleep(2)  # brief settle — give exchange time to process
+                try:
+                    filled_base = await adapter.check_timed_out_fill(req)
+                    if filled_base > 0:
+                        close_side = (
+                            OrderSide.SELL if req.side == OrderSide.BUY else OrderSide.BUY
+                        )
+                        alert = (
+                            f"🚨 TIMEOUT ORPHAN on {req.exchange}/{req.symbol}: "
+                            f"order filled {filled_base:.6f} base despite timeout — "
+                            f"emergency closing now."
+                        )
+                        logger.critical(
+                            alert,
+                            extra={
+                                "exchange": req.exchange,
+                                "symbol": req.symbol,
+                                "action": "timeout_orphan_detected",
+                                "filled_base": float(filled_base),
+                            },
+                        )
+                        if self._publisher:
+                            try:
+                                await self._publisher.push_alert(alert)
+                            except Exception as pub_exc:
+                                logger.debug(f"Alert publish failed: {pub_exc}")
+                        await self._close_orphan(
+                            adapter, req.exchange, req.symbol,
+                            close_side, {"filled": float(filled_base)},
+                        )
+                except Exception as check_exc:
+                    logger.error(
+                        f"Post-timeout orphan check failed for {req.exchange}/{req.symbol}: {check_exc}",
+                        exc_info=check_exc,
+                        extra={
+                            "exchange": req.exchange,
+                            "symbol": req.symbol,
+                            "action": "orphan_check_failed",
+                        },
+                    )
+
+            # ── Streak / blacklist / cooldown management ──────────────────
             if count >= self._TIMEOUT_BLACKLIST_THRESHOLD:
                 self._blacklist.add(req.symbol, req.exchange)
                 logger.warning(
@@ -148,24 +203,32 @@ class _UtilMixin:
         self._active_symbols.add(trade.symbol)
         self._busy_exchanges.add(trade.long_exchange)
         self._busy_exchanges.add(trade.short_exchange)
+        # Increment refcounts so deregistration stays O(1)
+        self._symbol_refcount[trade.symbol] = self._symbol_refcount.get(trade.symbol, 0) + 1
+        self._exchange_refcount[trade.long_exchange] = self._exchange_refcount.get(trade.long_exchange, 0) + 1
+        self._exchange_refcount[trade.short_exchange] = self._exchange_refcount.get(trade.short_exchange, 0) + 1
 
     def _deregister_trade(self, trade: TradeRecord) -> None:
-        """Remove trade and update derived sets; safe to call multiple times."""
+        """Remove trade and update derived sets; safe to call multiple times.
+
+        O(1) — uses refcount maps rather than scanning _active_trades.
+        """
         self._active_trades.pop(trade.trade_id, None)
-        # Only release the symbol/exchange slots if no other trade holds them.
-        remaining = self._active_trades.values()
-        if not any(t.symbol == trade.symbol for t in remaining):
+        # Decrement symbol refcount; release slot when no trade holds it
+        sym_rc = self._symbol_refcount.get(trade.symbol, 0) - 1
+        if sym_rc <= 0:
+            self._symbol_refcount.pop(trade.symbol, None)
             self._active_symbols.discard(trade.symbol)
-        if not any(
-            t.long_exchange == trade.long_exchange or t.short_exchange == trade.long_exchange
-            for t in remaining
-        ):
-            self._busy_exchanges.discard(trade.long_exchange)
-        if not any(
-            t.long_exchange == trade.short_exchange or t.short_exchange == trade.short_exchange
-            for t in remaining
-        ):
-            self._busy_exchanges.discard(trade.short_exchange)
+        else:
+            self._symbol_refcount[trade.symbol] = sym_rc
+        # Decrement exchange refcounts; release slot when no trade holds it
+        for ex in (trade.long_exchange, trade.short_exchange):
+            ex_rc = self._exchange_refcount.get(ex, 0) - 1
+            if ex_rc <= 0:
+                self._exchange_refcount.pop(ex, None)
+                self._busy_exchanges.discard(ex)
+            else:
+                self._exchange_refcount[ex] = ex_rc
     # ── Persistence ──────────────────────────────────────────────
 
     async def _persist_trade(self, trade: TradeRecord) -> None:
@@ -193,7 +256,11 @@ class _UtilMixin:
                     f"Trade {trade_id} was mid-close — retrying",
                     extra={"trade_id": trade_id},
                 )
-                asyncio.create_task(self._close_trade(trade))
+                task = asyncio.create_task(
+                    self._close_trade(trade),
+                    name=f"retry-close-{trade_id}",
+                )
+                task.add_done_callback(_task_done_handler)
 
         if stored:
             logger.info(f"Recovered {len(self._active_trades)} active trades")

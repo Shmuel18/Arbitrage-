@@ -121,7 +121,7 @@ class TestBatchPollResilience:
         adapter._exchange.fetch_funding_rates = AsyncMock(side_effect=_fake_fetch_rates)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with patch("src.exchanges.adapter.logger") as mock_logger:
+            with patch("src.exchanges._funding_mixin.logger") as mock_logger:
                 await adapter._batch_funding_poll_loop(["BTC/USDT:USDT"])
 
         # Should have logged 3 warnings (consecutive_failures 1,2,3)
@@ -152,7 +152,7 @@ class TestSequentialPollResilience:
         adapter._exchange.fetch_funding_rate = AsyncMock(side_effect=_fake_fetch_rate)
 
         with patch("asyncio.sleep", side_effect=_fake_sleep):
-            with patch("src.exchanges.adapter.logger") as mock_logger:
+            with patch("src.exchanges._funding_mixin.logger") as mock_logger:
                 # CancelledError from sleep propagates (sleep is outside try)
                 with pytest.raises(asyncio.CancelledError):
                     await adapter._sequential_funding_poll_loop(["BTC/USDT:USDT"])

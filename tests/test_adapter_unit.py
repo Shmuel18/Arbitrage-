@@ -236,7 +236,7 @@ class TestUpdateFundingCache:
             "fundingTimestamp": now_ms + 28_800_000,  # 8h from now
             "interval": "8h",  # CCXT normalised field; avoids exchange.markets fallback
         }
-        with patch("src.exchanges.adapter._time") as mock_time:
+        with patch("src.exchanges._funding_mixin._time") as mock_time:
             mock_time.time.return_value = now_ms / 1000
             a._update_funding_cache("BTC/USDT", data)
         cached = a._funding_rate_cache.get("BTC/USDT")
@@ -264,7 +264,7 @@ class TestUpdateFundingCache:
             "nextFundingTimestamp": future_ms,
             "interval": "1h",  # CCXT normalised; avoids exchange.markets fallback
         }
-        with patch("src.exchanges.adapter._time") as mock_time:
+        with patch("src.exchanges._funding_mixin._time") as mock_time:
             mock_time.time.return_value = now_ms / 1000
             a._update_funding_cache("BTC/USDT", data)
         assert a._funding_rate_cache["BTC/USDT"]["next_timestamp"] == future_ms
@@ -439,22 +439,109 @@ class TestExchangeManager:
         assert set(result.keys()) == {"exchange_a", "exchange_b"}
         assert result["exchange_a"] is a
 
-    def test_all_returns_read_only_view(self):
-        """all() returns a MappingProxyType (read-only view of internal dict)."""
-        from types import MappingProxyType
+    def test_all_returns_safe_snapshot(self):
+        """all() returns a shallow dict copy — safe to iterate across await boundaries.
 
+        Returning a copy (not a live MappingProxyType) means concurrent mutations
+        to the internal registry (e.g. verify_all removing a failed adapter) cannot
+        raise RuntimeError: dictionary changed size during iteration.
+        """
         mgr = ExchangeManager()
         mgr.register("exchange_a", {})
         snapshot = mgr.all()
-        # Must be a MappingProxyType, not the raw dict
-        assert isinstance(snapshot, MappingProxyType)
+        # Must be a plain dict, not a live proxy
+        assert isinstance(snapshot, dict)
         # Contents should mirror the internal adapters dict
-        assert dict(snapshot) == mgr._adapters
-        # Mutation should be blocked
-        with pytest.raises(TypeError):
-            snapshot["exchange_z"] = None  # type: ignore[index]
+        assert snapshot == mgr._adapters
+        # Must be a COPY — mutating the snapshot must not affect the registry
+        snapshot["exchange_z"] = None  # type: ignore[assignment]
+        assert "exchange_z" not in mgr._adapters
 
     def test_get_raises_on_unknown(self):
         mgr = ExchangeManager()
         with pytest.raises(KeyError):
             mgr.get("ghost")
+
+
+# ── MRO structural guards ────────────────────────────────────────────────
+
+class TestExchangeAdapterMRO:
+    """Guard against silent method shadowing between ExchangeAdapter mixins.
+
+    Python's C3 linearisation silently resolves name collisions — if two
+    mixins define the same method the MRO winner is picked without any
+    warning.  These tests make that resolution explicit and will fail
+    loudly if a new mixin accidentally shadows an existing one.
+    """
+
+    def test_mro_order_is_stable(self):
+        """MRO must list mixins in the expected composition order."""
+        from src.exchanges._fill_recovery_mixin import _FillRecoveryMixin
+        from src.exchanges._funding_cache_mixin import _FundingCacheMixin
+        from src.exchanges._funding_mixin import _FundingMixin
+        from src.exchanges._lifecycle_mixin import _LifecycleMixin
+        from src.exchanges._market_data_mixin import _MarketDataMixin
+        from src.exchanges._order_mixin import _OrderMixin
+
+        mro = ExchangeAdapter.__mro__
+        mro_names = [c.__name__ for c in mro]
+
+        # Concrete class is first
+        assert mro_names[0] == "ExchangeAdapter"
+        # Top-level mixins appear before their bases
+        assert mro_names.index("_LifecycleMixin") < mro_names.index("object")
+        assert mro_names.index("_OrderMixin") < mro_names.index("_FillRecoveryMixin")
+        assert mro_names.index("_FundingMixin") < mro_names.index("_FundingCacheMixin")
+
+    def test_no_public_method_shadowed_between_mixins(self):
+        """No two sibling mixins define the same public method.
+
+        Shadowing inside a parent–child mixin chain is intentional (an
+        override), but two *sibling* mixins sharing a name is almost always
+        a copy-paste bug.
+        """
+        from src.exchanges._fill_recovery_mixin import _FillRecoveryMixin
+        from src.exchanges._funding_cache_mixin import _FundingCacheMixin
+        from src.exchanges._funding_mixin import _FundingMixin
+        from src.exchanges._lifecycle_mixin import _LifecycleMixin
+        from src.exchanges._market_data_mixin import _MarketDataMixin
+        from src.exchanges._order_mixin import _OrderMixin
+
+        # Sibling mixins at the same composition level (not parent–child)
+        siblings = [
+            _LifecycleMixin,
+            _FundingMixin,
+            _MarketDataMixin,
+            _OrderMixin,
+        ]
+
+        seen: dict[str, str] = {}  # method_name → first mixin that defined it
+        conflicts: list[str] = []
+        for mixin in siblings:
+            # Only methods defined *directly* on this class (not inherited)
+            own_methods = {
+                name for name, val in vars(mixin).items()
+                if callable(val) and not name.startswith("__")
+            }
+            for name in own_methods:
+                if name in seen:
+                    conflicts.append(
+                        f"{name!r} defined in both {seen[name]} and {mixin.__name__}"
+                    )
+                else:
+                    seen[name] = mixin.__name__
+
+        assert not conflicts, (
+            "Silent method shadowing detected between sibling mixins:\n"
+            + "\n".join(f"  • {c}" for c in conflicts)
+        )
+
+    def test_connect_owned_by_lifecycle_mixin(self):
+        """connect() must resolve to _LifecycleMixin, not any other mixin."""
+        from src.exchanges._lifecycle_mixin import _LifecycleMixin
+        assert ExchangeAdapter.connect is _LifecycleMixin.connect
+
+    def test_place_order_owned_by_order_mixin(self):
+        """place_order() must resolve to _OrderMixin."""
+        from src.exchanges._order_mixin import _OrderMixin
+        assert ExchangeAdapter.place_order is _OrderMixin.place_order

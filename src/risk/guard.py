@@ -24,6 +24,19 @@ if TYPE_CHECKING:
 logger = get_logger("risk")
 
 
+def _task_done_handler(t: asyncio.Task) -> None:
+    """Log exceptions from background tasks — never let them vanish silently."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        logger.error(
+            f"Task {t.get_name()} failed: {exc}",
+            exc_info=exc,
+            extra={"action": "task_failed", "task_name": t.get_name()},
+        )
+
+
 class RiskGuard:
     def __init__(
         self,
@@ -46,6 +59,8 @@ class RiskGuard:
             asyncio.create_task(self._fast_loop(), name="risk-fast"),
             asyncio.create_task(self._deep_loop(), name="risk-deep"),
         ]
+        for task in self._tasks:
+            task.add_done_callback(_task_done_handler)
         logger.info("Risk guard started")
 
     async def stop(self) -> None:

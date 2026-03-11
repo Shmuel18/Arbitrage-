@@ -143,7 +143,7 @@ export interface Translations {
   tier: string;
   tierTop: string;
   tierMedium: string;
-  tierBad: string;
+  tierWeak: string;
   tierAdverse: string;
 
   // StatsCards sub-labels
@@ -329,7 +329,7 @@ const en: Translations = {
   tier: 'Tier',
   tierTop: 'TOP',
   tierMedium: 'MEDIUM',
-  tierBad: 'BAD',
+  tierWeak: 'WEAK',
   tierAdverse: 'PRICE ⛔',
 
   // StatsCards sub-labels
@@ -515,7 +515,7 @@ const he: Translations = {
   tier: 'דרגה',
   tierTop: 'מוביל',
   tierMedium: 'בינוני',
-  tierBad: 'חלש',
+  tierWeak: 'חלש',
   tierAdverse: 'מחיר ⛔',
 
   // StatsCards sub-labels
