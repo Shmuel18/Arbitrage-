@@ -345,6 +345,16 @@ class _LifecycleMixin:
             logger.info(f"Disconnected from {self.exchange_id}",
                         extra={"exchange": self.exchange_id, "action": "disconnect"})
 
+    def cancel_ws_tasks(self) -> None:
+        """Cancel all supervised WebSocket tasks synchronously.
+
+        Use this from synchronous shutdown paths (e.g. ``Scanner.stop()``) where
+        awaiting ``disconnect()`` is not possible.  The tasks are cancelled but
+        not awaited; the event-loop will clean them up on the next iteration.
+        """
+        for task in self._ws_tasks:
+            task.cancel()
+
     async def _maybe_resync_clock(self) -> None:
         """Re-sync clock offset if stale (every 5 minutes).
 

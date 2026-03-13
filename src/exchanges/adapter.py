@@ -50,12 +50,19 @@ class ExchangeAdapter(
         self._settings_applied: set = set()
         self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
         self._price_cache: Dict[str, float] = {}  # symbol → last/mark price (fallback when funding data lacks markPrice)
+        self._price_timestamp_cache: Dict[str, float] = {}  # symbol → last cached mark/last price timestamp (epoch-ms)
+        self._ask_cache: Dict[str, float] = {}  # symbol → best ask price (from ticker poll, cached every 15s)
+        self._ask_timestamp_cache: Dict[str, float] = {}  # symbol → best ask timestamp (epoch-ms)
+        self._bid_cache: Dict[str, float] = {}  # symbol → best bid price (from ticker poll, cached every 15s)
+        self._bid_timestamp_cache: Dict[str, float] = {}  # symbol → best bid timestamp (epoch-ms)
         # Symbol mapping: normalized (USDT) → original exchange symbol (e.g. USD for Kraken)
         self._symbol_map: Dict[str, str] = {}
         self._ws_tasks: List = []  # Track running WebSocket tasks
         self._rest_semaphore = asyncio.Semaphore(10)  # Limit concurrent REST calls per exchange
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
+        self._ws_ticker_supported = True
+        self._ws_ticker_disabled_logged = False
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
         self._funding_intervals: Dict[str, int] = {}  # symbol → interval hours (from exchange API)
         # Candidate tracking for interval change confirmation (avoids false changes from
@@ -66,6 +73,13 @@ class ExchangeAdapter(
         self._MAX_SANE_RATE = Decimal(str(cfg.get("max_sane_funding_rate", self._DEFAULT_MAX_SANE_RATE)))
         self._last_clock_sync: float = 0.0  # epoch timestamp of last clock sync
         self._last_markets_reload: float = 0.0  # epoch timestamp of last load_markets
+        # Optional queue shared with Scanner — receives (exchange_id, symbol) on each price update.
+        # Register via register_price_update_queue(); set before starting price watchers.
+        self._price_update_queue: Optional[asyncio.Queue] = None
+
+    def register_price_update_queue(self, queue: "asyncio.Queue[tuple[str, str]]") -> None:
+        """Attach a hot-scan queue so fresh ticker updates trigger immediate re-evaluation."""
+        self._price_update_queue = queue
 
 
 # ── Manager ──────────────────────────────────────────────────────

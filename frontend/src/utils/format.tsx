@@ -151,17 +151,21 @@ export const formatPrice = (v?: string | number | null): string => {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 };
 
-/* ── Date/time formatter ─────────────────────────────────────────── */
+/* ── Date/time formatter (Israel time) ────────────────────────────── */
+const TZ = 'Asia/Jerusalem';
+
 const _dateFmt = new Intl.DateTimeFormat('default', {
   month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit',
   hour12: false,
+  timeZone: TZ,
 });
 
 const _dateFmtFull = new Intl.DateTimeFormat('default', {
   year: 'numeric', month: '2-digit', day: '2-digit',
   hour: '2-digit', minute: '2-digit', second: '2-digit',
   hour12: false,
+  timeZone: TZ,
 });
 
 export const formatDate = (value?: string | null, includeYear = false): string => {
@@ -243,31 +247,42 @@ interface ExitReasonConfig {
   bg: string;
 }
 
-const _exitReasonMap: Record<string, ExitReasonConfig> = {
-  profit_target:          { emoji: '🎯', label: 'Profit',       color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
-  basis_recovery:         { emoji: '✅', label: 'Recovery',     color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
-  spread_below_threshold: { emoji: '📉', label: 'Low Spread',   color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
-  upgrade_exit:           { emoji: '⬆️', label: 'Upgrade',      color: '#3b82f6', bg: 'rgba(59,130,246,0.10)' },
-  cherry_hard_stop:       { emoji: '🍒', label: 'Cherry Stop',  color: '#f97316', bg: 'rgba(249,115,22,0.10)' },
-  basis_hard_stop:        { emoji: '⏱️', label: 'Basis Timeout', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
-  negative_funding:       { emoji: '⚠️', label: 'Neg. Funding',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
-  exit_timeout:           { emoji: '⏰', label: 'Timeout',      color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
-  liquidation_risk:       { emoji: '🚨', label: 'Liquidation',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
-  manual_close:           { emoji: '🛑', label: 'Manual',       color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' },
+interface ExitReasonBase {
+  emoji: string;
+  /** Translation key from Translations interface */
+  tKey: string;
+  /** Fallback label (English) */
+  fallback: string;
+  color: string;
+  bg: string;
+}
+
+const _exitReasonMap: Record<string, ExitReasonBase> = {
+  profit_target:          { emoji: '🎯', tKey: 'exitProfit',       fallback: 'Profit',       color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
+  basis_recovery:         { emoji: '✅', tKey: 'exitRecovery',     fallback: 'Recovery',     color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
+  spread_below_threshold: { emoji: '📉', tKey: 'exitLowSpread',    fallback: 'Low Spread',   color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
+  upgrade_exit:           { emoji: '⬆️', tKey: 'exitUpgrade',      fallback: 'Upgrade',      color: '#3b82f6', bg: 'rgba(59,130,246,0.10)' },
+  cherry_hard_stop:       { emoji: '🍒', tKey: 'exitCherryStop',   fallback: 'Cherry Stop',  color: '#f97316', bg: 'rgba(249,115,22,0.10)' },
+  basis_hard_stop:        { emoji: '⏱️', tKey: 'exitBasisTimeout',  fallback: 'Basis Timeout', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  negative_funding:       { emoji: '⚠️', tKey: 'exitNegFunding',   fallback: 'Neg. Funding',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  exit_timeout:           { emoji: '⏰', tKey: 'exitTimeout',      fallback: 'Timeout',      color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
+  liquidation_risk:       { emoji: '🚨', tKey: 'exitLiquidation',  fallback: 'Liquidation',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  manual_close:           { emoji: '🛑', tKey: 'exitManual',       fallback: 'Manual',       color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' },
 };
 
-const _getExitReasonConfig = (reason?: string | null): ExitReasonConfig => {
+const _getExitReasonConfig = (reason?: string | null, t?: Record<string, string>): ExitReasonConfig => {
   if (!reason) return { emoji: '', label: '--', color: 'var(--text-muted)', bg: 'transparent' };
-  // Match prefix for dynamic reasons (e.g. "basis_recovery_+0.0123pct", "profit_target_+0.85pct")
-  for (const [key, cfg] of Object.entries(_exitReasonMap)) {
-    if (reason === key || reason.startsWith(key + '_')) return cfg;
+  for (const [key, base] of Object.entries(_exitReasonMap)) {
+    if (reason === key || reason.startsWith(key + '_')) {
+      const label = t?.[base.tKey] ?? base.fallback;
+      return { emoji: base.emoji, label, color: base.color, bg: base.bg };
+    }
   }
-  // Unknown reason — show raw text
   return { emoji: '❓', label: reason.replace(/_/g, ' '), color: 'var(--text-secondary)', bg: 'rgba(148,163,184,0.06)' };
 };
 
-export const ExitReasonBadge: React.FC<{ reason?: string | null }> = ({ reason }) => {
-  const cfg = _getExitReasonConfig(reason);
+export const ExitReasonBadge: React.FC<{ reason?: string | null; t?: Record<string, string> }> = ({ reason, t }) => {
+  const cfg = _getExitReasonConfig(reason, t);
   if (!reason) return <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>--</span>;
   return (
     <span title={reason} style={{

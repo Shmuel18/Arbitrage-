@@ -78,7 +78,13 @@ class _UtilMixin:
                         )
                         if self._publisher:
                             try:
-                                await self._publisher.push_alert(alert)
+                                await self._publisher.publish_alert(
+                                    alert,
+                                    severity="critical",
+                                    alert_type="timeout",
+                                    symbol=req.symbol,
+                                    exchange=req.exchange,
+                                )
                             except Exception as pub_exc:
                                 logger.debug(f"Alert publish failed: {pub_exc}")
                         await self._close_orphan(
@@ -188,7 +194,13 @@ class _UtilMixin:
                     logger.critical(alert_msg, extra={"exchange": exchange, "symbol": symbol})
                     if self._publisher:
                         try:
-                            await self._publisher.push_alert(alert_msg)
+                            await self._publisher.publish_alert(
+                                alert_msg,
+                                severity="critical",
+                                alert_type="orphan",
+                                symbol=symbol,
+                                exchange=exchange,
+                            )
                         except Exception as exc:
                             logger.debug(f"Alert publish failed: {exc}")
                     self._blacklist.add(symbol, exchange)
@@ -271,25 +283,32 @@ class _UtilMixin:
         """Log current USDT balances for all exchanges."""
         try:
             logger.info("💰 EXCHANGE BALANCES", extra={"action": "balance_log"})
-            
+
+            adapters: list[tuple[str, object]] = []
             for exchange_id in self._cfg.enabled_exchanges:
                 adapter = self._exchanges.get(exchange_id)
-                if not adapter:
+                if adapter:
+                    adapters.append((exchange_id, adapter))
+
+            results = await asyncio.gather(
+                *[adapter.get_balance() for _, adapter in adapters],
+                return_exceptions=True,
+            )
+
+            for (exchange_id, _), result in zip(adapters, results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Failed to fetch balance for {exchange_id}: {result}")
                     continue
-                
-                try:
-                    balance = await adapter.get_balance()
-                    usdt_balance = balance.get("free", 0)
-                    logger.info(
-                        f"  {exchange_id.upper()}: ${usdt_balance:,.2f}",
-                        extra={
-                            "action": "exchange_balance",
-                            "exchange": exchange_id,
-                            "balance_usdt": usdt_balance
-                        }
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to fetch balance for {exchange_id}: {e}")
+
+                usdt_balance = result.get("free", 0)
+                logger.info(
+                    f"  {exchange_id.upper()}: ${usdt_balance:,.2f}",
+                    extra={
+                        "action": "exchange_balance",
+                        "exchange": exchange_id,
+                        "balance_usdt": usdt_balance
+                    }
+                )
         except Exception as e:
             logger.error(f"Balance logging error: {e}")
 
@@ -298,18 +317,28 @@ class _UtilMixin:
         try:
             balances = {}
             total = 0.0
+
+            adapters: list[tuple[str, object]] = []
             for exchange_id in self._cfg.enabled_exchanges:
                 adapter = self._exchanges.get(exchange_id)
-                if not adapter:
-                    continue
-                try:
-                    bal = await adapter.get_balance()
-                    usdt = float(bal.get("free", 0))
-                    balances[exchange_id] = usdt
-                    total += usdt
-                except Exception as exc:
-                    logger.debug(f"Balance fetch failed for {exchange_id}: {exc}")
+                if adapter:
+                    adapters.append((exchange_id, adapter))
+
+            results = await asyncio.gather(
+                *[adapter.get_balance() for _, adapter in adapters],
+                return_exceptions=True,
+            )
+
+            for (exchange_id, _), result in zip(adapters, results):
+                if isinstance(result, Exception):
+                    logger.debug(f"Balance fetch failed for {exchange_id}: {result}")
                     balances[exchange_id] = None
+                    continue
+
+                usdt = float(result.get("free", 0))
+                balances[exchange_id] = usdt
+                total += usdt
+
             self._journal.balance_snapshot(balances, total=total)
         except Exception as e:
             logger.debug(f"Balance snapshot error: {e}")

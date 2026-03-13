@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 import redis.asyncio as aioredis
@@ -95,9 +96,21 @@ class RedisClient:
         """Atomically increment an integer key by 1. Returns new value."""
         return await self._c.incr(key)
 
-    async def incrbyfloat(self, key: str, amount: float) -> float:
-        """Atomically increment a key by a float amount. Returns new value."""
-        return await self._c.incrbyfloat(key, amount)
+    async def expire(self, key: str, seconds: int) -> bool:
+        """Set a TTL (seconds) on a raw key. Returns True if timeout was set."""
+        return bool(await self._c.expire(key, seconds))
+
+    async def incrbyfloat(self, key: str, amount: Decimal) -> Decimal:
+        """Atomically increment a key by a Decimal amount. Returns new value.
+
+        The amount is passed to Redis as a string to avoid float precision loss
+        at the boundary.  The result is converted back via ``str()`` →
+        ``Decimal`` for the same reason, preventing IEEE 754 rounding errors
+        from accumulating in financial counters.
+        """
+        raw = await self._c.incrbyfloat(key, str(amount))
+        # aioredis returns float; re-parse via str to preserve precision.
+        return Decimal(str(raw))
 
     async def zrangebyscore(
         self, key: str, min_score: float, max_score: float,
@@ -125,6 +138,18 @@ class RedisClient:
     async def ltrim(self, key: str, start: int, stop: int) -> None:
         """Trim a list to the specified range (no prefix applied)."""
         await self._c.ltrim(key, start, stop)
+
+    async def get_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return recent structured alerts from trinity:alerts (newest first)."""
+        safe_limit = max(1, min(limit, 200))
+        raw_items = await self._c.lrange("trinity:alerts", 0, safe_limit - 1)
+        alerts: list[dict[str, Any]] = []
+        for item in raw_items:
+            try:
+                alerts.append(json.loads(item))
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.debug(f"Skipping malformed alert JSON: {exc}")
+        return alerts
 
     async def zrange(
         self, key: str, start: int, stop: int,

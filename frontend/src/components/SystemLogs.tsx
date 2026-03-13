@@ -115,7 +115,10 @@ const SystemLogs: React.FC<SystemLogsProps> = ({ logs, summary }) => {
                       : 'transparent',
                   }}
                 >
-                  <span className="nx-log-timestamp">[{log.timestamp}]</span>
+                  <span className="nx-log-timestamp">[{(() => {
+                    const d = new Date(log.timestamp);
+                    return isNaN(d.getTime()) ? log.timestamp : d.toLocaleTimeString('en-GB', { hour12: false, timeZone: 'Asia/Jerusalem' });
+                  })()}]</span>
                   <span className={`nx-log-level ${getLevelClass(log.level)}`}>{log.level}</span>
                   <span className="nx-log-message" style={{ color: getLevelColor(log.level) }}>{log.message}</span>
                 </div>

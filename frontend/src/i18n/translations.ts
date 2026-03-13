@@ -196,6 +196,82 @@ export interface Translations {
   rrModerate: string;
   rrHigh: string;
   rrNoData: string;
+
+  // Error Boundary
+  errorBoundaryTitle: string;
+  errorBoundaryMessage: string;
+  reloadPage: string;
+  displayingLastKnownData: string;
+
+  // Dashboard
+  viewLogs: string;
+
+  // Header status
+  wsPrefix: string;
+  wsAge: string;
+  staleData: string;
+
+  // Badges / Labels
+  live: string;
+  sessionLabel: string;
+  allTimeLabel: string;
+  tradesWord: string;
+  positionWord: string;
+  positionsWord: string;
+  tradeFired: string;
+  feedLabel: string;
+
+  // AnalyticsPanel
+  allTimePnlSubtitle: string;
+  realized: string;
+  unrealized: string;
+  allLabel: string;
+
+  // Timeline events — PositionDetailCard
+  tlPositionOpened: string;
+  tlEntrySpreadLabel: string;
+  tlBasisLabel: string;
+  tlMarkToMarket: string;
+  tlCurrentSpreadLabel: string;
+  tlPricePnlLabel: string;
+  tlFundingCollection: string;
+  tlCollectionsNet: string;
+  tlNextWindow: string;
+  tlProfitTarget: string;
+  tlTargetReached: string;
+  tlRemaining: string;
+  tlTargetUnavailable: string;
+  tlExecutionState: string;
+  tlActive: string;
+  executionTimeline: string;
+
+  // Timeline events — TradeDetailModal
+  tlExecutionStarted: string;
+  tlPairOpened: string;
+  tlSpreadCaptured: string;
+  tlFundingSettlement: string;
+  tlNoFundingSettlement: string;
+  tlExitAttribution: string;
+  tlAwaitingExit: string;
+  tlNetResult: string;
+  tlTotalLabel: string;
+  tlHoldLabel: string;
+  closeDialog: string;
+
+  // Exit reasons
+  exitProfit: string;
+  exitRecovery: string;
+  exitLowSpread: string;
+  exitUpgrade: string;
+  exitCherryStop: string;
+  exitBasisTimeout: string;
+  exitNegFunding: string;
+  exitTimeout: string;
+  exitLiquidation: string;
+  exitManual: string;
+
+  // Countdown
+  countdownNow: string;
 }
 
 const en: Translations = {
@@ -382,6 +458,82 @@ const en: Translations = {
   rrModerate: 'Moderate',
   rrHigh: 'High risk',
   rrNoData: 'No data yet',
+
+  // Error Boundary
+  errorBoundaryTitle: 'Something went wrong',
+  errorBoundaryMessage: 'An unexpected error occurred in the UI. The bot process is unaffected.',
+  reloadPage: 'Reload Page',
+  displayingLastKnownData: 'displaying last known data',
+
+  // Dashboard
+  viewLogs: 'View Logs ↓',
+
+  // Header status
+  wsPrefix: 'WS',
+  wsAge: 'WS age:',
+  staleData: 'STALE DATA',
+
+  // Badges / Labels
+  live: 'LIVE',
+  sessionLabel: 'SESSION',
+  allTimeLabel: 'ALL-TIME',
+  tradesWord: 'trades',
+  positionWord: 'position',
+  positionsWord: 'positions',
+  tradeFired: 'TRADE FIRED',
+  feedLabel: 'FEED',
+
+  // AnalyticsPanel
+  allTimePnlSubtitle: 'All-time P&L',
+  realized: 'Realized',
+  unrealized: 'Unrealized',
+  allLabel: 'All',
+
+  // Timeline events — PositionDetailCard
+  tlPositionOpened: 'Position Opened',
+  tlEntrySpreadLabel: 'Entry spread',
+  tlBasisLabel: 'Basis',
+  tlMarkToMarket: 'Mark-to-Market',
+  tlCurrentSpreadLabel: 'Current spread',
+  tlPricePnlLabel: 'Price PnL',
+  tlFundingCollection: 'Funding Collection',
+  tlCollectionsNet: 'collection(s), net',
+  tlNextWindow: 'Next window',
+  tlProfitTarget: 'Profit Target',
+  tlTargetReached: 'Target reached',
+  tlRemaining: 'remaining',
+  tlTargetUnavailable: 'Target tracking unavailable',
+  tlExecutionState: 'Execution State',
+  tlActive: 'ACTIVE',
+  executionTimeline: 'Execution Confidence Timeline',
+
+  // Timeline events — TradeDetailModal
+  tlExecutionStarted: 'Execution Started',
+  tlPairOpened: 'pair opened',
+  tlSpreadCaptured: 'Spread Captured',
+  tlFundingSettlement: 'Funding Settlement',
+  tlNoFundingSettlement: 'No funding settlement recorded',
+  tlExitAttribution: 'Exit & Attribution',
+  tlAwaitingExit: 'Awaiting exit trigger',
+  tlNetResult: 'Net Result',
+  tlTotalLabel: 'total',
+  tlHoldLabel: 'hold',
+  closeDialog: 'Close dialog',
+
+  // Exit reasons
+  exitProfit: 'Profit',
+  exitRecovery: 'Recovery',
+  exitLowSpread: 'Low Spread',
+  exitUpgrade: 'Upgrade',
+  exitCherryStop: 'Cherry Stop',
+  exitBasisTimeout: 'Basis Timeout',
+  exitNegFunding: 'Neg. Funding',
+  exitTimeout: 'Timeout',
+  exitLiquidation: 'Liquidation',
+  exitManual: 'Manual',
+
+  // Countdown
+  countdownNow: '⚡ NOW',
 };
 
 const he: Translations = {
@@ -568,6 +720,82 @@ const he: Translations = {
   rrModerate: 'בינוני',
   rrHigh: 'סיכון גבוה',
   rrNoData: 'אין נתונים עדיין',
+
+  // Error Boundary
+  errorBoundaryTitle: 'משהו השתבש',
+  errorBoundaryMessage: 'אירעה שגיאה בלתי צפויה בממשק. תהליך הבוט לא מושפע.',
+  reloadPage: 'טען מחדש',
+  displayingLastKnownData: 'מציג נתונים אחרונים ידועים',
+
+  // Dashboard
+  viewLogs: 'צפה ביומן ↓',
+
+  // Header status
+  wsPrefix: 'WS',
+  wsAge: 'גיל WS:',
+  staleData: 'נתונים ישנים',
+
+  // Badges / Labels
+  live: 'פעיל',
+  sessionLabel: 'סשן',
+  allTimeLabel: 'כל הזמן',
+  tradesWord: 'עסקאות',
+  positionWord: 'פוזיציה',
+  positionsWord: 'פוזיציות',
+  tradeFired: 'עסקה בוצעה',
+  feedLabel: 'פיד',
+
+  // AnalyticsPanel
+  allTimePnlSubtitle: 'רווח והפסד מצטבר',
+  realized: 'ממומש',
+  unrealized: 'לא ממומש',
+  allLabel: 'הכל',
+
+  // Timeline events — PositionDetailCard
+  tlPositionOpened: 'פוזיציה נפתחה',
+  tlEntrySpreadLabel: 'ספרד כניסה',
+  tlBasisLabel: 'בסיס',
+  tlMarkToMarket: 'שערוך שוק',
+  tlCurrentSpreadLabel: 'ספרד נוכחי',
+  tlPricePnlLabel: 'רווח מחיר',
+  tlFundingCollection: 'גביית מימון',
+  tlCollectionsNet: 'גבייה(ות), נטו',
+  tlNextWindow: 'חלון הבא',
+  tlProfitTarget: 'יעד רווח',
+  tlTargetReached: 'היעד הושג',
+  tlRemaining: 'נותר',
+  tlTargetUnavailable: 'מעקב יעד לא זמין',
+  tlExecutionState: 'מצב ביצוע',
+  tlActive: 'פעיל',
+  executionTimeline: 'ציר זמן ביצוע',
+
+  // Timeline events — TradeDetailModal
+  tlExecutionStarted: 'ביצוע התחיל',
+  tlPairOpened: 'צמד נפתח',
+  tlSpreadCaptured: 'ספרד נלכד',
+  tlFundingSettlement: 'סליקת מימון',
+  tlNoFundingSettlement: 'לא נרשמה סליקת מימון',
+  tlExitAttribution: 'יציאה וייחוס',
+  tlAwaitingExit: 'ממתין לטריגר יציאה',
+  tlNetResult: 'תוצאה נטו',
+  tlTotalLabel: 'סה״כ',
+  tlHoldLabel: 'החזקה',
+  closeDialog: 'סגור חלון',
+
+  // Exit reasons
+  exitProfit: 'רווח',
+  exitRecovery: 'התאוששות',
+  exitLowSpread: 'ספרד נמוך',
+  exitUpgrade: 'שדרוג',
+  exitCherryStop: 'סטופ צ׳רי',
+  exitBasisTimeout: 'טיימאאוט בסיס',
+  exitNegFunding: 'מימון שלילי',
+  exitTimeout: 'טיימאאוט',
+  exitLiquidation: 'חיסול',
+  exitManual: 'ידני',
+
+  // Countdown
+  countdownNow: '⚡ עכשיו',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

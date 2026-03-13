@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
+import { m } from 'framer-motion';
+import ViewReveal from './ViewReveal';
 import { FullData } from '../hooks/useMarketData';
 import { WsConnectionState } from '../services/websocket';
+import { useSettings } from '../context/SettingsContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
 import ExchangeBalances from './ExchangeBalances';
 import SignalTape from './SignalTape';
-import RiskRadar from './RiskRadar';
 import {
   SkeletonRightPanel,
   SkeletonAnalyticsPanel,
@@ -51,6 +53,7 @@ const Dashboard: React.FC<DashboardProps> = ({
   // True only before the very first data payload arrives — both stay null
   // until WS sends the initial full_update. Once set, never goes back to null.
   const isLoading = data.balances === null && data.summary === null;
+  const { t } = useSettings();
 
   // Stable array reference — `data.positions` changes only when positions list
   // actually mutates, preventing spurious re-renders of memo'd children.
@@ -58,10 +61,19 @@ const Dashboard: React.FC<DashboardProps> = ({
   const trades    = useMemo(() => data.trades    ?? [], [data.trades]);
 
   // Surface the most recent ERROR-level logs as a top-of-page banner.
-  const errorLogs = useMemo(
-    () => (data.logs ?? []).filter((l) => l.level.toUpperCase() === 'ERROR').slice(0, 5),
-    [data.logs],
-  );
+  // Only show errors from the last 60 seconds to avoid stale banners.
+  const errorLogs = useMemo(() => {
+    const cutoff = Date.now() - 60_000;
+    return (data.logs ?? [])
+      .filter((l) => {
+        if (l.level.toUpperCase() !== 'ERROR') return false;
+        const ts = new Date(l.timestamp).getTime();
+        // Drop entries with unparseable timestamps (legacy HH:MM:SS format)
+        if (isNaN(ts)) return false;
+        return ts > cutoff;
+      })
+      .slice(0, 5);
+  }, [data.logs]);
 
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -104,11 +116,18 @@ const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className="app-layout">
+      {/* Elite ambient glow orbs — fixed, behind all content */}
+      <div className="elite-ambient" aria-hidden="true">
+        <div className="elite-orb elite-orb--1" />
+        <div className="elite-orb elite-orb--2" />
+        <div className="elite-orb elite-orb--3" />
+      </div>
       <Sidebar activeSection={activeSection} onNavigate={scrollToSection} />
 
       <div className="main-content">
         <Header
           botStatus={data.status}
+          alerts={data.alerts ?? []}
           lastFetchedAt={data.lastFetchedAt}
           wsConnection={wsConnection}
           lastWsMessageAt={lastWsMessageAt}
@@ -124,7 +143,12 @@ const Dashboard: React.FC<DashboardProps> = ({
         <div className="content-area" ref={contentRef}>
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />
           <div className="space-y-5">
-            <div id={SECTION_IDS.dashboard}>
+            <ViewReveal
+              id={SECTION_IDS.dashboard}
+              className="elite-section"
+              from="up"
+              distance={28}
+            >
               {errorLogs.length > 0 && (
                 <div className="nx-error-banner">
                   <span className="nx-error-banner__icon">🚨</span>
@@ -136,7 +160,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                     className="nx-error-banner__btn"
                     onClick={() => scrollToSection(SECTION_IDS.logs)}
                   >
-                    View Logs ↓
+                    {t.viewLogs}
                   </button>
                 </div>
               )}
@@ -151,30 +175,29 @@ const Dashboard: React.FC<DashboardProps> = ({
                 avgPnl={data.summary?.avg_pnl ?? 0}
                 isLoading={isLoading}
               />
-            </div>
+            </ViewReveal>
 
-            <RiskRadar
-              positions={positions}
-              totalBalance={data.balances?.total ?? 0}
-              dailyPnl={data.dailyPnl}
-              allTimePnl={data.summary?.all_time_pnl ?? 0}
-            />
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-              <div className="lg:col-span-2" id={SECTION_IDS.positions}>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 elite-section">
+              <ViewReveal className="lg:col-span-2" id={SECTION_IDS.positions} from="left" distance={60}>
                 <PositionsTable positions={positions} isLoading={isLoading} />
-              </div>
-              <div id={SECTION_IDS.balances}>
+              </ViewReveal>
+              <ViewReveal id={SECTION_IDS.balances} from="right" distance={60}>
                 <ExchangeBalances balances={data.balances} />
-              </div>
+              </ViewReveal>
             </div>
 
-            <div id={SECTION_IDS.opportunities}>
+            <ViewReveal
+              id={SECTION_IDS.opportunities}
+              className="elite-section"
+              from="up"
+              distance={28}
+            >
               <Suspense fallback={<SkeletonRightPanel rows={8} />}>
                 <RightPanel opportunities={data.opportunities} status={data.status} />
               </Suspense>
-            </div>
+            </ViewReveal>
 
+            <ViewReveal className="elite-section" from="up" distance={28}>
             <Suspense fallback={<SkeletonAnalyticsPanel />}>
               <AnalyticsPanel
                 pnl={data.pnl}
@@ -183,18 +206,29 @@ const Dashboard: React.FC<DashboardProps> = ({
                 totalBalance={data.balances?.total ?? 0}
               />
             </Suspense>
+            </ViewReveal>
 
-            <div id={SECTION_IDS.trades}>
+            <ViewReveal
+              id={SECTION_IDS.trades}
+              className="elite-section"
+              from="up"
+              distance={28}
+            >
               <Suspense fallback={<SkeletonRecentTrades rows={6} />}>
                 <RecentTradesPanel trades={trades} tradesLoaded={data.tradesLoaded} />
               </Suspense>
-            </div>
+            </ViewReveal>
 
-            <div id={SECTION_IDS.logs}>
+            <ViewReveal
+              id={SECTION_IDS.logs}
+              className="elite-section"
+              from="up"
+              distance={28}
+            >
               <Suspense fallback={<div style={{ height: 280, borderRadius: 14 }} className="card skeleton-shimmer" />}>
                 <SystemLogs logs={data.logs} summary={data.summary} />
               </Suspense>
-            </div>
+            </ViewReveal>
           </div>
         </div>
       </div>

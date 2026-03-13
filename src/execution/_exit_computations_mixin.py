@@ -215,6 +215,8 @@ class _ExitComputationsMixin:
         _net_usd = _long_usd + _short_usd
         trade.funding_collections += 1
         trade.funding_collected_usd += _net_usd
+        trade._funding_tracked_long += _long_usd
+        trade._funding_tracked_short += _short_usd
         trade._funding_paid_at = now
 
         # Journal entries
@@ -279,23 +281,53 @@ class _ExitComputationsMixin:
           price_pnl_pct:   unrealized price P&L (%)
           funding_pnl_pct: funding collected (%)
           fees_pct:        total fees (%)
-          long_price:      current long price
-          short_price:     current short price
+          long_price:      current long price (VWAP-adjusted)
+          short_price:     current short price (VWAP-adjusted)
         """
-        try:
-            l_ticker = await long_adapter.get_ticker(trade.symbol)
-            s_ticker = await short_adapter.get_ticker(trade.symbol)
-            l_price = Decimal(str(
-                l_ticker.get("bid") or l_ticker.get("last") or l_ticker.get("close") or 0
-            ))
-            s_price = Decimal(str(
-                s_ticker.get("ask") or s_ticker.get("last") or s_ticker.get("close") or 0
-            ))
-        except Exception as e:
-            logger.debug(f"Price fetch failed for {trade.symbol}: {e}")
+        def _to_decimal_price(raw_price: object) -> Optional[Decimal]:
+            if isinstance(raw_price, Decimal):
+                return raw_price
+            if isinstance(raw_price, (int, float, str)):
+                try:
+                    return Decimal(str(raw_price))
+                except Exception:
+                    return None
             return None
 
-        if l_price <= 0 or s_price <= 0:
+        l_price: Optional[Decimal] = None
+        s_price: Optional[Decimal] = None
+
+        # Preferred path: VWAP executable prices.
+        try:
+            raw_l_price, raw_s_price = await asyncio.gather(
+                long_adapter.get_executable_price(
+                    trade.symbol, trade.long_qty, side="sell"
+                ),
+                short_adapter.get_executable_price(
+                    trade.symbol, trade.short_qty, side="buy"
+                ),
+            )
+            l_price = _to_decimal_price(raw_l_price)
+            s_price = _to_decimal_price(raw_s_price)
+        except Exception as e:
+            logger.debug(f"Executable price fetch failed for {trade.symbol}: {e}")
+
+        # Fallback path (tests / adapters without order-book pricing): ticker last.
+        if l_price is None or s_price is None:
+            try:
+                long_ticker, short_ticker = await asyncio.gather(
+                    long_adapter.get_ticker(trade.symbol),
+                    short_adapter.get_ticker(trade.symbol),
+                )
+                if l_price is None:
+                    l_price = _to_decimal_price(long_ticker.get("last"))
+                if s_price is None:
+                    s_price = _to_decimal_price(short_ticker.get("last"))
+            except Exception as e:
+                logger.debug(f"Ticker price fetch failed for {trade.symbol}: {e}")
+                return None
+
+        if l_price is None or s_price is None or l_price <= 0 or s_price <= 0:
             return None
 
         entry_long = trade.entry_price_long or l_price

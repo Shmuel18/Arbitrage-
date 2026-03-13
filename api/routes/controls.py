@@ -4,54 +4,64 @@ Bot Controls API Routes
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Optional
+from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING, Any, Literal
 import json
 import logging
-import os
-import time
+import hashlib
 
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
+from ..auth import require_command_token, require_config_token, require_emergency_token
+from ..deps import require_redis_client
+
 logger = logging.getLogger("trinity.api.controls")
 
-redis_client: RedisClient | None = None
-
-# ── Simple in-memory rate limiter ──────────────────────────────────
-_rate_limit_ledger: dict[str, list[float]] = {}
-_RATE_LIMIT_WINDOW = 60.0   # seconds
-_RATE_LIMIT_MAX_CALLS = 10  # max calls per window per endpoint
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_CALLS = 10
 
 
-def _check_rate_limit(endpoint: str) -> None:
-    """Raise 429 if this endpoint has been called too often."""
-    now = time.monotonic()
-    timestamps = _rate_limit_ledger.setdefault(endpoint, [])
-    # Prune old entries outside the window
-    cutoff = now - _RATE_LIMIT_WINDOW
-    _rate_limit_ledger[endpoint] = [ts for ts in timestamps if ts > cutoff]
-    timestamps = _rate_limit_ledger[endpoint]
-    if len(timestamps) >= _RATE_LIMIT_MAX_CALLS:
+async def _check_rate_limit(
+    redis_client: RedisClient,
+    endpoint: str,
+    client_ip: str,
+    identity_token: str = "anonymous",
+) -> None:
+    """Distributed rate limit using Redis atomic counters.
+
+    Key shape:
+    - Legacy: ``trinity:rate_limit:<endpoint>:<ip>``
+    - Scoped: ``trinity:rate_limit:<endpoint>:<identity-hash>:<ip>``
+    """
+    if identity_token == "anonymous":
+        # Backward-compatible key shape used by legacy tests and tools.
+        key = f"trinity:rate_limit:{endpoint}:{client_ip}"
+    else:
+        identity_hash = hashlib.sha256(identity_token.encode("utf-8")).hexdigest()[:16]
+        key = f"trinity:rate_limit:{endpoint}:{identity_hash}:{client_ip}"
+    current = await redis_client.incr(key)
+    if current == 1:
+        await redis_client.expire(key, _RATE_LIMIT_WINDOW_SECONDS)
+    if current > _RATE_LIMIT_MAX_CALLS:
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded: max {_RATE_LIMIT_MAX_CALLS} calls "
-                   f"per {int(_RATE_LIMIT_WINDOW)}s for {endpoint}",
+            detail=(
+                f"Rate limit exceeded: max {_RATE_LIMIT_MAX_CALLS} calls "
+                f"per {_RATE_LIMIT_WINDOW_SECONDS}s"
+            ),
         )
-    timestamps.append(now)
 
 
-def _require_admin_token(x_admin_token: Optional[str]) -> None:
-    expected = os.environ.get("ADMIN_TOKEN")
-    if expected and x_admin_token != expected:
-        raise HTTPException(status_code=403, detail="Invalid or missing admin token")
 
-
-async def _audit_control_action(action: str, payload: dict[str, Any]) -> None:
-    if not redis_client:
-        return
+async def _audit_control_action(
+    redis_client: RedisClient,
+    action: str,
+    payload: dict[str, Any],
+) -> None:
     event = {
         "action": action,
         "payload": payload,
@@ -60,19 +70,16 @@ async def _audit_control_action(action: str, payload: dict[str, Any]) -> None:
     try:
         await redis_client.lpush("trinity:audit:controls", json.dumps(event))
         await redis_client.ltrim("trinity:audit:controls", 0, 499)
-    except Exception:
-        # Audit should not break control paths.
-        pass
-
-def set_redis_client(client: RedisClient) -> None:
-    global redis_client
-    redis_client = client
+    except Exception as exc:
+        # Audit should not break control paths — log at debug so operators can
+        # see if audit logging is broken without generating noise in production.
+        logger.debug("Failed to write audit log entry: %s", exc)
 
 router = APIRouter(redirect_slashes=False)
 
 
 class BotCommand(BaseModel):
-    action: str  # start, stop, pause, resume
+    action: Literal["start", "stop", "pause", "resume"]
 
 
 _ALLOWED_CONFIG_KEYS = frozenset({
@@ -86,15 +93,60 @@ class ConfigUpdate(BaseModel):
     value: Any
 
 
+def _validate_config_update_value(key: str, value: Any) -> Any:
+    """Validate and normalize dynamic config updates by key."""
+    numeric_ranges: dict[str, tuple[Decimal, Decimal]] = {
+        "min_funding_spread": (Decimal("0"), Decimal("100")),
+        "max_position_usd": (Decimal("1"), Decimal("10000000")),
+        "min_edge_pct": (Decimal("0"), Decimal("100")),
+    }
+
+    if key == "max_concurrent_trades":
+        if not isinstance(value, int):
+            raise HTTPException(status_code=400, detail="max_concurrent_trades must be integer")
+        if value < 1 or value > 100:
+            raise HTTPException(status_code=400, detail="max_concurrent_trades out of range (1-100)")
+        return value
+
+    if key in numeric_ranges:
+        try:
+            numeric = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"{key} must be numeric")
+        min_v, max_v = numeric_ranges[key]
+        if numeric < min_v or numeric > max_v:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{key} out of range ({min_v} - {max_v})",
+            )
+        return float(numeric)
+
+    if key in {"strategy", "mode"}:
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=400, detail=f"{key} must be non-empty string")
+        if len(value.strip()) > 64:
+            raise HTTPException(status_code=400, detail=f"{key} is too long")
+        return value.strip()
+
+    raise HTTPException(status_code=400, detail=f"No validator for key '{key}'")
+
+
 @router.post("/command")
-async def send_command(command: BotCommand, x_admin_token: Optional[str] = Header(None)):
+async def send_command(
+    request: Request,
+    command: BotCommand,
+    redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_command_token),
+):
     """Send command to bot"""
     try:
-        if not redis_client:
-            raise HTTPException(status_code=503, detail="Redis not connected")
-        
-        _require_admin_token(x_admin_token)
-        _check_rate_limit("command")
+        identity = request.headers.get("x-command-token") or "anonymous"
+        await _check_rate_limit(
+            redis_client,
+            "command",
+            request.client.host if request.client else "unknown",
+            identity,
+        )
 
         command_data = {
             "action": command.action,
@@ -102,7 +154,7 @@ async def send_command(command: BotCommand, x_admin_token: Optional[str] = Heade
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command_data))
-        await _audit_control_action("command", command_data)
+        await _audit_control_action(redis_client, "command", command_data)
         
         return {
             "status": "success",
@@ -111,18 +163,26 @@ async def send_command(command: BotCommand, x_admin_token: Optional[str] = Heade
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in send_command")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/config")
-async def update_config(update: ConfigUpdate, x_admin_token: Optional[str] = Header(None)):
+async def update_config(
+    request: Request,
+    update: ConfigUpdate,
+    redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_config_token),
+):
     """Update bot configuration"""
     try:
-        if not redis_client:
-            raise HTTPException(status_code=503, detail="Redis not connected")
-
-        _require_admin_token(x_admin_token)
-        _check_rate_limit("config")
+        identity = request.headers.get("x-config-token") or "anonymous"
+        await _check_rate_limit(
+            redis_client,
+            "config",
+            request.client.host if request.client else "unknown",
+            identity,
+        )
 
         if update.key not in _ALLOWED_CONFIG_KEYS:
             raise HTTPException(
@@ -131,20 +191,22 @@ async def update_config(update: ConfigUpdate, x_admin_token: Optional[str] = Hea
                        f"Allowed: {', '.join(sorted(_ALLOWED_CONFIG_KEYS))}",
             )
 
+        normalized_value = _validate_config_update_value(update.key, update.value)
+
         # Update config in Redis
         config_key = f"trinity:config:{update.key}"
-        await redis_client.set(config_key, json.dumps(update.value))
+        await redis_client.set(config_key, json.dumps(normalized_value))
         
         # Notify bot of config change
         command = {
             "action": "config_update",
             "key": update.key,
-            "value": update.value,
+            "value": normalized_value,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command))
-        await _audit_control_action("config_update", command)
+        await _audit_control_action(redis_client, "config_update", command)
         
         return {
             "status": "success",
@@ -153,28 +215,33 @@ async def update_config(update: ConfigUpdate, x_admin_token: Optional[str] = Hea
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in update_config")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/emergency_stop")
-async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
+async def emergency_stop(
+    request: Request,
+    redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_emergency_token),
+):
     """Emergency stop - close all positions and stop bot.
-    Requires X-Emergency-Token header if EMERGENCY_TOKEN env var is set."""
-    expected = os.environ.get("EMERGENCY_TOKEN")
-    if expected and x_emergency_token != expected:
-        raise HTTPException(status_code=403, detail="Invalid or missing emergency token")
-    _check_rate_limit("emergency_stop")
+    Requires X-Emergency-Token header (EMERGENCY_TOKEN env var must be set)."""
+    identity = request.headers.get("x-emergency-token") or "anonymous"
+    await _check_rate_limit(
+        redis_client,
+        "emergency_stop",
+        request.client.host if request.client else "unknown",
+        identity,
+    )
     try:
-        if not redis_client:
-            raise HTTPException(status_code=503, detail="Redis not connected")
-        
         command = {
             "action": "emergency_stop",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         await redis_client.publish("trinity:commands", json.dumps(command))
-        await _audit_control_action("emergency_stop", command)
+        await _audit_control_action(redis_client, "emergency_stop", command)
         
         return {
             "status": "success",
@@ -183,16 +250,16 @@ async def emergency_stop(x_emergency_token: Optional[str] = Header(None)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in emergency_stop")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/exchanges")
-async def get_exchanges():
+async def get_exchanges(
+    redis_client: RedisClient = Depends(require_redis_client),
+):
     """Get exchange statuses"""
     try:
-        if not redis_client:
-            return {"exchanges": []}
-        
         exchanges_key = "trinity:exchanges"
         exchanges_data = await redis_client.get(exchanges_key)
         
@@ -201,4 +268,5 @@ async def get_exchanges():
         
         return json.loads(exchanges_data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in get_exchanges")
+        raise HTTPException(status_code=500, detail="Internal server error")

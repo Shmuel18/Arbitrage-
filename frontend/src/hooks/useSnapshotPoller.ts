@@ -68,9 +68,18 @@ export function useSnapshotPoller(
           trades: tradesRes,
         },
       });
+
+      // If every single request was rejected the API is unreachable — surface
+      // a user-visible error so the dashboard doesn't silently show stale data.
+      const allFailed = [statusRes, balRes, oppRes, logsRes, summRes, posRes, pnlRes, tradesRes]
+        .every((r) => r.status === 'rejected');
+      if (allFailed) {
+        dispatchRef.current({ type: 'FETCH_ERROR', payload: 'Unable to reach the API server' });
+      }
     } catch (error) {
       if (!axios.isCancel(error)) {
         console.error('Error fetching data:', error);
+        dispatchRef.current({ type: 'FETCH_ERROR', payload: 'Network error — data may be stale' });
       }
     }
   }, [pnlHoursRef]);

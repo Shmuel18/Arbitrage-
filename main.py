@@ -138,16 +138,8 @@ async def main() -> None:
     # ── Embedded API server (runs inside bot process — never dies separately) ──
     from api.main import app as api_app, manager as ws_manager
     from api.broadcast_service import BroadcastService
-    from api.routes import positions as pos_route, trades as trades_route
-    from api.routes import controls as ctrl_route, analytics as ana_route
-    # Inject the bot's own Redis client into the API routes
-    pos_route.set_redis_client(redis)
-    trades_route.set_redis_client(redis)
-    ctrl_route.set_redis_client(redis)
-    ana_route.set_redis_client(redis)
-    # Store reference so API module can use it
-    import api.main as api_module
-    api_module.redis_client = redis
+    # Inject bot Redis client into FastAPI application state for route DI.
+    api_app.state.redis_client = redis
 
     uvicorn_config = uvicorn.Config(
         api_app, host="0.0.0.0", port=8000,

@@ -95,41 +95,41 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const timelineEvents: TimelineEvent[] = [
     {
       id: 'entry',
-      label: 'Execution Started',
-      detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} pair opened`,
+      label: t.tlExecutionStarted,
+      detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} ${t.tlPairOpened}`,
       timeLabel: formatDate(openedAt),
       confidence: confidenceFrom(openedAt ? 92 : 70),
       status: 'done',
     },
     {
       id: 'mark',
-      label: 'Spread Captured',
-      detail: `Entry edge ${formatFundingRateN(trade.entry_spread, 4)} | Basis ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
+      label: t.tlSpreadCaptured,
+      detail: `${t.tlEntrySpreadLabel} ${formatFundingRateN(trade.entry_spread, 4)} | ${t.tlBasisLabel} ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
       confidence: confidenceFrom(55 + Math.min(40, spreadAbs * 2000)),
       status: 'done',
     },
     {
       id: 'funding',
-      label: 'Funding Settlement',
+      label: t.tlFundingSettlement,
       detail:
         fundingCollections > 0
-          ? `${fundingCollections} collection(s), net ${formatUsd(trade.funding_collected_usd)}`
-          : 'No funding settlement recorded',
+          ? `${fundingCollections} ${t.tlCollectionsNet} ${formatUsd(trade.funding_collected_usd)}`
+          : t.tlNoFundingSettlement,
       confidence: confidenceFrom(fundingCollections > 0 ? 88 : trade.status === 'closed' ? 50 : 72),
       status: fundingCollections > 0 ? 'done' : trade.status === 'closed' ? 'pending' : 'live',
     },
     {
       id: 'exit',
-      label: 'Exit & Attribution',
-      detail: trade.exit_reason || 'Awaiting exit trigger',
+      label: t.tlExitAttribution,
+      detail: trade.exit_reason || t.tlAwaitingExit,
       timeLabel: closedAt ? formatDate(closedAt) : undefined,
       confidence: confidenceFrom(closedAt ? 90 : 68),
       status: trade.status === 'closed' ? 'done' : 'live',
     },
     {
       id: 'final',
-      label: 'Net Result',
-      detail: `${formatUsd(totalPnl)} total | hold ${formatDuration(trade.hold_minutes)}`,
+      label: t.tlNetResult,
+      detail: `${formatUsd(totalPnl)} ${t.tlTotalLabel} | ${t.tlHoldLabel} ${formatDuration(trade.hold_minutes)}`,
       confidence: confidenceFrom(trade.status === 'closed' ? 70 + Math.min(25, totalPnlAbs * 2.5) : 55),
       status: trade.status === 'closed' ? 'done' : 'pending',
     },
@@ -199,7 +199,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             </span>
             <button
               onClick={onClose}
-              aria-label="Close dialog"
+              aria-label={t.closeDialog}
               style={{
                 background: 'rgba(148,163,184,0.1)', border: 'none', cursor: 'pointer',
                 color: 'var(--text-muted)', fontSize: 18, borderRadius: '50%',
@@ -299,7 +299,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
           </div>
         </div>
 
-        <ExecutionTimeline title="Execution Confidence Timeline" events={timelineEvents} />
+        <ExecutionTimeline title={t.executionTimeline} events={timelineEvents} />
 
         {/* ── Exit Reason ── */}
         {trade.exit_reason && (

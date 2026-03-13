@@ -8,6 +8,8 @@
 @import './styles/tables.css';
 @import './styles/nx-components.css';
 @import './styles/extras.css';
+/* ── Elite visual system — Apex Edition (always last to override) ── */
+@import './styles/elite.css';
 
 @tailwind base;
 @tailwind components;

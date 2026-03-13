@@ -7,6 +7,7 @@ testable and free of side effects (except the async balance/spec fetches).
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional, Tuple
 
@@ -45,8 +46,10 @@ class PositionSizer:
 
         Returns ``None`` if sizing is not possible (zero balance, missing spec, etc.).
         """
-        long_bal = await long_adapter.get_balance()
-        short_bal = await short_adapter.get_balance()
+        long_bal, short_bal = await asyncio.gather(
+            long_adapter.get_balance(),
+            short_adapter.get_balance(),
+        )
 
         position_pct = Decimal(str(self._cfg.risk_limits.position_size_pct))
 
@@ -96,8 +99,10 @@ class PositionSizer:
             logger.warning(f"Insufficient balance for {opp.symbol}")
             return None
 
-        long_spec = await long_adapter.get_instrument_spec(opp.symbol)
-        short_spec = await short_adapter.get_instrument_spec(opp.symbol)
+        long_spec, short_spec = await asyncio.gather(
+            long_adapter.get_instrument_spec(opp.symbol),
+            short_adapter.get_instrument_spec(opp.symbol),
+        )
 
         _ONE = Decimal("1")
         _FALLBACK_LOT = Decimal("0.001")

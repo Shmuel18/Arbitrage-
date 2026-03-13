@@ -1,4 +1,5 @@
 import React, { memo, useMemo } from 'react';
+import { useSettings } from '../context/SettingsContext';
 
 interface LogEntry {
   timestamp: string;
@@ -108,9 +109,11 @@ const SignalTape: React.FC<SignalTapeProps> = memo(({ logs, onSignalClick }) => 
 
   if (items.length === 0) return null;
 
+  const { t } = useSettings();
+
   return (
-    <div className="signal-tape" role={isInteractive ? 'navigation' : undefined} aria-label={isInteractive ? 'Activity feed — click to scroll to section' : undefined}>
-      <div className="signal-tape__label">FEED</div>
+    <div className="signal-tape" role={isInteractive ? 'navigation' : undefined} aria-label={isInteractive ? t.feedLabel : undefined}>
+      <div className="signal-tape__label">{t.feedLabel}</div>
       <div className="signal-tape__track">
         <div
           className="signal-tape__inner"

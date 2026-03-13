@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Optional
 
 from src.core.contracts import (
     OpportunityCandidate,
+    OrderRequest,
     OrderSide,
     TradeMode,
     TradeRecord,
@@ -106,6 +107,15 @@ class _EntryMixin(_EntryOrdersMixin):
                     f"< min_funding_spread {tp.min_funding_spread}% (gross={opp.gross_edge_pct:.4f}%)"
                 )
                 return
+
+        # ── Hard price-spread gate (defense-in-depth) ──
+        # Positive spread = buy expensive, sell cheap → never enter.
+        if opp.price_spread_pct > Decimal("0"):
+            logger.info(
+                f"🚫 Skipping {opp.symbol}: adverse price spread "
+                f"{float(opp.price_spread_pct):+.4f}% (hard block)"
+            )
+            return
 
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
@@ -209,6 +219,67 @@ class _EntryMixin(_EntryOrdersMixin):
             short_spec = result["short_spec"]
             entry_basis_pct = result["entry_basis_pct"]
 
+            # ── Post-entry validation: reject if spread became adverse during execution ──
+            # entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * 100
+            # Positive spread = adverse (long more expensive than short)
+            tp = self._cfg.trading_params
+            entry_basis_threshold = tp.max_entry_basis_spread_pct if hasattr(tp, "max_entry_basis_spread_pct") else Decimal("0")
+            if entry_basis_pct > entry_basis_threshold:
+                logger.warning(
+                    f"🚫 [{opp.symbol}] POST-ENTRY REJECTION: actual spread {float(entry_basis_pct):+.4f}% "
+                    f"> threshold {float(entry_basis_threshold):+.4f}% (scanner saw {float(opp.price_spread_pct):+.4f}%) — "
+                    f"latency fillslipped the trade — CLOSING IMMEDIATELY"
+                )
+                # Emergency close: place reduce-only orders to unwind both positions
+                try:
+                    close_tasks = []
+                    # Close long: SELL with reduce_only
+                    if long_filled_qty > 0:
+                        close_tasks.append(
+                            self._place_with_timeout(
+                                long_adapter,
+                                OrderRequest(
+                                    exchange=opp.long_exchange,
+                                    symbol=opp.symbol,
+                                    side=OrderSide.SELL,
+                                    quantity=long_filled_qty,
+                                    reduce_only=True,
+                                ),
+                            )
+                        )
+                    # Close short: BUY with reduce_only
+                    if short_filled_qty > 0:
+                        close_tasks.append(
+                            self._place_with_timeout(
+                                short_adapter,
+                                OrderRequest(
+                                    exchange=opp.short_exchange,
+                                    symbol=opp.symbol,
+                                    side=OrderSide.BUY,
+                                    quantity=short_filled_qty,
+                                    reduce_only=True,
+                                ),
+                            )
+                        )
+                    results = await asyncio.gather(*close_tasks, return_exceptions=True)
+                    failed = [r for r in results if isinstance(r, Exception) or r is None]
+                    if failed:
+                        logger.error(
+                            f"❌ [{opp.symbol}] Emergency close FAILED ({len(failed)} legs) — "
+                            f"MANUAL INTERVENTION REQUIRED — positions may be unhedged"
+                        )
+                    else:
+                        logger.info(
+                            f"✅ [{opp.symbol}] Emergency close SUCCESSFUL — "
+                            f"adverse trade rejected and closed"
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"❌ [{opp.symbol}] Emergency close ERROR: {e} — "
+                        f"MANUAL INTERVENTION REQUIRED"
+                    )
+                return
+
             trade = TradeRecord(
                 trade_id=trade_id,
                 symbol=opp.symbol,
@@ -296,7 +367,7 @@ class _EntryMixin(_EntryOrdersMixin):
                 f"  SHORT:     {opp.short_exchange} qty={short_filled_qty} @ ${float(entry_price_short or 0):.6f} "
                     f"| funding={sr_pct:+.4f}%\n"
                 f"  Price Spread: {float(opp.price_spread_pct):+.4f}% "
-                    f"({'favorable ✅' if opp.price_spread_pct > 0 else 'adverse ⚠️' if opp.price_spread_pct < 0 else 'neutral'})\n"
+                    f"({'favorable ✅' if opp.price_spread_pct < 0 else 'adverse ⚠️' if opp.price_spread_pct > 0 else 'neutral'})\n"
                 f"  Notional:  ${entry_notional:.2f} per leg\n"
                 f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
                 f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"
@@ -307,6 +378,16 @@ class _EntryMixin(_EntryOrdersMixin):
             logger.info(entry_msg, extra={"trade_id": trade_id, "symbol": opp.symbol, "action": "trade_entry"})
             if self._publisher:
                 await self._publisher.publish_log("INFO", entry_msg)
+                await self._publisher.publish_alert(
+                    (
+                        f"🟢 Trade opened: {trade_id} {opp.symbol} "
+                        f"L={opp.long_exchange} S={opp.short_exchange} "
+                        f"net={float(opp.net_edge_pct):.4f}%"
+                    ),
+                    severity="info",
+                    alert_type="trade_open",
+                    symbol=opp.symbol,
+                )
 
             self._journal.trade_opened(
                 trade_id=trade_id, symbol=opp.symbol, mode=opp.mode,
@@ -314,7 +395,7 @@ class _EntryMixin(_EntryOrdersMixin):
                 long_qty=long_filled_qty, short_qty=short_filled_qty,
                 entry_price_long=entry_price_long, entry_price_short=entry_price_short,
                 long_funding_rate=opp.long_funding_rate, short_funding_rate=opp.short_funding_rate,
-                spread_pct=opp.immediate_spread_pct, net_pct=opp.net_edge_pct,
+                spread_pct=entry_basis_pct, net_pct=opp.net_edge_pct,
                 exit_before=opp.exit_before, n_collections=opp.n_collections,
                 notional=entry_notional,
                 entry_reason=entry_reason,

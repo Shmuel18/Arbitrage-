@@ -42,7 +42,7 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) =>
         borderRadius: '14px 14px 0 0',
       }} />
 
-      <div className="card-header mb-4" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="card-header mb-4 nx-exch-card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="nx-section-header">
           <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -66,7 +66,7 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) =>
               <div key={name} className="nx-exch-item">
                 <div className="nx-exch-header">
                   <span className="nx-exch-name">{name}</span>
-                  <div>
+                  <div className="nx-exch-metrics">
                     <span className="nx-exch-value">{formatCurrency(value)}</span>
                     <span className="nx-exch-pct">{pct.toFixed(1)}%</span>
                   </div>

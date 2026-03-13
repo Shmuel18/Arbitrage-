@@ -433,24 +433,24 @@ class TestLiquidationSafetyExit:
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
         """
-        Scenario: one leg's margin ratio drops to 20% (below the 80% safety threshold).
+        Scenario: one leg's margin ratio drops to 3% (below the 5% safety threshold).
         _check_liquidation_risk must flag the trade for emergency close.
         """
-        config.trading_params.liquidation_safety_pct = Decimal("80.0")
+        config.trading_params.liquidation_safety_pct = Decimal("5.0")
         trade = _make_open_trade(controller)
 
         # margin = (entry_price * qty) / leverage = (50000 * 0.01) / 10 = 50
-        # unrealized_pnl = -45 → equity = 50-45 = 5 → margin_ratio = 10% < 80%
+        # unrealized_pnl = -48.5 → equity = 50-48.5 = 1.5 → margin_ratio = 3% < 5%
         danger_position = Position(
             symbol="BTC/USDT",
             exchange="exchange_a",
             side=OrderSide.BUY,
             quantity=Decimal("0.01"),
             entry_price=Decimal("50000"),
-            unrealized_pnl=Decimal("-45"),
+            unrealized_pnl=Decimal("-48.5"),
             leverage=10,
         )
-        # margin_ratio = 100% (no loss) — well above 80% safety
+        # margin_ratio = 100% (no loss) — well above 5% safety
         safe_position = Position(
             symbol="BTC/USDT",
             exchange="exchange_b",
@@ -479,7 +479,7 @@ class TestLiquidationSafetyExit:
         self, controller, config, mock_exchange_mgr
     ):
         """When both legs have healthy margin ratios, no close must occur."""
-        config.trading_params.liquidation_safety_pct = Decimal("80.0")
+        config.trading_params.liquidation_safety_pct = Decimal("5.0")
         trade = _make_open_trade(controller)
 
         healthy = Position(

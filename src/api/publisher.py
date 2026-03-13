@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List
@@ -57,10 +58,10 @@ class APIPublisher:
         }
         await self.redis.set("trinity:opportunities", json.dumps(data))
     
-    async def publish_log(self, level: str, message: str):
-        """Publish a log entry"""
+    async def publish_log(self, level: str, message: str) -> None:
+        """Publish a log entry."""
         entry = json.dumps({
-            "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "message": message,
             "level": level
         })
@@ -82,18 +83,25 @@ class APIPublisher:
         }
         await self.redis.set("trinity:summary", json.dumps(summary))
     
-    def record_trade(self, is_win: bool, pnl: float = 0.0) -> None:
+    def record_trade(self, is_win: bool, pnl: Decimal = Decimal("0")) -> None:
         """Record a trade result for win rate and PnL tracking.
 
         Also persists incremental counters to Redis so the broadcast
         loop can read them without recomputing from full history.
         """
         self._total_trades += 1
-        self._total_realized_pnl += Decimal(str(pnl))
+        self._total_realized_pnl += pnl
         if is_win:
             self._winning_trades += 1
         # Supervised fire-and-forget counter updates in Redis.
-        task = asyncio.ensure_future(self._update_redis_counters(pnl, is_win))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Called from sync/test context with no active event loop.
+            logger.debug("Skipping Redis counter update: no running event loop")
+            return
+
+        task = loop.create_task(self._update_redis_counters(pnl, is_win))
         task.add_done_callback(self._counter_task_done)
 
     @staticmethod
@@ -105,7 +113,7 @@ class APIPublisher:
         if exc:
             logger.debug("Redis counter update task failed: %s", exc)
 
-    async def _update_redis_counters(self, pnl: float, is_win: bool) -> None:
+    async def _update_redis_counters(self, pnl: Decimal, is_win: bool) -> None:
         """Atomically increment trade counters in Redis."""
         try:
             await asyncio.gather(
@@ -138,10 +146,51 @@ class APIPublisher:
         await self.redis.set("trinity:exchanges", json.dumps({"exchanges": exchanges}))
 
     async def push_alert(self, message: str) -> None:
-        """Push an operator alert (logged + published as a CRITICAL log entry).
+        """Push an operator alert (backward-compat wrapper).
 
-        This is called by the execution controller for events that need
-        immediate human attention (e.g. orphaned legs, ERROR state trades).
+        Delegates to publish_alert() with severity="critical" so that all
+        existing call-sites automatically populate trinity:alerts.
         """
-        await self.publish_log("CRITICAL", message)
+        await self.publish_alert(message, severity="critical", alert_type="system")
+
+    async def publish_alert(
+        self,
+        message: str,
+        *,
+        severity: str = "critical",
+        alert_type: str = "system",
+        symbol: str | None = None,
+        exchange: str | None = None,
+    ) -> None:
+        """Publish a structured alert to trinity:alerts (24 h TTL, max 200).
+
+        Also writes a matching log entry so the signal tape is updated.
+
+        Args:
+            message:    Human-readable description of the event.
+            severity:   One of "critical" | "warning" | "info".
+            alert_type: Machine-readable category, e.g. "orphan", "trade_open",
+                        "trade_close", "error_state", "system".
+            symbol:     Optional trading symbol (e.g. "BTC/USDT:USDT").
+            exchange:   Optional exchange name (e.g. "binance").
+        """
+        entry = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "severity": severity,
+            "type": alert_type,
+            "message": message,
+            "symbol": symbol,
+            "exchange": exchange,
+        }
+        raw = json.dumps(entry)
+        try:
+            await self.redis.lpush("trinity:alerts", raw)
+            await self.redis.ltrim("trinity:alerts", 0, 199)
+            await self.redis.expire("trinity:alerts", 86400)  # 24 h TTL
+        except Exception as e:
+            logger.debug(f"publish_alert Redis write failed: {e}")
+        # Also mirror to the signal tape so the log panel reflects the event.
+        log_level = "CRITICAL" if severity == "critical" else "WARNING" if severity == "warning" else "INFO"
+        await self.publish_log(log_level, message)
 

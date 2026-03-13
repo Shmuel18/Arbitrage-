@@ -438,7 +438,17 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   margin-bottom: 6px;
+}
+
+.nx-exch-metrics {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  direction: ltr;
+  unicode-bidi: isolate;
+  flex-shrink: 0;
 }
 
 .nx-exch-name {
@@ -464,6 +474,8 @@
   font-weight: 700;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .nx-exch-pct {
@@ -471,7 +483,9 @@
   font-size: 10px;
   font-weight: 600;
   color: var(--text-muted);
-  margin-inline-start: 6px;
+  margin-inline-start: 0;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .nx-exch-bar {
@@ -505,6 +519,14 @@
   color: var(--accent);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+
+.nx-exch-card-header {
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 [data-theme="dark"] .nx-exch-total {

@@ -7,6 +7,7 @@ attributes directly to isolate the logic under test.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from decimal import Decimal
 from typing import Any, Dict
@@ -148,6 +149,87 @@ class TestGetMarkPrice:
         a._funding_rate_cache["BTC/USDT"] = {"markPrice": 50000.0, "rate": Decimal("0")}
         a._price_cache["BTC/USDT"] = 99999.0
         assert a.get_mark_price("BTC/USDT") == 50000.0
+
+
+class TestMarketDataFreshness:
+    def test_updates_price_and_bid_ask_timestamps_from_ticker(self):
+        a = _adapter()
+        a._update_price_cache_from_ticker(
+            "BTC/USDT",
+            {"last": 50010.0, "ask": 50011.0, "bid": 50009.0, "timestamp": 1234567890},
+            source="test",
+        )
+
+        assert a._price_cache["BTC/USDT"] == 50010.0
+        assert a._ask_cache["BTC/USDT"] == 50011.0
+        assert a._bid_cache["BTC/USDT"] == 50009.0
+        assert a._price_timestamp_cache["BTC/USDT"] == 1234567890
+        assert a._ask_timestamp_cache["BTC/USDT"] == 1234567890
+        assert a._bid_timestamp_cache["BTC/USDT"] == 1234567890
+
+    def test_best_bid_ask_age_uses_specific_cache_first(self):
+        a = _adapter()
+        a._ask_timestamp_cache["BTC/USDT"] = 1000.0
+        a._bid_timestamp_cache["BTC/USDT"] = 1200.0
+
+        with patch("src.exchanges._funding_cache_mixin._time") as mock_time:
+            mock_time.time.return_value = 2.0
+            assert a.get_best_ask_age_ms("BTC/USDT") == 1000.0
+            assert a.get_best_bid_age_ms("BTC/USDT") == 800.0
+
+    def test_mark_price_age_falls_back_to_funding_cached_at(self):
+        a = _adapter()
+        a._funding_rate_cache["BTC/USDT"] = {
+            "markPrice": 50000.0,
+            "indexPrice": None,
+            "cached_at_ms": 1500.0,
+            "rate": Decimal("0"),
+        }
+
+        with patch("src.exchanges._funding_cache_mixin._time") as mock_time:
+            mock_time.time.return_value = 2.0
+            assert a.get_mark_price_age_ms("BTC/USDT") == 500.0
+
+    def test_ticker_pushes_symbol_to_registered_queue(self):
+        """After registering a queue, every fresh ticker update enqueues the symbol."""
+        a = _adapter()
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        a.register_price_update_queue(q)
+
+        a._update_price_cache_from_ticker(
+            "ETH/USDT",
+            {"last": 3000.0, "ask": 3001.0, "bid": 2999.0, "timestamp": 9000},
+            source="test",
+        )
+
+        assert not q.empty()
+        exchange_id, sym = q.get_nowait()
+        assert exchange_id == a.exchange_id
+        assert sym == "ETH/USDT"
+
+    def test_ticker_without_queue_does_not_raise(self):
+        """No queue registered — ticker update should be a no-op for the queue path."""
+        a = _adapter()
+        # Must not raise even though _price_update_queue is None
+        a._update_price_cache_from_ticker(
+            "ETH/USDT",
+            {"last": 3000.0, "ask": 3001.0, "bid": 2999.0},
+            source="test",
+        )
+
+    def test_full_queue_is_silently_ignored(self):
+        """Queue at capacity: QueueFull must be swallowed, not raised."""
+        a = _adapter()
+        q: asyncio.Queue = asyncio.Queue(maxsize=1)
+        q.put_nowait((a.exchange_id, "BTC/USDT"))  # fill to capacity
+        a.register_price_update_queue(q)
+
+        # Should not raise even though queue is full
+        a._update_price_cache_from_ticker(
+            "ETH/USDT",
+            {"last": 3000.0},
+            source="test",
+        )
 
 
 # ── get_funding_rate_cached ───────────────────────────────────────

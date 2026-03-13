@@ -177,9 +177,27 @@ class _OrderMixin(_FillRecoveryMixin):
                 _fetch_params: Dict[str, Any] = {}
                 if self.exchange_id == "bybit":
                     _fetch_params["acknowledged"] = True
-                for _attempt in range(1, 4):            # 3 attempts, 1s apart
+
+                exec_cfg = getattr(self._cfg, "execution", None)
+                if exec_cfg is None and isinstance(self._cfg, dict):
+                    exec_cfg = self._cfg.get("execution", {})
+
+                attempts_raw = getattr(exec_cfg, "entry_refetch_attempts", None)
+                if attempts_raw is None and isinstance(exec_cfg, dict):
+                    attempts_raw = exec_cfg.get("entry_refetch_attempts")
+
+                interval_ms_raw = getattr(exec_cfg, "entry_refetch_interval_ms", None)
+                if interval_ms_raw is None and isinstance(exec_cfg, dict):
+                    interval_ms_raw = exec_cfg.get("entry_refetch_interval_ms")
+
+                _attempts = int(attempts_raw if attempts_raw is not None else 3)
+                _attempts = max(0, _attempts)
+                _interval_sec = int(interval_ms_raw if interval_ms_raw is not None else 1000) / 1000
+                _interval_sec = max(0.0, _interval_sec)
+                for _attempt in range(1, _attempts + 1):
                     try:
-                        await asyncio.sleep(1)
+                        if _interval_sec > 0:
+                            await asyncio.sleep(_interval_sec)
                         updated = await self._exchange.fetch_order(
                             order["id"], _resolved, _fetch_params,
                         )

@@ -20,6 +20,52 @@ logger = get_logger("exchanges")
 class _FundingCacheMixin:
     """Cache management, public accessors, and interval detection for funding rates."""
 
+    def _update_price_cache_from_ticker(
+        self,
+        symbol: str,
+        ticker: Dict[str, Any],
+        *,
+        source: str,
+    ) -> None:
+        """Update cached mark/last/ask/bid prices and their freshness timestamps."""
+        now_ms = _time.time() * 1000
+        tick_ts_raw = ticker.get("timestamp")
+        tick_ts = float(tick_ts_raw) if isinstance(tick_ts_raw, (int, float)) and tick_ts_raw > 0 else now_ms
+
+        price = ticker.get("markPrice") or ticker.get("last")
+        if price is not None:
+            self._price_cache[symbol] = float(price)
+            self._price_timestamp_cache[symbol] = tick_ts
+
+        ask = ticker.get("ask")
+        if ask is not None:
+            self._ask_cache[symbol] = float(ask)
+            self._ask_timestamp_cache[symbol] = tick_ts
+
+        bid = ticker.get("bid")
+        if bid is not None:
+            self._bid_cache[symbol] = float(bid)
+            self._bid_timestamp_cache[symbol] = tick_ts
+
+        # Notify hot-scan queue so the scanner can re-evaluate this symbol immediately.
+        queue = getattr(self, "_price_update_queue", None)
+        if queue is not None:
+            try:
+                queue.put_nowait((self.exchange_id, symbol))
+            except asyncio.QueueFull:
+                pass  # overflow: symbol will be evaluated in the next periodic scan
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{self.exchange_id}] Cached ticker for {symbol} from {source}: "
+                f"last={ticker.get('last')} ask={ticker.get('ask')} bid={ticker.get('bid')} ts={tick_ts:.0f}",
+                extra={
+                    "exchange": self.exchange_id,
+                    "symbol": symbol,
+                    "action": f"ticker_cached_{source}",
+                },
+            )
+
     def _update_funding_cache(self, symbol: str, data: dict) -> None:
         """Update in-memory cache with latest funding rate."""
         raw_rate = data.get("fundingRate")
@@ -93,6 +139,7 @@ class _FundingCacheMixin:
 
         self._funding_rate_cache[symbol] = {
             "rate": rate,
+            "cached_at_ms": now_ms,
             "timestamp": data.get("timestamp"),
             "datetime": data.get("datetime"),
             "next_timestamp": next_ts,
@@ -126,6 +173,52 @@ class _FundingCacheMixin:
         if mp is not None:
             return float(mp)
         return self._price_cache.get(symbol)
+
+    def get_mark_price_age_ms(self, symbol: str) -> Optional[float]:
+        """Return age of the best mark/last price in milliseconds."""
+        now_ms = _time.time() * 1000
+        cached = self._funding_rate_cache.get(symbol) or {}
+        if cached.get("markPrice") is not None or cached.get("indexPrice") is not None:
+            cached_at_ms = cached.get("cached_at_ms")
+            if cached_at_ms is None:
+                return None
+            return now_ms - float(cached_at_ms)
+        ts = self._price_timestamp_cache.get(symbol)
+        if ts is None:
+            return None
+        return now_ms - ts
+
+    def get_best_ask(self, symbol: str) -> Optional[float]:
+        """Return best cached ask price for symbol (no API call).
+
+        Used by the scanner to compute a realistic long-entry price spread.
+        Falls back to mark price if ask is not yet cached.
+        """
+        return self._ask_cache.get(symbol) or self.get_mark_price(symbol)
+
+    def get_best_ask_age_ms(self, symbol: str) -> Optional[float]:
+        """Return age of the best cached ask in milliseconds."""
+        now_ms = _time.time() * 1000
+        ts = self._ask_timestamp_cache.get(symbol)
+        if ts is not None:
+            return now_ms - ts
+        return self.get_mark_price_age_ms(symbol)
+
+    def get_best_bid(self, symbol: str) -> Optional[float]:
+        """Return best cached bid price for symbol (no API call).
+
+        Used by the scanner to compute a realistic short-entry price spread.
+        Falls back to mark price if bid is not yet cached.
+        """
+        return self._bid_cache.get(symbol) or self.get_mark_price(symbol)
+
+    def get_best_bid_age_ms(self, symbol: str) -> Optional[float]:
+        """Return age of the best cached bid in milliseconds."""
+        now_ms = _time.time() * 1000
+        ts = self._bid_timestamp_cache.get(symbol)
+        if ts is not None:
+            return now_ms - ts
+        return self.get_mark_price_age_ms(symbol)
 
     def get_funding_rate_cached(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get latest cached funding rate (low-latency, no network call).

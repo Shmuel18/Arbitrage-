@@ -105,7 +105,7 @@ class _CloseFinalizeMixin:
             _basis_pnl_str = (
                 f"entry={float(_entry_basis):+.4f}% → exit={float(_exit_basis):+.4f}% "
                 f"(Δ{float(_basis_delta):+.4f}% — "
-                f"{'favorable ✔' if _basis_delta <= 0 else 'adverse ✘'})"
+                f"{'favorable ✔' if _basis_delta >= 0 else 'adverse ✘'})"
             )
 
         logger.info(
@@ -228,7 +228,17 @@ class _CloseFinalizeMixin:
             {json.dumps(trade_data): datetime.now(timezone.utc).timestamp()},
         )
         if self._publisher:
-            self._publisher.record_trade(is_win=total_pnl >= 0, pnl=float(total_pnl))
+            self._publisher.record_trade(is_win=total_pnl >= 0, pnl=total_pnl)
+            await self._publisher.publish_alert(
+                (
+                    f"🔴 Trade closed: {trade.trade_id} {trade.symbol} "
+                    f"pnl=${float(total_pnl):+.4f} "
+                    f"hold={float(hold_minutes):.0f}m"
+                ),
+                severity="info",
+                alert_type="trade_close",
+                symbol=trade.symbol,
+            )
 
         if self._cfg.logging.log_balances_after_trade:
             await self._log_exchange_balances()
@@ -394,7 +404,7 @@ class _CloseFinalizeMixin:
                 {json.dumps(trade_data): datetime.now(timezone.utc).timestamp()},
             )
             if self._publisher:
-                self._publisher.record_trade(is_win=total_pnl >= 0, pnl=float(total_pnl))
+                self._publisher.record_trade(is_win=total_pnl >= 0, pnl=total_pnl)
             logger.info(
                 f"📋 Manual close recorded: {trade.trade_id} ({trade.symbol}) "
                 f"PnL=${float(total_pnl):.4f} (held {float(hold_minutes):.0f}min)",

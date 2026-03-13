@@ -29,6 +29,7 @@ class TradingParams(BaseModel):
     min_funding_spread: Decimal = Decimal("0.3")  # min spread of next imminent payment (%) — no 8h normalization
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
+    max_market_data_age_ms: int = 2000  # Require bid/ask data newer than this before qualifying an entry
     cooldown_after_orphan_hours: int = 2
     cooldown_after_close_seconds: int = 120  # Block re-entry into same symbol after any close
     max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
@@ -49,13 +50,15 @@ class TradingParams(BaseModel):
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
-    liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
+    liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
 
 
 class ExecutionConfig(BaseModel):
     concurrent_opportunities: int = 3
     order_timeout_ms: int = 10000
     scan_parallelism: int = 10
+    entry_refetch_attempts: int = 1
+    entry_refetch_interval_ms: int = 250
 
 
 class RiskGuardConfig(BaseModel):

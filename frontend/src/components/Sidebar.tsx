@@ -1,4 +1,5 @@
 import React from 'react';
+import { m } from 'framer-motion';
 import { useSettings } from '../context/SettingsContext';
 import { SECTION_IDS, SectionId } from './Dashboard';
 
@@ -69,7 +70,16 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
             key={item.id}
             className={`sidebar-nav-item nx-nav-item${activeSection === item.id ? ' active' : ''}`}
             onClick={() => onNavigate(item.id)}
+            style={{ position: 'relative' }}
           >
+            {activeSection === item.id && (
+              <m.span
+                layoutId="nav-active"
+                className="elite-nav-indicator"
+                transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                aria-hidden="true"
+              />
+            )}
             <span className="nav-icon">{item.icon}</span>
             <span>{item.label}</span>
           </button>

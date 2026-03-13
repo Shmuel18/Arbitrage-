@@ -26,6 +26,14 @@ class _FundingMixin(_FundingCacheMixin):
     # Maximum plausible absolute funding rate per interval — configurable via config.yaml
     _DEFAULT_MAX_SANE_RATE = Decimal("0.10")
 
+    # Some exchanges (e.g. KuCoin) limit watchTickers() to 100 symbols per call.
+    # Batching to this size is safe for all exchanges and avoids API rejections.
+    _WS_TICKER_BATCH_SIZE = 100
+
+    # KuCoin futures enforces a maximum number of WS subscriptions per session.
+    # Keep a safety margin below the hard 400 limit to avoid session churn.
+    _KUCOIN_WS_TICKER_MAX_SUBSCRIPTIONS = 380
+
     async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
         """Start funding rate polling — batch if supported, per-symbol otherwise."""
         eligible = [s for s in symbols if s in self._exchange.symbols]
@@ -56,12 +64,98 @@ class _FundingMixin(_FundingCacheMixin):
                 name="sequential-funding-poll",
             )
 
-        # Always start price poll loop — provides markPrice fallback for exchanges
-        # that don't include markPrice in their funding rate API response (e.g. KuCoin)
-        self._create_supervised_task(
-            lambda syms=eligible: self._price_poll_loop(syms),
-            name="price-poll",
-        )
+        # Prefer WebSocket tickers for near-real-time bid/ask freshness. Fall back
+        # to REST polling on exchanges that do not support batch ticker streams.
+        # Batch into chunks of _WS_TICKER_BATCH_SIZE to respect per-exchange
+        # API limits (e.g. KuCoin allows max 100 symbols per watchTickers call).
+        if self._ws_ticker_supported and hasattr(self._exchange, "watch_tickers"):
+            ws_symbols = eligible
+            poll_fallback_symbols: List[str] = []
+
+            if self.exchange_id == "kucoin" and len(eligible) > self._KUCOIN_WS_TICKER_MAX_SUBSCRIPTIONS:
+                ws_symbols = eligible[: self._KUCOIN_WS_TICKER_MAX_SUBSCRIPTIONS]
+                poll_fallback_symbols = eligible[self._KUCOIN_WS_TICKER_MAX_SUBSCRIPTIONS :]
+                logger.info(
+                    f"[kucoin] Limiting price-ws subscriptions to {len(ws_symbols)} symbols "
+                    f"(overflow {len(poll_fallback_symbols)} via polling)",
+                    extra={"exchange": self.exchange_id, "action": "ws_start"},
+                )
+
+            if ws_symbols:
+                chunks = [
+                    ws_symbols[i : i + self._WS_TICKER_BATCH_SIZE]
+                    for i in range(0, len(ws_symbols), self._WS_TICKER_BATCH_SIZE)
+                ]
+                for idx, chunk in enumerate(chunks):
+                    self._create_supervised_task(
+                        lambda syms=chunk: self._watch_price_tickers_loop(syms),
+                        name=f"price-ws-{idx}",
+                    )
+                logger.info(
+                    f"[{self.exchange_id}] Started {len(chunks)} price-ws task(s) "
+                    f"({len(ws_symbols)} symbols, batch={self._WS_TICKER_BATCH_SIZE})",
+                    extra={"exchange": self.exchange_id, "action": "ws_start"},
+                )
+
+            if poll_fallback_symbols:
+                self._create_supervised_task(
+                    lambda syms=poll_fallback_symbols: self._price_poll_loop(syms),
+                    name="price-poll-overflow",
+                )
+        else:
+            self._create_supervised_task(
+                lambda syms=eligible: self._price_poll_loop(syms),
+                name="price-poll",
+            )
+
+    async def _watch_price_tickers_loop(self, symbols: List[str]) -> None:
+        """Watch top-of-book ticker updates via WebSocket when supported."""
+        resolved = [self._resolve_symbol(s) for s in symbols]
+        consecutive_failures = 0
+        while True:
+            try:
+                tickers = await self._exchange.watch_tickers(resolved)
+                updated = 0
+                for sym_raw, ticker in (tickers or {}).items():
+                    sym = self._normalize_symbol(sym_raw)
+                    if sym not in symbols:
+                        continue
+                    self._update_price_cache_from_ticker(sym, ticker, source="ws")
+                    updated += 1
+                consecutive_failures = 0
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"[{self.exchange_id}] Price WS: updated {updated}/{len(symbols)} symbols",
+                        extra={"exchange": self.exchange_id, "action": "price_ws"},
+                    )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                consecutive_failures += 1
+                msg = str(exc).lower()
+                if "not supported" in msg or "does not support" in msg:
+                    self._ws_ticker_supported = False
+                    if not self._ws_ticker_disabled_logged:
+                        self._ws_ticker_disabled_logged = True
+                        logger.warning(
+                            f"{self.exchange_id} watch_tickers() not supported — falling back to price polling",
+                            extra={"exchange": self.exchange_id, "action": "ws_ticker_disabled"},
+                        )
+                    await self._price_poll_loop(symbols)
+                    return
+
+                if consecutive_failures <= 3:
+                    logger.warning(
+                        f"Price WebSocket error on {self.exchange_id}: {exc}",
+                        extra={"exchange": self.exchange_id, "retry": consecutive_failures},
+                    )
+                elif consecutive_failures % 10 == 0:
+                    logger.error(
+                        f"Price WebSocket has failed {consecutive_failures} times in a row on "
+                        f"{self.exchange_id} — bid/ask freshness may be STALE: {exc}",
+                        extra={"exchange": self.exchange_id, "retry": consecutive_failures},
+                    )
+                await asyncio.sleep(min(2 ** min(consecutive_failures - 1, 4), 15))
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket.
@@ -330,10 +424,8 @@ class _FundingMixin(_FundingCacheMixin):
                     sym = self._normalize_symbol(sym_raw)
                     if sym not in symbols:
                         continue
-                    # Prefer markPrice, fall back to last traded price
-                    price = ticker.get("markPrice") or ticker.get("last")
-                    if price:
-                        self._price_cache[sym] = float(price)
+                    self._update_price_cache_from_ticker(sym, ticker, source="poll")
+                    if ticker.get("markPrice") is not None or ticker.get("last") is not None:
                         updated += 1
                 logger.debug(
                     f"[{self.exchange_id}] Price poll: updated {updated}/{len(symbols)} symbols",

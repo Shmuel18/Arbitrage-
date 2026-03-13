@@ -54,11 +54,14 @@ def _classify_tier(
     """
     if tier_net < min_funding_spread:
         return None
-    if price_spread_pct >= Decimal("0"):
+    # price_spread_pct = (ask_long - bid_short) / bid_short
+    # Negative = ask_long < bid_short = buy cheap, sell expensive = FAVORABLE → TOP
+    # Positive = ask_long > bid_short = buy expensive, sell cheap = ADVERSE
+    if price_spread_pct <= Decimal("0"):
         return EntryTier.TOP.value
-    if abs(price_spread_pct) <= total_cost_pct:
+    if price_spread_pct <= total_cost_pct:
         return EntryTier.MEDIUM.value
-    if tier_net - abs(price_spread_pct) >= weak_min_funding_excess:
+    if tier_net - price_spread_pct >= weak_min_funding_excess:
         return EntryTier.WEAK.value
     return None
 
@@ -176,24 +179,51 @@ class _ScannerEvaluatorMixin:
         # slippage + safety buffers (fixed costs paid at entry/exit regardless)
         buffers_pct = tp.slippage_buffer_pct + tp.safety_buffer_pct
         total_cost_pct = fees_pct + buffers_pct
+        max_market_data_age_ms = int(getattr(tp, "max_market_data_age_ms", 2000))
 
         # ── Live price basis check (info only — NOT added to entry cost) ──
         price_basis_pct = Decimal("0")
         _live_basis_available = False
+        _stale_market_data_gate = False
         try:
-            long_price_raw = adapters[long_eid].get_mark_price(symbol)
-            short_price_raw = adapters[short_eid].get_mark_price(symbol)
+            long_ask_age_fn = getattr(adapters[long_eid], "get_best_ask_age_ms", None)
+            short_bid_age_fn = getattr(adapters[short_eid], "get_best_bid_age_ms", None)
+            long_ask_age_ms = long_ask_age_fn(symbol) if callable(long_ask_age_fn) else None
+            short_bid_age_ms = short_bid_age_fn(symbol) if callable(short_bid_age_fn) else None
+
+            # Long leg: we BUY → realistic entry price is the ask.
+            # Short leg: we SELL → realistic entry price is the bid.
+            # Using ask/bid (cached every 15s) gives the same spread the
+            # exchange fill will produce, eliminating the mark-price illusion.
+            long_price_raw = adapters[long_eid].get_best_ask(symbol)
+            short_price_raw = adapters[short_eid].get_best_bid(symbol)
             long_price = Decimal(str(long_price_raw)) if long_price_raw else Decimal("0")
             short_price = Decimal(str(short_price_raw)) if short_price_raw else Decimal("0")
-            if long_price > 0 and short_price > 0:
+            # Treat missing age telemetry as unknown (not automatically stale).
+            # Mark stale only when a provided age exceeds the configured threshold.
+            _long_stale_by_age = (
+                long_ask_age_ms is not None and long_ask_age_ms > max_market_data_age_ms
+            )
+            _short_stale_by_age = (
+                short_bid_age_ms is not None and short_bid_age_ms > max_market_data_age_ms
+            )
+            _prices_fresh = not (_long_stale_by_age or _short_stale_by_age)
+            if long_price > 0 and short_price > 0 and _prices_fresh:
                 _live_basis_available = True
                 raw_basis = (long_price - short_price) / short_price * Decimal("100")
                 price_basis_pct = raw_basis  # signed — informational only
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        f"[{symbol}] Entry price basis: {long_eid}={long_price} vs "
-                        f"{short_eid}={short_price} → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
+                        f"[{symbol}] Entry price basis: {long_eid}=ask({long_price}) vs "
+                        f"{short_eid}=bid({short_price}) → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
                     )
+            elif long_price > 0 and short_price > 0:
+                _stale_market_data_gate = True
+                logger.debug(
+                    f"[{symbol}] Stale market data — skipping entry qualification: "
+                    f"{long_eid} ask age={long_ask_age_ms}ms, {short_eid} bid age={short_bid_age_ms}ms, "
+                    f"threshold={max_market_data_age_ms}ms"
+                )
         except Exception as _basis_err:
             logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
 
@@ -209,17 +239,28 @@ class _ScannerEvaluatorMixin:
             )
 
         # ── Tier classification (funding arb + price arb) ─────────
-        if _live_basis_available and long_price > 0:
-            price_spread_pct = (short_price - long_price) / long_price * Decimal("100")
+        # Use consistent basis formula: (long - short) / short * 100
+        # This matches entry_basis_pct calculation in _entry_orders_mixin.py
+        if _live_basis_available and short_price > 0:
+            price_spread_pct = (long_price - short_price) / short_price * Decimal("100")
         else:
             price_spread_pct = Decimal("0")
 
         # Net funding after costs (used for tier classification)
         _tier_net = immediate_spread - total_cost_pct
-        entry_tier = _classify_tier(
-            _tier_net, price_spread_pct, total_cost_pct,
-            tp.min_funding_spread, tp.weak_min_funding_excess,
-        )
+        if _stale_market_data_gate:
+            entry_tier = "stale_price"
+        else:
+            entry_tier = _classify_tier(
+                _tier_net, price_spread_pct, total_cost_pct,
+                tp.min_funding_spread, tp.weak_min_funding_excess,
+            )
+
+        # Hard safety policy: never ENTER when live entry basis is adverse.
+        # Positive price_spread means ask_long > bid_short (buy expensive, sell cheap).
+        _adverse_price_gate = _live_basis_available and price_spread_pct > Decimal("0")
+        if _adverse_price_gate:
+            entry_tier = "adverse"
 
         if entry_tier and logger.isEnabledFor(logging.DEBUG):
             tier_emoji = {"top": "🏆", "medium": "📊", "weak": "⚡"}.get(entry_tier, "")
@@ -245,6 +286,8 @@ class _ScannerEvaluatorMixin:
 
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
+        if _stale_market_data_gate:
+            qualified = False
 
         # ── Entry window: ANY income side with imminent funding ────
         current_entry_window_minutes = tp.narrow_entry_window_minutes
@@ -359,25 +402,42 @@ class _ScannerEvaluatorMixin:
                     net_pct, price_spread_pct, total_cost_pct,
                     tp.min_funding_spread, tp.weak_min_funding_excess,
                 )
+                # Adverse basis gate: if tier is still None, price spread
+                # overwhelms the cherry-pick funding edge → reject.
+                if entry_tier is None and _live_basis_available and price_spread_pct > 0:
+                    qualified = False
+                    logger.info(
+                        f"\u26a0\ufe0f [{symbol}] CHERRY_PICK rejected: adverse price basis "
+                        f"{float(price_spread_pct):+.4f}% overwhelms net edge {float(net_pct):.4f}%"
+                    )
             min_to_funding = int((closest_ms - now_ms) / 60_000) if closest_ms else None
             funding_tag = f"{min_to_funding}min" if min_to_funding is not None else "unknown"
             tier_tag = f" [{entry_tier.upper()}]" if entry_tier else ""
             price_tag = f" price_spread={float(price_spread_pct):+.4f}%" if _live_basis_available else ""
             _is_adverse = entry_tier == "adverse"
             _log_prefix = "⚠️ [NO ENTRY — adverse price spread]" if _is_adverse else "🎯 OPPORTUNITY FOUND"
-            logger.info(
-                f"{_log_prefix} [{symbol}] ({label} {emoji}){tier_tag}: "
-                f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
-                f"NET={net_pct:.4f}%{price_tag} | NEXT_FUNDING={funding_tag}",
-                extra={
-                    "action": "opportunity_found" if not _is_adverse else "opportunity_adverse",
-                    "symbol": symbol,
-                    "mode": mode,
-                    "long_rate": str(long_rate),
-                    "short_rate": str(short_rate),
-                    "min_to_funding": min_to_funding,
-                },
-            )
+            if self._should_emit_opportunity_log(
+                symbol=symbol,
+                long_exchange=long_eid,
+                short_exchange=short_eid,
+                entry_tier=entry_tier,
+                net_pct=net_pct,
+                price_spread_pct=price_spread_pct,
+                is_adverse=_is_adverse,
+            ):
+                logger.info(
+                    f"{_log_prefix} [{symbol}] ({label} {emoji}){tier_tag}: "
+                    f"L({long_eid}) @ {long_rate:.8f} | S({short_eid}) @ {short_rate:.8f} | "
+                    f"NET={net_pct:.4f}%{price_tag} | NEXT_FUNDING={funding_tag}",
+                    extra={
+                        "action": "opportunity_found" if not _is_adverse else "opportunity_adverse",
+                        "symbol": symbol,
+                        "mode": mode,
+                        "long_rate": str(long_rate),
+                        "short_rate": str(short_rate),
+                        "min_to_funding": min_to_funding,
+                    },
+                )
         else:
             # ── HOLD didn't qualify — try CHERRY_PICK ────────────
             qualified = False  # default off, cherry_pick turns it back on
@@ -437,9 +497,18 @@ class _ScannerEvaluatorMixin:
                                     cp_net, price_spread_pct, total_cost_pct,
                                     tp.min_funding_spread, tp.weak_min_funding_excess,
                                 )
+                                # Adverse basis gate: reject if tier is None
+                                if entry_tier is None and _live_basis_available and price_spread_pct > 0:
+                                    cherry_ok = False
+                                    qualified = False
+                                    logger.info(
+                                        f"\u26a0\ufe0f [{symbol}] CHERRY_PICK rejected (alt path): "
+                                        f"adverse price basis {float(price_spread_pct):+.4f}% "
+                                        f"overwhelms net edge {float(cp_net):.4f}%"
+                                    )
 
         # ── Force disqualify if price spread is too adverse for any tier ──
-        if _tier_too_adverse:
+        if _tier_too_adverse or _adverse_price_gate:
             qualified = False
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
@@ -552,8 +621,13 @@ class _ScannerEvaluatorMixin:
         price_spread_pct: Decimal = Decimal("0"),
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
-        long_bal = await adapters[long_eid].get_balance()
-        short_bal = await adapters[short_eid].get_balance()
+        # Parallelize balance fetches (both exchanges) with ticker fetch (long side only)
+        # so all 3 REST calls happen concurrently instead of sequentially.
+        long_bal, short_bal, long_ticker = await asyncio.gather(
+            adapters[long_eid].get_balance(),
+            adapters[short_eid].get_balance(),
+            adapters[long_eid].get_ticker(symbol),
+        )
         free_usd = min(long_bal["free"], short_bal["free"])
 
         position_pct = self._cfg.risk_limits.position_size_pct
@@ -564,7 +638,6 @@ class _ScannerEvaluatorMixin:
         max_pos = self._cfg.risk_limits.max_position_size_usd
         notional = min(max_pos, notional)
 
-        long_ticker = await adapters[long_eid].get_ticker(symbol)
         price = Decimal(str(long_ticker.get("last", 0)))
         if price <= 0:
             return None

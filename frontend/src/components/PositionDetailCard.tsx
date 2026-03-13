@@ -151,38 +151,38 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
   const timelineEvents: TimelineEvent[] = [
     {
       id: 'entry',
-      label: 'Position Opened',
-      detail: `Entry spread ${formatPct(position.entry_edge_pct, 3)} | Basis ${formatPct(position.entry_basis_pct, 3)}`,
+      label: t.tlPositionOpened,
+      detail: `${t.tlEntrySpreadLabel} ${formatPct(position.entry_edge_pct, 3)} | ${t.tlBasisLabel} ${formatPct(position.entry_basis_pct, 3)}`,
       timeLabel: formatDate(position.opened_at),
       confidence: confidenceFrom(position.opened_at ? 90 : 68),
       status: 'done',
     },
     {
       id: 'mark',
-      label: 'Mark-to-Market',
-      detail: `Current spread ${formatPct(position.current_spread_pct, 3)} | Price PnL ${formatPct(position.price_pnl_pct, 3)}`,
+      label: t.tlMarkToMarket,
+      detail: `${t.tlCurrentSpreadLabel} ${formatPct(position.current_spread_pct, 3)} | ${t.tlPricePnlLabel} ${formatPct(position.price_pnl_pct, 3)}`,
       confidence: confidenceFrom(62 + Math.min(24, Math.abs(Number(position.current_spread_pct ?? 0)) * 1200)),
       status: 'live',
     },
     {
       id: 'funding',
-      label: 'Funding Collection',
+      label: t.tlFundingCollection,
       detail:
         fundingCollections > 0
-          ? `${fundingCollections} collection(s), net ${formatUsd(position.funding_collected_usd)}`
-          : `Next window ${formatCountdown(position.next_funding_ms)}`,
+          ? `${fundingCollections} ${t.tlCollectionsNet} ${formatUsd(position.funding_collected_usd)}`
+          : `${t.tlNextWindow} ${formatCountdown(position.next_funding_ms)}`,
       confidence: confidenceFrom(fundingCollections > 0 ? 86 : 72),
       status: fundingCollections > 0 ? 'done' : 'live',
     },
     {
       id: 'target',
-      label: 'Profit Target',
+      label: t.tlProfitTarget,
       detail:
         targetMove != null
           ? Number(targetMove) <= 0
-            ? 'Target reached'
-            : `${Number(targetMove).toFixed(3)}% remaining`
-          : 'Target tracking unavailable',
+            ? t.tlTargetReached
+            : `${Number(targetMove).toFixed(3)}% ${t.tlRemaining}`
+          : t.tlTargetUnavailable,
       confidence:
         targetDistance == null
           ? 52
@@ -192,8 +192,8 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
     },
     {
       id: 'state',
-      label: 'Execution State',
-      detail: position.state ? position.state.toUpperCase() : 'ACTIVE',
+      label: t.tlExecutionState,
+      detail: position.state ? position.state.toUpperCase() : t.tlActive,
       confidence: confidenceFrom(position.state ? 80 : 60),
       status: 'live',
     },
@@ -290,7 +290,7 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
         </div>
       </div>
 
-      <ExecutionTimeline title="Execution Confidence Timeline" events={timelineEvents} />
+      <ExecutionTimeline title={t.executionTimeline} events={timelineEvents} />
     </div>
   );
 };

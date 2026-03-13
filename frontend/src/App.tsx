@@ -4,8 +4,14 @@ import Dashboard from './components/Dashboard';
 import { useMarketData } from './hooks/useMarketData';
 import './App.css';
 
+import { SettingsContext } from './context/SettingsContext';
+import { translations, Lang } from './i18n/translations';
+
 /* ── Error Fallback (functional — enables motion + CSS vars) ─────── */
 function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => void }) {
+  const ctx = React.useContext(SettingsContext);
+  const lang: Lang = ctx?.lang ?? 'en';
+  const t = translations[lang];
   return (
     <m.div
       initial={{ opacity: 0, y: 24 }}
@@ -56,7 +62,7 @@ function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => voi
           color: 'var(--text)',
           marginBottom: 'var(--space-3)',
         }}>
-          Something went wrong
+          {t.errorBoundaryTitle}
         </h2>
 
         <p style={{
@@ -64,7 +70,7 @@ function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => voi
           color: 'var(--muted)',
           marginBottom: 'var(--space-4)',
         }}>
-          An unexpected error occurred in the UI. The bot process is unaffected.
+          {t.errorBoundaryMessage}
         </p>
 
         {error?.message && (
@@ -99,7 +105,7 @@ function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => voi
             letterSpacing: '0.02em',
           }}
         >
-          Reload Page
+          {t.reloadPage}
         </button>
       </div>
     </m.div>
@@ -135,6 +141,8 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 
 function App() {
   const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt, wsAttempts } = useMarketData();
+  const settingsCtx = React.useContext(SettingsContext);
+  const tApp = settingsCtx?.t ?? translations.en;
 
   return (
     <LazyMotion features={domAnimation}>
@@ -142,6 +150,24 @@ function App() {
         <div className="App min-h-screen bg-slate-900">
           {/* RateBridge status beam — stretches full width at very top */}
           <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
+          {/* API connectivity error — shown when all REST poll requests fail */}
+          {data.fetchError && (
+            <div
+              role="alert"
+              aria-live="polite"
+              style={{
+                background: 'rgba(239,68,68,0.1)',
+                borderBottom: '1px solid rgba(239,68,68,0.3)',
+                color: '#f87171',
+                padding: '7px 16px',
+                fontSize: '13px',
+                textAlign: 'center',
+                letterSpacing: '0.01em',
+              }}
+            >
+              ⚠ {data.fetchError} — {tApp.displayingLastKnownData}
+            </div>
+          )}
           <Dashboard
             data={data}
             pnlHours={pnlHours}

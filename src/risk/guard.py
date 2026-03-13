@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.core.contracts import OrderRequest, OrderSide
 from src.core.logging import get_logger
@@ -102,16 +102,21 @@ class RiskGuard:
         positions_by_symbol: Dict[str, list] = {}  # For detailed logging
         failed_exchanges: list[str] = []
 
-        for eid, adapter in self._exchanges.all().items():
-            try:
-                positions = await adapter.get_positions()
-            except Exception as e:
-                logger.warning(f"Cannot fetch positions from {eid}: {e}",
+        # ── Fetch all exchanges in parallel to reduce latency ────
+        adapters = list(self._exchanges.all().items())
+        position_results = await asyncio.gather(
+            *[adapter.get_positions() for _, adapter in adapters],
+            return_exceptions=True,
+        )
+
+        for (eid, _), result in zip(adapters, position_results):
+            if isinstance(result, Exception):
+                logger.warning(f"Cannot fetch positions from {eid}: {result}",
                                extra={"exchange": eid})
                 failed_exchanges.append(eid)
                 continue
 
-            for pos in positions:
+            for pos in result:
                 signed = pos.quantity if pos.side == OrderSide.BUY else -pos.quantity
                 delta_by_symbol[pos.symbol] = delta_by_symbol.get(pos.symbol, Decimal(0)) + signed
                 total_abs_by_symbol[pos.symbol] = total_abs_by_symbol.get(pos.symbol, Decimal(0)) + abs(pos.quantity)
@@ -259,7 +264,7 @@ class RiskGuard:
             await asyncio.sleep(interval)
 
     async def _snapshot_positions(self) -> None:
-        for eid, adapter in self._exchanges.all().items():
+        async def _snapshot_one(eid: str, adapter: Any) -> None:
             try:
                 positions = await adapter.get_positions()
                 data = [
@@ -276,3 +281,7 @@ class RiskGuard:
             except Exception as e:
                 logger.warning(f"Snapshot failed for {eid}: {e}",
                                extra={"exchange": eid})
+
+        await asyncio.gather(
+            *[_snapshot_one(eid, adapter) for eid, adapter in self._exchanges.all().items()],
+        )

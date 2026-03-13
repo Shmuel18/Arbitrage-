@@ -85,6 +85,10 @@ def _make_adapter(
     a.get_cached_instrument_spec = MagicMock(return_value=spec)
 
     a.get_mark_price = MagicMock(return_value=price)
+    a.get_best_ask = MagicMock(return_value=price)
+    a.get_best_bid = MagicMock(return_value=price)
+    a.get_best_ask_age_ms = MagicMock(return_value=0.0)
+    a.get_best_bid_age_ms = MagicMock(return_value=0.0)
     a.get_ticker.return_value = {"last": price}
     a.get_balance.return_value = {
         "total": Decimal("10000"),
@@ -129,10 +133,10 @@ class TestClassifyTier:
         ) is None
 
     def test_top_tier_when_price_spread_positive(self) -> None:
-        """Favorable price spread → TOP."""
+        """Favorable price spread (ask_long < bid_short = negative) → TOP."""
         result = _classify_tier(
             tier_net=Decimal("0.10"),
-            price_spread_pct=Decimal("0.01"),  # positive
+            price_spread_pct=Decimal("-0.01"),  # negative = ask_long < bid_short = FAVORABLE
             total_cost_pct=Decimal("0.02"),
             min_funding_spread=Decimal("0.05"),
             weak_min_funding_excess=Decimal("0.5"),
@@ -151,32 +155,32 @@ class TestClassifyTier:
         assert result == EntryTier.TOP.value
 
     def test_medium_tier_when_adverse_within_costs(self) -> None:
-        """Adverse spread <= total_cost → MEDIUM."""
+        """Adverse spread (positive) <= total_cost → MEDIUM."""
         result = _classify_tier(
             tier_net=Decimal("0.10"),
-            price_spread_pct=Decimal("-0.01"),  # negative (adverse)
-            total_cost_pct=Decimal("0.02"),       # abs(spread) <= cost
+            price_spread_pct=Decimal("0.01"),   # positive = ask_long > bid_short = ADVERSE
+            total_cost_pct=Decimal("0.02"),     # spread <= cost → MEDIUM
             min_funding_spread=Decimal("0.05"),
             weak_min_funding_excess=Decimal("0.5"),
         )
         assert result == EntryTier.MEDIUM.value
 
     def test_weak_tier_when_excess_sufficient(self) -> None:
-        """Adverse > cost but funding excess >= weak_min_funding_excess → WEAK."""
+        """Adverse spread (positive) > cost but funding covers it → WEAK."""
         result = _classify_tier(
             tier_net=Decimal("1.0"),
-            price_spread_pct=Decimal("-0.10"),  # adverse
-            total_cost_pct=Decimal("0.05"),      # abs > cost
+            price_spread_pct=Decimal("0.10"),   # positive = adverse
+            total_cost_pct=Decimal("0.05"),     # spread > cost
             min_funding_spread=Decimal("0.05"),
             weak_min_funding_excess=Decimal("0.5"),  # 1.0 - 0.10 = 0.90 >= 0.5
         )
         assert result == EntryTier.WEAK.value
 
     def test_returns_none_when_adverse_too_large(self) -> None:
-        """Adverse spread eats all funding excess → None."""
+        """Adverse spread (positive) eats all funding excess → None."""
         result = _classify_tier(
             tier_net=Decimal("0.10"),
-            price_spread_pct=Decimal("-0.10"),
+            price_spread_pct=Decimal("0.10"),   # positive = adverse
             total_cost_pct=Decimal("0.02"),
             min_funding_spread=Decimal("0.05"),
             weak_min_funding_excess=Decimal("0.5"),  # 0.10 - 0.10 = 0 < 0.5
@@ -515,6 +519,39 @@ class TestEvaluateDirection:
         if opp is not None and opp.entry_tier == "adverse":
             assert opp.qualified is False
 
+    @pytest.mark.asyncio
+    async def test_stale_bid_ask_data_disqualifies_entry(self, config) -> None:
+        """Price snapshots older than the freshness threshold must not qualify."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.max_market_data_age_ms = 500
+
+        a = _make_adapter("ex_a", Decimal("-0.005"), 10, 8, price=50000.0)
+        b = _make_adapter("ex_b", Decimal("0.005"), 10, 8, price=50000.0)
+        a.get_best_ask_age_ms.return_value = 900.0
+        b.get_best_bid_age_ms.return_value = 900.0
+        adapters = {"ex_a": a, "ex_b": b}
+        funding = {
+            "ex_a": self._funding_dict(Decimal("-0.005"), 10, 8),
+            "ex_b": self._funding_dict(Decimal("0.005"), 10, 8),
+        }
+        scanner = _scanner_with(config, adapters)
+
+        opp = await scanner._evaluate_direction(
+            symbol="ETH/USDT",
+            long_eid="ex_a",
+            short_eid="ex_b",
+            long_rate=Decimal("-0.005"),
+            short_rate=Decimal("0.005"),
+            long_interval=8,
+            short_interval=8,
+            funding=funding,
+            adapters=adapters,
+        )
+
+        assert opp is not None
+        assert opp.qualified is False
+        assert opp.entry_tier == "stale_price"
+
     # ── Missing instrument spec → None ───────────────────────────
 
     @pytest.mark.asyncio
@@ -699,10 +736,16 @@ class TestLifecycle:
         a = _make_adapter("ex_a", Decimal("0.001"))
         mock_task = MagicMock()
         a._ws_tasks = [mock_task]
+        # Wire cancel_ws_tasks to actually iterate the tasks list so the
+        # mock_task.cancel call can be asserted.
+        a.cancel_ws_tasks = MagicMock(
+            side_effect=lambda: [t.cancel() for t in a._ws_tasks]
+        )
         b = _make_adapter("ex_b", Decimal("0.005"))
         scanner = _scanner_with(config, {"ex_a": a, "ex_b": b})
         scanner._running = True
         scanner.stop()
+        a.cancel_ws_tasks.assert_called_once()
         mock_task.cancel.assert_called_once()
 
 
@@ -859,3 +902,189 @@ class TestHoldMode:
         if opp is not None and opp.qualified:
             # Gap is 2 min (< 30 min) → should be NUTCRACKER
             assert opp.mode == TradeMode.NUTCRACKER
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Hot-scan loop — event-driven re-evaluation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+class TestHotScanLoop:
+    """Tests for Scanner._hot_scan_loop(): event-driven re-evaluation path."""
+
+    def _make_redis(self) -> AsyncMock:
+        r = AsyncMock()
+        r.get_cooled_down_symbols.return_value = set()
+        r.is_cooled_down.return_value = False
+        return r
+
+    @pytest.mark.asyncio
+    async def test_hot_scan_calls_callback_on_qualified_opportunity(self, config) -> None:
+        """When a qualified opportunity is found for a hot symbol, callback fires."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+
+        a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
+        b = _make_adapter("ex_b", Decimal("0.005"), next_minutes=10, interval=8)
+        adapters = {"ex_a": a, "ex_b": b}
+        redis = self._make_redis()
+        scanner = _scanner_with(config, adapters, redis)
+
+        # Pre-populate common_symbols so hot-scan gate passes
+        scanner._common_symbols_cache = {"ETH/USDT"}
+        scanner._cache_exchange_ids = ["ex_a", "ex_b"]
+
+        # Push one hot-symbol update
+        await scanner._hot_queue.put(("ex_a", "ETH/USDT"))
+        # Signal stop after processing
+        scanner._running = True
+
+        received: list = []
+
+        async def _cb(opp):
+            received.append(opp)
+            scanner._running = False  # stop after first callback
+
+        # Run the loop with a short timeout
+        try:
+            await asyncio.wait_for(scanner._hot_scan_loop(_cb), timeout=2.0)
+        except asyncio.TimeoutError:
+            pass
+
+        assert len(received) >= 1
+        assert received[0].symbol == "ETH/USDT"
+        assert received[0].qualified
+
+    @pytest.mark.asyncio
+    async def test_hot_scan_ignores_symbol_not_in_common_symbols(self, config) -> None:
+        """Symbol not in common_symbols_cache must be silently dropped."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+
+        a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
+        b = _make_adapter("ex_b", Decimal("0.005"), next_minutes=10, interval=8)
+        adapters = {"ex_a": a, "ex_b": b}
+        redis = self._make_redis()
+        scanner = _scanner_with(config, adapters, redis)
+
+        # Common symbols does NOT include the pushed symbol
+        scanner._common_symbols_cache = {"BTC/USDT"}
+        scanner._running = True
+
+        await scanner._hot_queue.put(("ex_a", "UNKNOWN/USDT"))
+
+        received: list = []
+
+        async def _cb(opp):
+            received.append(opp)
+
+        # Run briefly — should not call callback
+        try:
+            await asyncio.wait_for(scanner._hot_scan_loop(_cb), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+
+        scanner._running = False
+        assert received == []
+
+    def test_register_price_update_queue_on_adapter(self) -> None:
+        """register_price_update_queue() wires the queue into the adapter."""
+        a = _make_adapter("ex_a", Decimal("0.001"))
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        a.register_price_update_queue = MagicMock()
+        a.register_price_update_queue(q)
+        a.register_price_update_queue.assert_called_once_with(q)
+
+    @pytest.mark.asyncio
+    async def test_hot_scan_skips_symbol_filtered_by_candidates(self, config) -> None:
+        """When _hot_candidates is populated and does NOT contain the pushed symbol,
+        the hot-scan loop must NOT call the callback."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+
+        a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
+        b = _make_adapter("ex_b", Decimal("0.005"), next_minutes=10, interval=8)
+        adapters = {"ex_a": a, "ex_b": b}
+        redis = self._make_redis()
+        scanner = _scanner_with(config, adapters, redis)
+
+        scanner._common_symbols_cache = {"ETH/USDT", "BTC/USDT"}
+        # Candidates only contains BTC — ETH should be ignored
+        scanner._hot_candidates = {"BTC/USDT"}
+        scanner._running = True
+
+        await scanner._hot_queue.put(("ex_a", "ETH/USDT"))
+
+        received: list = []
+
+        async def _cb(opp):
+            received.append(opp)
+
+        try:
+            await asyncio.wait_for(scanner._hot_scan_loop(_cb), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
+
+        scanner._running = False
+        assert received == []
+
+    @pytest.mark.asyncio
+    async def test_scan_all_updates_hot_candidates(self, config, mock_exchange_mgr, mock_redis) -> None:
+        """After scan_all() with qualified results, _hot_candidates is populated."""
+        import time as _time
+        config.trading_params.min_funding_spread = Decimal("0.01")
+
+        adapter_a = mock_exchange_mgr.get("exchange_a")
+        adapter_b = mock_exchange_mgr.get("exchange_b")
+
+        def _fut(hours: float) -> float:
+            return _time.time() * 1000 + hours * 3_600_000
+
+        funding_a = {"rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
+                     "next_timestamp": _fut(1), "interval_hours": 1}
+        funding_b = {"rate": Decimal("0.005"), "timestamp": None, "datetime": None,
+                     "next_timestamp": _fut(1), "interval_hours": 1}
+        adapter_a._funding_rate_cache["ETH/USDT"] = funding_a
+        adapter_b._funding_rate_cache["ETH/USDT"] = funding_b
+        adapter_a.get_funding_rate.return_value = funding_a
+        adapter_b.get_funding_rate.return_value = funding_b
+        adapter_a.get_ticker.return_value = {"last": 3000.0}
+        adapter_b.get_ticker.return_value = {"last": 3000.0}
+
+        scanner = Scanner(config, mock_exchange_mgr, mock_redis)
+        await scanner.scan_all()
+
+        # Candidates should be non-empty after a scan with meaningful spread
+        assert isinstance(scanner._hot_candidates, set)
+
+    @pytest.mark.asyncio
+    async def test_hot_scan_callback_debounced_within_cooldown(self, config) -> None:
+        """Callback must NOT fire a second time for the same symbol within the cooldown window."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+
+        a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
+        b = _make_adapter("ex_b", Decimal("0.005"), next_minutes=10, interval=8)
+        adapters = {"ex_a": a, "ex_b": b}
+        redis = self._make_redis()
+        scanner = _scanner_with(config, adapters, redis)
+
+        scanner._common_symbols_cache = {"ETH/USDT"}
+        scanner._cache_exchange_ids = ["ex_a", "ex_b"]
+        scanner._running = True
+
+        # Simulate the symbol was already fired 2 seconds ago (within 10s cooldown)
+        scanner._hot_cb_last_fire["ETH/USDT"] = asyncio.get_event_loop().time() - 2
+
+        await scanner._hot_queue.put(("ex_a", "ETH/USDT"))
+
+        received: list = []
+
+        async def _cb(opp):
+            received.append(opp)
+            scanner._running = False
+
+        try:
+            await asyncio.wait_for(scanner._hot_scan_loop(_cb), timeout=1.5)
+        except asyncio.TimeoutError:
+            pass
+
+        scanner._running = False
+        # Debounced: second fire within cooldown window should be suppressed
+        assert received == []

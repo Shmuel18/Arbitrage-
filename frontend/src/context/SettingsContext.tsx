@@ -12,7 +12,7 @@ interface SettingsContextType {
   isRtl: boolean;
 }
 
-const SettingsContext = createContext<SettingsContextType>({
+export const SettingsContext = createContext<SettingsContextType>({
   lang: 'en',
   setLang: () => {},
   theme: 'dark',

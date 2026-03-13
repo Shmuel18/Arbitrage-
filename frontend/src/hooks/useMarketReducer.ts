@@ -5,7 +5,7 @@
  * isolated from I/O concerns (WebSocket, REST polling).
  */
 import { useReducer, useCallback } from 'react';
-import { BotStatus, Trade } from '../types';
+import { Alert, BotStatus, Trade } from '../types';
 
 /* ---------- Shared sub-types ---------- */
 
@@ -89,10 +89,12 @@ export interface FullData {
   pnl: PnlData | null;
   dailyPnl: number;
   logs: LogEntry[];
+  alerts: Alert[];
   positions: PositionRow[];
   trades: Trade[];
   tradesLoaded: boolean;
   lastFetchedAt: number;
+  fetchError: string | null;
 }
 
 /* ---------- WebSocket payload shape ---------- */
@@ -104,6 +106,7 @@ export interface WsFullUpdateData {
   positions?: PositionRow[];
   trades?: Trade[];
   logs?: LogEntry[];
+  alerts?: Alert[];
   summary?: SummaryData;
   pnl?: PnlData;
 }
@@ -140,11 +143,17 @@ interface PnlUpdateAction {
   payload: PnlData;
 }
 
+interface FetchErrorAction {
+  type: 'FETCH_ERROR';
+  payload: string;
+}
+
 export type MarketAction =
   | WsFullUpdateAction
   | WsStatusUpdateAction
   | HttpFetchResultAction
-  | PnlUpdateAction;
+  | PnlUpdateAction
+  | FetchErrorAction;
 
 /* ---------- Comparison helpers ---------- */
 
@@ -196,10 +205,12 @@ export const INITIAL_FULL_DATA: FullData = {
   pnl: null,
   dailyPnl: 0,
   logs: [],
+  alerts: [],
   positions: [],
   trades: [],
   tradesLoaded: false,
   lastFetchedAt: Date.now(),
+  fetchError: null,
 };
 
 /* ---------- Reducer ---------- */
@@ -291,6 +302,17 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         return d.logs;
       })();
 
+      const newAlerts = (() => {
+        if (!Array.isArray(d.alerts) || d.alerts.length === 0) return prev.alerts;
+        if (
+          prev.alerts.length === d.alerts.length &&
+          prev.alerts[0]?.id === d.alerts[0]?.id
+        ) {
+          return prev.alerts;
+        }
+        return d.alerts;
+      })();
+
       // Guard: two sources (WS counter vs HTTP zrange scan) can temporarily
       // disagree on total_trades. Trade count only ever goes up — keep the max.
       const newSummary = (() => {
@@ -303,10 +325,11 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         }
         return d.summary;
       })();
-      const newPnl =
-        d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0
-          ? d.pnl
-          : prev.pnl;
+      // PnL is NOT taken from WebSocket — the WS broadcast always sends 24h
+      // data, which would overwrite the user's selected time range (7d/30d/All)
+      // causing constant flickering.  PnL is only updated via REST polling
+      // (HTTP_FETCH_RESULT) and explicit PNL_UPDATE actions.
+      const newPnl = prev.pnl;
 
       if (
         newStatus === prev.status &&
@@ -315,6 +338,7 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         newSummary === prev.summary &&
         newPnl === prev.pnl &&
         newLogs === prev.logs &&
+        newAlerts === prev.alerts &&
         newPositions === prev.positions &&
         newTrades === prev.trades &&
         wsTradesLoaded === prev.tradesLoaded
@@ -330,6 +354,7 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         summary: newSummary,
         pnl: newPnl,
         logs: newLogs,
+        alerts: newAlerts,
         positions: newPositions,
         trades: newTrades,
         tradesLoaded: wsTradesLoaded,
@@ -400,11 +425,18 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
           if (httpTrades.length === 0) return prev.trades;
           return sameTradeIds(prev.trades, httpTrades) ? prev.trades : httpTrades;
         })(),
+        // Clear any outstanding fetch error — reaching here means the API
+        // responded (at least partially), so the connection is healthy.
+        fetchError: null,
       };
     }
 
     case 'PNL_UPDATE':
       return { ...prev, pnl: action.payload };
+
+    case 'FETCH_ERROR':
+      // Only set the error if it differs from the current one (avoid re-renders).
+      return prev.fetchError === action.payload ? prev : { ...prev, fetchError: action.payload };
 
     default:
       return prev;

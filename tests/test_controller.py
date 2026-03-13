@@ -2,6 +2,7 @@
 
 import json
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
@@ -138,6 +139,65 @@ class TestHandleOpportunity:
         trade = list(controller._active_trades.values())[0]
         assert trade.long_qty == Decimal("0.008")
         assert trade.short_qty == Decimal("0.008")  # delta neutral
+
+    @pytest.mark.asyncio
+    async def test_blocks_entry_when_price_spread_is_adverse(
+        self,
+        controller,
+        sample_opportunity,
+    ):
+        """Adverse scanner spread must be hard-blocked before any order execution."""
+        adverse_opp = replace(sample_opportunity, price_spread_pct=Decimal("0.15"))
+
+        controller._execute_entry_orders = AsyncMock(return_value=None)
+
+        await controller.handle_opportunity(adverse_opp)
+
+        assert len(controller._active_trades) == 0
+        controller._execute_entry_orders.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_post_entry_adverse_basis_and_emergency_closes(
+        self,
+        controller,
+        sample_opportunity,
+        mock_redis,
+    ):
+        """Adverse realized entry basis must trigger immediate rejection and unwind."""
+        long_spec = AsyncMock()
+        long_spec.taker_fee = Decimal("0.0005")
+        short_spec = AsyncMock()
+        short_spec.taker_fee = Decimal("0.0005")
+
+        controller._execute_entry_orders = AsyncMock(
+            return_value={
+                "order_qty": Decimal("0.01"),
+                "long_filled_qty": Decimal("0.01"),
+                "short_filled_qty": Decimal("0.01"),
+                "entry_price_long": Decimal("50000"),
+                "entry_price_short": Decimal("49900"),
+                "entry_fees": Decimal("0.5"),
+                "long_spec": long_spec,
+                "short_spec": short_spec,
+                "entry_basis_pct": Decimal("1.25"),
+            }
+        )
+
+        close_calls = []
+
+        async def _mock_place_with_timeout(adapter, req):
+            close_calls.append(req)
+            return {"id": "close", "filled": float(req.quantity), "average": 50000.0}
+
+        controller._place_with_timeout = _mock_place_with_timeout
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        assert len(close_calls) == 2
+        assert all(req.reduce_only for req in close_calls)
+        assert {req.side for req in close_calls} == {OrderSide.SELL, OrderSide.BUY}
+        mock_redis.set_trade_state.assert_not_called()
 
 
 class TestCloseOrphan:

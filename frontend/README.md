@@ -42,10 +42,28 @@ npm run build
 
 ## Configuration
 
-Edit `src/services/api.ts` to change API endpoint:
+The API client uses a relative base URL (`/api`) so it works on localhost and tunneled hosts.
+If needed, adjust `src/services/api.ts`.
 
 ```typescript
-const API_BASE_URL = "http://localhost:8000/api";
+const API_BASE_URL = "/api";
+```
+
+WebSocket auth (required by backend fail-closed policy):
+
+```bash
+# must match backend ADMIN_TOKEN
+VITE_WS_TOKEN=change-me-strong-token
+
+# optional dedicated read token (fallback: VITE_WS_TOKEN)
+VITE_READ_TOKEN=change-me-read-token
+
+# optional scoped control tokens (fallback: VITE_ADMIN_TOKEN or VITE_WS_TOKEN)
+VITE_ADMIN_TOKEN=change-me-admin-token
+VITE_COMMAND_TOKEN=change-me-command-token
+VITE_CONFIG_TOKEN=change-me-config-token
+VITE_EMERGENCY_TOKEN=change-me-emergency-token
+VITE_TRADE_TOKEN=change-me-trade-token
 ```
 
 ## Components

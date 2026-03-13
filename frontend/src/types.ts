@@ -92,3 +92,13 @@ export interface Summary {
   active_positions: number;
   uptime_hours: number;
 }
+
+export interface Alert {
+  id: string;
+  timestamp: string;
+  severity: 'critical' | 'warning' | 'info';
+  type: string;
+  message: string;
+  symbol?: string | null;
+  exchange?: string | null;
+}

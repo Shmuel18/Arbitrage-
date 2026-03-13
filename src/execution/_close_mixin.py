@@ -293,30 +293,27 @@ class _CloseMixin(_CloseFinalizeMixin):
                         )
                         _short_net = -_short_net
 
-                # If only one side responded but the other didn't, estimate
-                # the missing side independently using rate × notional.
+                # If only one side responded but the other didn't, use the
+                # bot's per-side tracked estimate for the missing side.
+                # The old formula `missing = bot_net - real_side` assumed
+                # bot_net was accurate, but it breaks when the bot missed a
+                # payment at collection time (e.g. rate was null, funding
+                # fired on a different interval than expected).  Per-side
+                # tracking avoids this: each side's estimate is independent.
                 if _long_hist_ok and not _short_hist_ok:
-                    _s_notional = float((trade.entry_price_short or Decimal("0")) * trade.short_qty)
-                    _s_rate = float(trade.short_funding_rate or 0)
-                    # Short receives when rate > 0, pays when rate < 0
-                    _short_net = _s_notional * _s_rate * max(trade.funding_collections, 1)
+                    _short_net = float(trade._funding_tracked_short)
                     logger.warning(
                         f"[{trade.symbol}] Real funding: {trade.long_exchange} responded "
                         f"(${_long_net:+.4f}) but {trade.short_exchange} unavailable — "
-                        f"estimating short from rate ({_s_rate:.6f} × ${_s_notional:.2f} "
-                        f"× {max(trade.funding_collections, 1)} collections = ${_short_net:+.4f})",
+                        f"using bot per-side estimate for short (${_short_net:+.4f})",
                         extra={"trade_id": trade.trade_id},
                     )
                 elif _short_hist_ok and not _long_hist_ok:
-                    _l_notional = float((trade.entry_price_long or Decimal("0")) * trade.long_qty)
-                    _l_rate = float(trade.long_funding_rate or 0)
-                    # Long receives when rate < 0, pays when rate > 0
-                    _long_net = _l_notional * (-_l_rate) * max(trade.funding_collections, 1)
+                    _long_net = float(trade._funding_tracked_long)
                     logger.warning(
                         f"[{trade.symbol}] Real funding: {trade.short_exchange} responded "
                         f"(${_short_net:+.4f}) but {trade.long_exchange} unavailable — "
-                        f"estimating long from rate ({_l_rate:.6f} × ${_l_notional:.2f} "
-                        f"× {max(trade.funding_collections, 1)} collections = ${_long_net:+.4f})",
+                        f"using bot per-side estimate for long (${_long_net:+.4f})",
                         extra={"trade_id": trade.trade_id},
                     )
 
@@ -386,9 +383,14 @@ class _CloseMixin(_CloseFinalizeMixin):
             # Alert operator immediately
             if self._publisher:
                 try:
-                    await self._publisher.push_alert(
-                        f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
-                        f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
+                    await self._publisher.publish_alert(
+                        (
+                            f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
+                            f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
+                        ),
+                        severity="critical",
+                        alert_type="error_state",
+                        symbol=trade.symbol,
                     )
                 except Exception as exc:
                     logger.debug(f"Error-state alert publish failed: {exc}")

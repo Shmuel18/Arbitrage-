@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useCallback } from 'react';
-import { BotStatus } from '../types';
+import { Alert, BotStatus } from '../types';
 import { useSettings } from '../context/SettingsContext';
 import { WsConnectionState } from '../services/websocket';
+import AlertBell from './AlertBell';
 
 interface HeaderProps {
   botStatus: BotStatus;
+  alerts: Alert[];
   lastFetchedAt?: number;
   wsConnection: WsConnectionState;
   lastWsMessageAt?: number | null;
@@ -14,6 +16,7 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = React.memo(({
   botStatus,
+  alerts,
   lastFetchedAt,
   wsConnection,
   lastWsMessageAt,
@@ -111,7 +114,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
 
         <div className={wsPillClass} title="WebSocket transport health">
           <span className="nx-health-pill__dot" />
-          WS {wsConnection}
+          {t.wsPrefix} {wsConnection}
           {wsConnection === 'reconnecting' && wsAttempts > 0 && (
             <span style={{ opacity: 0.7, marginInlineStart: 4 }}>
               ({wsAttempts}/20)
@@ -120,7 +123,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
         </div>
 
         <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
-          WS age: <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+          {t.wsAge} <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
         </div>
 
         {/* Heartbeat: pulses on every WS message via direct DOM class toggle */}
@@ -142,16 +145,18 @@ const Header: React.FC<HeaderProps> = React.memo(({
         </svg>
 
         <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none' }} title="Data may be stale">
-          STALE DATA
+          {t.staleData}
         </div>
       </div>
 
       <div className="top-bar-right">
-        <button onClick={toggleLang} className="nx-topbar-btn" title={t.language}>
+        <AlertBell alerts={alerts} />
+
+        <button onClick={toggleLang} className="nx-topbar-btn" title={t.language} aria-label={t.language}>
           {lang === 'en' ? 'עב' : 'EN'}
         </button>
 
-        <button onClick={toggleTheme} className="nx-topbar-btn" title={t.theme}>
+        <button onClick={toggleTheme} className="nx-topbar-btn" title={t.theme} aria-label={t.theme}>
           {theme === 'dark' ? '☀️' : '🌙'}
         </button>
       </div>

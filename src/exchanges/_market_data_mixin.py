@@ -144,6 +144,87 @@ class _MarketDataMixin:
         async with self._rest_semaphore:
             return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
 
+    async def get_executable_price(
+        self,
+        symbol: str,
+        qty: Decimal,
+        side: str,  # "sell" (closing long) or "buy" (closing short)
+        ob_depth: int = 20,
+    ) -> Decimal:
+        """Return the realistic VWAP fill price for *qty* units by walking the order book.
+
+        Simulates a market order filling through the book level by level.
+        Falls back to the Level-1 ticker bid/ask if the book fetch fails or
+        if the book has insufficient depth to fill the full quantity.
+
+        Args:
+            symbol:   Normalized symbol, e.g. 'LYN/USDT:USDT'.
+            qty:      Quantity to fill (positive Decimal).
+            side:     'sell' consumes bids; 'buy' consumes asks.
+            ob_depth: How many price levels to request from the exchange.
+
+        Returns:
+            VWAP fill price as Decimal.  Returns Level-1 price on any error.
+        """
+        _ZERO = Decimal("0")
+        try:
+            async with self._rest_semaphore:
+                ob = await self._exchange.fetch_order_book(
+                    self._resolve_symbol(symbol), limit=ob_depth
+                )
+            levels: list[list[float]] = ob["bids"] if side == "sell" else ob["asks"]
+        except Exception as e:
+            logger.debug(
+                f"[{self.exchange_id}] {symbol} order book fetch failed: {e} — "
+                "falling back to ticker"
+            )
+            levels = []
+
+        if levels:
+            remaining = qty
+            total_cost = _ZERO
+            for price_f, size_f in levels:
+                if remaining <= _ZERO:
+                    break
+                level_price = Decimal(str(price_f))
+                level_size = Decimal(str(size_f))
+                fill = min(remaining, level_size)
+                total_cost += fill * level_price
+                remaining -= fill
+
+            if remaining <= _ZERO:
+                # Full quantity filled — return VWAP
+                vwap = total_cost / qty
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"[{self.exchange_id}] {symbol} executable_price({side} {qty}): "
+                        f"VWAP={float(vwap):.6f} (L1={float(levels[0][0]):.6f})"
+                    )
+                return vwap
+            else:
+                # Book too shallow — log warning and fall through to ticker
+                filled_pct = float((qty - remaining) / qty * 100)
+                logger.warning(
+                    f"[{self.exchange_id}] {symbol} order book too shallow to fill "
+                    f"{float(qty)} units ({side}): only {filled_pct:.1f}% available — "
+                    "falling back to ticker"
+                )
+
+        # Fallback: Level-1 ticker
+        try:
+            async with self._rest_semaphore:
+                ticker = await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
+            key = "bid" if side == "sell" else "ask"
+            price = ticker.get(key) or ticker.get("last") or ticker.get("close")
+            if price:
+                return Decimal(str(price))
+        except Exception as e:
+            logger.debug(
+                f"[{self.exchange_id}] {symbol} ticker fallback failed: {e}"
+            )
+
+        return _ZERO
+
     async def get_balance(self) -> Dict[str, Any]:
         async with self._rest_semaphore:
             bal = await self._exchange.fetch_balance()

@@ -42,7 +42,7 @@ export function useMarketData(): MarketDataState {
       })
       .catch((err) => {
         if (!axios.isCancel(err)) {
-          // Next poll retry handles transient failures.
+          console.warn('[PnL] Failed to update chart for selected range:', err);
         }
       });
   }, [dispatch]);

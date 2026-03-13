@@ -168,6 +168,12 @@ class TradeRecord:
     # Funding collection tracking
     funding_collections: int = 0           # how many payments collected so far
     funding_collected_usd: Decimal = Decimal("0")  # cumulative USD received
+    # Per-side funding tracked by the bot at collection time.
+    # Used by close reconciliation to avoid the bot_net derivation bug:
+    # if the bot missed one side at collection (e.g. rate was null), bot_net
+    # is wrong, and deriving the missing side from it inflates the total.
+    _funding_tracked_long: Decimal = Decimal("0")
+    _funding_tracked_short: Decimal = Decimal("0")
     # Price basis at entry: (entry_long_price − entry_short_price) / entry_short_price × 100
     # Positive = long was more expensive at entry. Used as the exit break-even threshold:
     # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≥ entry_basis_pct
@@ -183,6 +189,8 @@ class TradeRecord:
         "long_funding_rate", "short_funding_rate", "long_taker_fee",
         "short_taker_fee", "entry_price_long", "entry_price_short",
         "fees_paid_total", "funding_collected_usd", "price_spread_pct",
+        # Per-side funding tracked by bot at collection time (persisted for reconciliation).
+        "_funding_tracked_long", "_funding_tracked_short",
         # Running totals from exchange history — must be persisted so crash-recovery
         # computes the correct DELTA on the next payment (avoids double-counting).
         "_actual_long_funding_sum", "_actual_short_funding_sum",
@@ -223,6 +231,8 @@ class TradeRecord:
         }
         _zero_default_fields = {
             "funding_collected_usd",
+            "_funding_tracked_long",
+            "_funding_tracked_short",
             "_actual_long_funding_sum",
             "_actual_short_funding_sum",
         }

@@ -87,8 +87,8 @@ def get_logger(
                 try:
                     with open(source, 'w'):
                         pass
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(f"Windows log truncation fallback failed: {exc}")
             fh.rotator = _win_rotator
         logger.addHandler(fh)
 

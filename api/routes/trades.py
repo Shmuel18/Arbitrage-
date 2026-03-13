@@ -6,18 +6,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
-redis_client: RedisClient | None = None
+from ..deps import require_redis_client
 
-def set_redis_client(client: RedisClient) -> None:
-    global redis_client
-    redis_client = client
+logger = logging.getLogger("trinity.api.trades")
 
 router = APIRouter(redirect_slashes=False)
 
@@ -25,14 +24,12 @@ router = APIRouter(redirect_slashes=False)
 @router.get("/")
 @router.get("")
 async def get_trades(
+    redis_client: RedisClient = Depends(require_redis_client),
     limit: int = Query(100, ge=1, le=1000),
     hours: Optional[int] = Query(None, ge=1, le=168)
 ):
     """Get trades history"""
     try:
-        if not redis_client:
-            return {"trades": [], "count": 0}
-        
         # Get trades from Redis sorted set
         trades_key = "trinity:trades:history"
         
@@ -96,23 +93,16 @@ async def get_trades(
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in get_trades")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/stats")
-async def get_trade_stats():
+async def get_trade_stats(
+    redis_client: RedisClient = Depends(require_redis_client),
+):
     """Get trading statistics"""
     try:
-        if not redis_client:
-            return {
-                "total_trades": 0,
-                "winning_trades": 0,
-                "losing_trades": 0,
-                "win_rate": 0,
-                "total_pnl": 0,
-                "avg_pnl": 0
-            }
-        
         # Get stats from Redis
         stats_key = "trinity:stats"
         stats_data = await redis_client.get(stats_key)
@@ -129,4 +119,5 @@ async def get_trade_stats():
         
         return json.loads(stats_data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in get_trade_stats")
+        raise HTTPException(status_code=500, detail="Internal server error")

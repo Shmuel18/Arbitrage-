@@ -265,6 +265,9 @@ class StatusPublisher:
         except Exception as exc:
             logger.debug(f"Live spread fetch failed for {trade.symbol}: {exc}")
 
+    # Cache last known PnL per trade_id to survive transient ticker failures
+    _last_pnl_cache: Dict[str, Dict[str, str]] = {}
+
     def _enrich_price_pnl(
         self,
         pos_entry: Dict[str, Any],
@@ -287,16 +290,30 @@ class StatusPublisher:
                     _fund_pnl = float(trade.funding_collected_usd or 0)
                     _fees = float(trade.fees_paid_total or 0)
                     _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
-                    pos_entry["unrealized_pnl_pct"] = str(round(_total_pnl_pct, 4))
-                    pos_entry["price_pnl_pct"] = str(round(_price_pnl / _notional * 100, 4))
-                    pos_entry["funding_pnl_pct"] = str(round(_fund_pnl / _notional * 100, 4))
-                    pos_entry["fees_pct"] = str(round(_fees / _notional * 100, 4))
+                    pnl_data = {
+                        "unrealized_pnl_pct": str(round(_total_pnl_pct, 4)),
+                        "price_pnl_pct": str(round(_price_pnl / _notional * 100, 4)),
+                        "funding_pnl_pct": str(round(_fund_pnl / _notional * 100, 4)),
+                        "fees_pct": str(round(_fees / _notional * 100, 4)),
+                    }
+                    pos_entry.update(pnl_data)
+                    # Cache this good result
+                    self._last_pnl_cache[trade.trade_id] = pnl_data
             pos_entry["live_price_long"] = str(_lp) if _lp > 0 else None
             pos_entry["live_price_short"] = str(_sp) if _sp > 0 else None
             if _lp > 0 and _sp > 0:
                 pos_entry["current_basis_pct"] = str(round((_lp - _sp) / _sp * 100, 4))
         except Exception as exc:
             logger.debug(f"Price PnL calc failed for {trade.symbol}: {exc}")
+
+        # Fallback: if PnL fields still unset, use last known good values
+        if pos_entry.get("unrealized_pnl_pct") is None:
+            cached = self._last_pnl_cache.get(trade.trade_id)
+            if cached:
+                for k, v in cached.items():
+                    if pos_entry.get(k) is None:
+                        pos_entry[k] = v
+                logger.debug(f"Using cached PnL for {trade.symbol} (ticker unavailable)")
 
     # ── PnL aggregation & publish ────────────────────────────────
 

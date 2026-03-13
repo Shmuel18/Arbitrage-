@@ -150,10 +150,10 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions, isLoading = 
         </div>
         {t.activePositions}
         <span className="xcard-live" style={{ marginInlineStart: 2 }}>
-          <span className="xcard-live-dot" />LIVE
+          <span className="xcard-live-dot" />{t.live}
         </span>
         <span className="nx-section-badge" style={{ marginInlineStart: 'auto' }}>
-          {positions.length} position{positions.length !== 1 ? 's' : ''}
+          {positions.length} {positions.length !== 1 ? t.positionsWord : t.positionWord}
         </span>
       </div>
 
@@ -327,13 +327,10 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions, isLoading = 
                     {p.opened_at && (() => {
                       const d = new Date(p.opened_at);
                       if (Number.isNaN(d.getTime())) return null;
-                      const hh = String(d.getUTCHours()).padStart(2, '0');
-                      const mm = String(d.getUTCMinutes()).padStart(2, '0');
-                      const dd = String(d.getUTCDate()).padStart(2, '0');
-                      const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+                      const il = d.toLocaleString('en-GB', { timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
                       return (
                         <span>
-                          🕐 {dd}/{mo} {hh}:{mm} UTC
+                          🕐 {il}
                         </span>
                       );
                     })()}

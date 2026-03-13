@@ -109,7 +109,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   }`}
                   onClick={() => setSelectedTrade(tr)}
                   style={{ animationDelay: newTradeIds.has(tr.id) ? '0ms' : `${trIdx * 50}ms` }}
-                  title="Click for trade details"
+                  title={t.clickRowForDetails}
                 >
                   <td style={{ overflow: 'hidden' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap', overflow: 'hidden' }}>
@@ -131,7 +131,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                     </span>
                   </td>
                   <td className="text-end" style={{ whiteSpace: 'nowrap' }}>
-                    <ExitReasonBadge reason={tr.exit_reason} />
+                    <ExitReasonBadge reason={tr.exit_reason} t={t as unknown as Record<string, string>} />
                   </td>
                   <td className="text-end nx-trades-duration" style={{ whiteSpace: 'nowrap' }}>
                     {formatDuration(tr.hold_minutes)}

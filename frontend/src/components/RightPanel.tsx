@@ -20,10 +20,10 @@ interface RightPanelProps {
 }
 
 /* ── Mode badge config ────────────────────────────────────────── */
-const MODE_MAP: Record<string, { icon: string; label: string; color: string; bg: string }> = {
-  cherry_pick: { icon: '🍒', label: 'CHERRY',     color: '#f97316', bg: 'rgba(249,115,22,0.12)' },
-  nutcracker:  { icon: '🥜', label: 'NUTCRACKER',  color: '#eab308', bg: 'rgba(234,179,8,0.10)' },
-  pot:         { icon: '🍯', label: 'POT',         color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
+const MODE_MAP: Record<string, { icon: string; tKey: string; fallback: string; color: string; bg: string }> = {
+  cherry_pick: { icon: '🍒', tKey: 'cherry_pick', fallback: 'CHERRY',     color: '#f97316', bg: 'rgba(249,115,22,0.12)' },
+  nutcracker:  { icon: '🥜', tKey: 'nutcracker',  fallback: 'NUTCRACKER',  color: '#eab308', bg: 'rgba(234,179,8,0.10)' },
+  pot:         { icon: '🍯', tKey: 'pot',         fallback: 'POT',         color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
 };
 
 /* ── Opportunity table column definitions ────────────────────── */
@@ -190,8 +190,9 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
   const renderModeBadge = (mode: string) => {
     const cfg = MODE_MAP[mode];
     if (!cfg) {
-      return <span className="nx-mode-badge nx-mode-badge--hold">HOLD</span>;
+      return <span className="nx-mode-badge nx-mode-badge--hold">{t.hold}</span>;
     }
+    const label = (t as unknown as Record<string, string>)[cfg.tKey] ?? cfg.fallback;
     return (
       <span className="nx-mode-badge" style={{
         color: cfg.color,
@@ -199,7 +200,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
         borderColor: cfg.color + '33',
       }}>
         <span className="nx-mode-badge__icon">{cfg.icon}</span>
-        {cfg.label}
+        {label}
       </span>
     );
   };
@@ -344,7 +345,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
         </div>
         {count > 0 && (
           <span className="xcard-live" style={{ marginInlineStart: 'auto' }}>
-            <span className="xcard-live-dot" />LIVE
+            <span className="xcard-live-dot" />{t.live}
           </span>
         )}
       </div>
@@ -446,7 +447,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
         >
           <span className="nx-opp-burst__icon">⚡</span>
           <span className="nx-opp-burst__symbol">{b.symbol}</span>
-          <span className="nx-opp-burst__label"> TRADE FIRED</span>
+          <span className="nx-opp-burst__label"> {t.tradeFired}</span>
         </div>
       ))}
     </div>

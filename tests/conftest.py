@@ -104,6 +104,10 @@ def mock_adapter(btc_spec):
     }
     adapter.update_taker_fee_from_fill = MagicMock()  # called sync in controller
     adapter.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
+    adapter.get_best_ask = MagicMock(return_value=50001.0)
+    adapter.get_best_bid = MagicMock(return_value=49999.0)
+    adapter.get_best_ask_age_ms = MagicMock(return_value=0.0)
+    adapter.get_best_bid_age_ms = MagicMock(return_value=0.0)
     # Mock public adapter properties used by scanner and main
     adapter.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
@@ -136,6 +140,10 @@ def mock_exchange_mgr(mock_adapter):
     }
     adapter_b.update_taker_fee_from_fill = MagicMock()  # called sync in controller
     adapter_b.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
+    adapter_b.get_best_ask = MagicMock(return_value=50001.0)
+    adapter_b.get_best_bid = MagicMock(return_value=49999.0)
+    adapter_b.get_best_ask_age_ms = MagicMock(return_value=0.0)
+    adapter_b.get_best_bid_age_ms = MagicMock(return_value=0.0)
     # Mock public adapter properties used by scanner and main
     adapter_b.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter_b.markets = {"BTC/USDT": {}, "ETH/USDT": {}}

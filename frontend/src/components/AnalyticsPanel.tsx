@@ -19,21 +19,23 @@ interface AnalyticsPanelProps {
 }
 
 /* ── Format helpers (module-level) ─────────────────────────────── */
+const TZ = 'Asia/Jerusalem';
+
 function formatTime(ts: number): string {
   const d = new Date(ts * 1000);
-  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: TZ });
 }
 
 function formatShortDate(ts: number, mode: 'time' | 'datetime' | 'date'): string {
   const d = new Date(ts * 1000);
   switch (mode) {
     case 'time':
-      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: TZ });
     case 'datetime':
-      return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+      return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: TZ })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: TZ })}`;
     case 'date':
     default:
-      return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+      return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: TZ });
   }
 }
 
@@ -215,7 +217,7 @@ const AnalyticsPanelInner: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onP
           </div>
           <div>
             <div className="wh-chart-header__title">RATEBRIDGE</div>
-            <div className="wh-chart-header__subtitle">All-time P&L</div>
+            <div className="wh-chart-header__subtitle">{t.allTimePnlSubtitle}</div>
           </div>
         </div>
         <div className="wh-chart-header__right">
@@ -235,11 +237,11 @@ const AnalyticsPanelInner: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onP
         <div className="wh-chart-breakdown">
           <span className="wh-chart-breakdown__item">
             <span className="wh-chart-breakdown__dot" style={{ background: posColor }} />
-            Realized {formatCurrency(realized)}
+            {t.realized} {formatCurrency(realized)}
           </span>
           <span className="wh-chart-breakdown__item">
             <span className="wh-chart-breakdown__dot" style={{ background: unrealized >= 0 ? '#60a5fa' : negColor }} />
-            Unrealized {formatCurrency(unrealized)}
+            {t.unrealized} {formatCurrency(unrealized)}
           </span>
         </div>
       )}
@@ -251,7 +253,7 @@ const AnalyticsPanelInner: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onP
           { label: '7d', value: 168 },
           { label: '30d', value: 720 },
           { label: '90d', value: 2160 },
-          { label: 'All', value: 4320 },
+          { label: t.allLabel, value: 4320 },
         ].map((btn) => (
           <button
             key={btn.value}
@@ -354,15 +356,7 @@ const AnalyticsPanelInner: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onP
                 strokeDasharray="6 4"
               />
 
-              {/* Zero-crossing glow markers — pulse ring where PnL flips sign */}
-              {zeroCrossings.map((cx, ci) => (
-                <g key={`zcross-${ci}`}>
-                  <circle cx={cx} cy={zeroY} r="8" fill="none"
-                    stroke="#2dd4a0" strokeWidth="1.5"
-                    className="nx-zero-pulse" opacity="0.65" />
-                  <circle cx={cx} cy={zeroY} r="2.5" fill="#2dd4a0" opacity="0.95" />
-                </g>
-              ))}
+              {/* Zero-crossing markers removed — user found them distracting */}
 
               {/* Green fill — above zero */}
               <path d={fillPathAbove} fill="url(#wh-fill-pos)" clipPath="url(#wh-clip-above)" />

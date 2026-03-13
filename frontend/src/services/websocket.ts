@@ -46,6 +46,10 @@ export const connectWebSocket = (
 
   // Dynamic WebSocket URL — works on localhost AND via ngrok/any host
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsToken = (import.meta.env.VITE_WS_TOKEN as string | undefined)?.trim();
+  if (wsToken) {
+    document.cookie = `trinity_ws_token=${encodeURIComponent(wsToken)}; path=/; SameSite=Lax`;
+  }
   const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
   ws = new WebSocket(wsUrl);
 

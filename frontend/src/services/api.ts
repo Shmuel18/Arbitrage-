@@ -11,6 +11,26 @@ const api = axios.create({
   },
 });
 
+// Attach read-token for protected telemetry endpoints.
+// Priority: VITE_READ_TOKEN, fallback VITE_WS_TOKEN (same operational secret).
+const readToken = (import.meta.env.VITE_READ_TOKEN as string | undefined)?.trim()
+  || (import.meta.env.VITE_WS_TOKEN as string | undefined)?.trim();
+
+const adminToken = (import.meta.env.VITE_ADMIN_TOKEN as string | undefined)?.trim()
+  || (import.meta.env.VITE_WS_TOKEN as string | undefined)?.trim();
+const commandToken = (import.meta.env.VITE_COMMAND_TOKEN as string | undefined)?.trim()
+  || adminToken;
+const configToken = (import.meta.env.VITE_CONFIG_TOKEN as string | undefined)?.trim()
+  || adminToken;
+const emergencyToken = (import.meta.env.VITE_EMERGENCY_TOKEN as string | undefined)?.trim()
+  || adminToken;
+const tradeToken = (import.meta.env.VITE_TRADE_TOKEN as string | undefined)?.trim()
+  || adminToken;
+
+if (readToken) {
+  api.defaults.headers.common['X-Read-Token'] = readToken;
+}
+
 /* ── Response types ────────────────────────────────────────────── */
 export interface PositionsResponse { positions: Record<string, unknown>[] }
 export interface TradesResponse { trades: Trade[] }
@@ -30,7 +50,9 @@ export const getPositions = async (signal?: AbortSignal): Promise<PositionsRespo
 };
 
 export const closePosition = async (positionId: string): Promise<CommandResponse> => {
-  const response = await api.delete(`/positions/${positionId}`);
+  const response = await api.delete(`/positions/${positionId}`, {
+    headers: tradeToken ? { 'X-Trade-Token': tradeToken } : {},
+  });
   return response.data;
 };
 
@@ -47,17 +69,23 @@ export const getTradeStats = async (): Promise<TradeStatsResponse> => {
 };
 
 export const sendBotCommand = async (action: string): Promise<CommandResponse> => {
-  const response = await api.post('/controls/command', { action });
+  const response = await api.post('/controls/command', { action }, {
+    headers: commandToken ? { 'X-Command-Token': commandToken } : {},
+  });
   return response.data;
 };
 
 export const emergencyStop = async (): Promise<CommandResponse> => {
-  const response = await api.post('/controls/emergency_stop');
+  const response = await api.post('/controls/emergency_stop', undefined, {
+    headers: emergencyToken ? { 'X-Emergency-Token': emergencyToken } : {},
+  });
   return response.data;
 };
 
 export const updateConfig = async (key: string, value: string | number | boolean): Promise<CommandResponse> => {
-  const response = await api.post('/controls/config', { key, value });
+  const response = await api.post('/controls/config', { key, value }, {
+    headers: configToken ? { 'X-Config-Token': configToken } : {},
+  });
   return response.data;
 };
 
