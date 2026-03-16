@@ -269,15 +269,25 @@ class _CloseFinalizeMixin:
                 )
                 result = await self._place_with_timeout(adapter, req)
                 if result:
+                    # P2-2: Warn on partial fills — dust left-over keeps the
+                    # position technically open on the exchange, consuming margin
+                    # and accumulating funding costs until manually remedied.
+                    filled = float(result.get("filled") or 0)
+                    expected = float(qty)
+                    if expected > 0 and abs(filled - expected) / expected > 0.01:
+                        logger.warning(
+                            f"[{symbol}] Partial close fill on {exchange}: "
+                            f"expected={expected:.6f} filled={filled:.6f} "
+                            f"(dust={expected - filled:.8f}) — position may not be fully flat",
+                            extra={"exchange": exchange, "symbol": symbol},
+                        )
                     return result
                 if adapter and attempt >= 1:
                     try:
-                        resolved = adapter._resolve_symbol(symbol)
-                        positions = await adapter._exchange.fetch_positions([resolved])
-                        has_pos = any(
-                            abs(float(p.get("contracts", 0) or 0)) > 1e-12
-                            for p in positions
-                        )
+                        # P1-4: Use adapter.has_open_position instead of
+                        # adapter._exchange.fetch_positions to respect the
+                        # abstraction layer (rate-limit semaphore + retries).
+                        has_pos = await adapter.has_open_position(symbol)
                         if not has_pos:
                             logger.info(
                                 f"[{symbol}] Position already gone on {exchange} — "

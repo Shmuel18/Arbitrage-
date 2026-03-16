@@ -416,6 +416,31 @@ class _CloseMixin(_CloseFinalizeMixin):
                     0.0, 0.0, "estimate", None, None,
                 )
             else:
+                # P0-2: Before declaring ERROR, attempt to close the still-open leg.
+                # One leg may have closed successfully while the other timed out.
+                # Leaving a naked directional position without attempting auto-close
+                # risks unlimited loss if the market moves against the open leg.
+                if _long_still_open and not _short_still_open and long_adapter:
+                    logger.warning(
+                        f"[{trade.trade_id}] Short closed but LONG still open — "
+                        f"auto-closing orphaned LONG on {trade.long_exchange}",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_auto_close_long"},
+                    )
+                    await self._close_orphan(
+                        long_adapter, trade.long_exchange, trade.symbol,
+                        OrderSide.SELL, {"filled": float(trade.long_qty)},
+                    )
+                elif _short_still_open and not _long_still_open and short_adapter:
+                    logger.warning(
+                        f"[{trade.trade_id}] Long closed but SHORT still open — "
+                        f"auto-closing orphaned SHORT on {trade.short_exchange}",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_auto_close_short"},
+                    )
+                    await self._close_orphan(
+                        short_adapter, trade.short_exchange, trade.symbol,
+                        OrderSide.BUY, {"filled": float(trade.short_qty)},
+                    )
+
                 trade.state = TradeState.ERROR
                 await self._persist_trade(trade)
                 # Free exchange locks so a single failed close doesn't block the whole bot.
@@ -426,6 +451,20 @@ class _CloseMixin(_CloseFinalizeMixin):
                     f"exchange locks released, cooldown applied)",
                     extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
                 )
+                # P2-3: Persist ERROR trade ID to Redis so it survives process restart
+                # and remains visible to operators even if the alert publish fails.
+                # Key: trinity:error_trades (Redis set, 7-day TTL).
+                try:
+                    _err_key = "trinity:error_trades"
+                    await self._redis.sadd(_err_key, trade.trade_id)
+                    await self._redis.expire(_err_key, 7 * 24 * 3600)
+                    logger.warning(
+                        f"[{trade.trade_id}] Recorded in Redis set '{_err_key}'. "
+                        f"Inspect with: redis-cli smembers {_err_key}",
+                        extra={"trade_id": trade.trade_id},
+                    )
+                except Exception as _re:
+                    logger.debug(f"Failed to persist error trade to Redis: {_re}")
                 # P1: Apply cooldown and alert only on genuine ERROR — not when
                 # post-close reconcile confirmed both legs are flat (CLOSED path).
                 # Firing these unconditionally created false 'orphan' suppression
@@ -447,8 +486,20 @@ class _CloseMixin(_CloseFinalizeMixin):
                         logger.debug(f"Error-state alert publish failed: {exc}")
 
     async def close_all_positions(self) -> None:
-        """Close every active trade — called during graceful shutdown."""
-        for trade_id, trade in list(self._active_trades.items()):
-            if trade.state == TradeState.OPEN:
-                logger.info(f"Shutdown: closing trade {trade_id}")
-                await self._close_trade(trade)
+        """Close every active trade — called during graceful shutdown.
+
+        P2-1: Parallel gather (was sequential) so N trades close in
+        max(close_time) rather than N × close_time.  return_exceptions=True
+        ensures one failed close doesn't block the others.
+        """
+        open_trades = [
+            t for t in list(self._active_trades.values())
+            if t.state == TradeState.OPEN
+        ]
+        if not open_trades:
+            return
+        logger.info(f"Shutdown: closing {len(open_trades)} open trade(s) in parallel")
+        await asyncio.gather(
+            *[self._close_trade(t) for t in open_trades],
+            return_exceptions=True,
+        )

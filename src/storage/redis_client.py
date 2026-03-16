@@ -139,6 +139,19 @@ class RedisClient:
         """Trim a list to the specified range (no prefix applied)."""
         await self._c.ltrim(key, start, stop)
 
+    async def sadd(self, key: str, *members: str) -> int:
+        """Add members to a Redis set. Returns number of new members added."""
+        return await self._c.sadd(key, *members)
+
+    async def srem(self, key: str, *members: str) -> int:
+        """Remove members from a Redis set. Returns number of members removed."""
+        return await self._c.srem(key, *members)
+
+    async def smembers(self, key: str) -> set[str]:
+        """Return all members of a Redis set."""
+        raw = await self._c.smembers(key)
+        return {m if isinstance(m, str) else m.decode() for m in raw}
+
     async def get_alerts(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent structured alerts from trinity:alerts (newest first)."""
         safe_limit = max(1, min(limit, 200))

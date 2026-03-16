@@ -41,9 +41,12 @@ class _MonitorMixin(_ExitLogicMixin):
         balance_snapshot_counter = 0  # snapshot every 180 cycles (30min)
         while self._running:
             try:
-                # ── Position reconciliation every ~2 min (12 × 10s) ──
+                # ── Position reconciliation every ~30s (3 × 10s) ──
+                # P1-3: Was 120s (12×). Reduced to 30s so an exchange-side
+                # liquidation on one leg is detected and the orphan is closed
+                # within half a minute rather than up to 2 min of naked exposure.
                 reconcile_counter += 1
-                if reconcile_counter >= 12:
+                if reconcile_counter >= 3:
                     reconcile_counter = 0
                     await self._reconcile_positions()
 

@@ -214,25 +214,47 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         profit_target = tp.profit_target_pct
         adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
         if adjusted_pnl >= profit_target:
-            _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
-            logger.info(
-                f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
-                f"PnL={float(total_pnl_pct):+.4f}% (adj={float(adjusted_pnl):+.4f}%) "
-                f">= {float(profit_target)}% target "
-                f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}% "
-                f"slippage_buf=-{float(tp.exit_slippage_buffer_pct):.4f}%) — "
-                f"exiting after {hold_min}min",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_exit"},
-            )
-            trade._exit_reason = _reason
-            self._journal.exit_decision(
-                trade.trade_id, trade.symbol,
-                reason=_reason,
-                immediate_spread=Decimal(str(total_pnl_pct)),
-                hold_min=hold_min,
-            )
-            await self._close_trade(trade)
-            return
+            # P1-1: Block profit-target exit when funding payment is imminent.
+            # A price pump just before funding would cause us to exit and miss
+            # the income payment we opened specifically to capture.
+            _PROFIT_TARGET_FUNDING_LOCK_MIN: float = 3.0
+            _mins_to_next_income: float | None = None
+            if trade.next_funding_long and not long_paid:
+                _mf = (trade.next_funding_long - now).total_seconds() / 60
+                if _mf > 0:
+                    _mins_to_next_income = _mf
+            if trade.next_funding_short and not short_paid:
+                _mf = (trade.next_funding_short - now).total_seconds() / 60
+                if _mf > 0 and (_mins_to_next_income is None or _mf < _mins_to_next_income):
+                    _mins_to_next_income = _mf
+
+            if _mins_to_next_income is not None and _mins_to_next_income < _PROFIT_TARGET_FUNDING_LOCK_MIN:
+                logger.info(
+                    f"[{trade.symbol}] Profit target hit ({float(adjusted_pnl):+.4f}%) "
+                    f"but funding in {_mins_to_next_income:.1f}min < lock={_PROFIT_TARGET_FUNDING_LOCK_MIN}min "
+                    f"— holding to capture income payment",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_funding_lock"},
+                )
+            else:
+                _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
+                logger.info(
+                    f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
+                    f"PnL={float(total_pnl_pct):+.4f}% (adj={float(adjusted_pnl):+.4f}%) "
+                    f">= {float(profit_target)}% target "
+                    f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}% "
+                    f"slippage_buf=-{float(tp.exit_slippage_buffer_pct):.4f}%) — "
+                    f"exiting after {hold_min}min",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_exit"},
+                )
+                trade._exit_reason = _reason
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=_reason,
+                    immediate_spread=Decimal(str(total_pnl_pct)),
+                    hold_min=hold_min,
+                )
+                await self._close_trade(trade)
+                return
 
         # ── 4. BASIS RECOVERY EXIT (after funding) ──────────────
         if not (long_paid or short_paid):
@@ -288,15 +310,38 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 trade._funding_paid_at = None
                 trade._hold_logged_until = None
 
-                # Advance funding trackers to next cycle
+                # Advance funding trackers to next cycle.
+                # P1-2: Only accept timestamps strictly in the future.
+                # A stale cache returning an already-past timestamp would set
+                # next_funding_long to the past → long_paid=True on the very
+                # next monitor cycle → double-fire of _process_funding_settlement
+                # with Δ=0 (no new exchange payment), inflating collection counter.
                 if long_funding:
                     _ln = long_funding.get("next_timestamp")
                     if _ln:
-                        trade.next_funding_long = _funding_ts_to_dt(_ln)
+                        _ln_dt = _funding_ts_to_dt(_ln)
+                        if _ln_dt > now:
+                            trade.next_funding_long = _ln_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale long next_timestamp in cache "
+                                f"({_ln_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
                 if short_funding:
                     _sn = short_funding.get("next_timestamp")
                     if _sn:
-                        trade.next_funding_short = _funding_ts_to_dt(_sn)
+                        _sn_dt = _funding_ts_to_dt(_sn)
+                        if _sn_dt > now:
+                            trade.next_funding_short = _sn_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale short next_timestamp in cache "
+                                f"({_sn_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
 
                 # Update stored rates for next cycle
                 if long_funding and "rate" in long_funding:

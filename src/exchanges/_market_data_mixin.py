@@ -457,6 +457,25 @@ class _MarketDataMixin:
             ))
         return positions
 
+    async def has_open_position(self, symbol: str) -> bool:
+        """Return True if any non-zero position exists for *symbol*.
+
+        P1-4: This abstraction replaces direct ``adapter._exchange.fetch_positions``
+        access in close/retry logic.  Uses the existing ``get_positions`` path
+        (rate-limit semaphore + retries + Position normalisation) instead of
+        bypassing the adapter layer with a raw ccxt call.
+        """
+        try:
+            positions = await self.get_positions(symbol)
+            return any(abs(float(p.quantity)) > 1e-12 for p in positions)
+        except Exception as exc:
+            logger.debug(
+                f"has_open_position({symbol}) failed on {self.exchange_id}: {exc}"
+            )
+            # Default to True (conservative) — better to believe position
+            # still open and retry close than to silently declare it gone.
+            return True
+
     # ── Warm up ──────────────────────────────────────────────────
 
     async def warm_up_symbols(self, symbols: List[str]) -> None:

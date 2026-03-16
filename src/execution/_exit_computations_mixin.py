@@ -20,6 +20,11 @@ from src.discovery.calculator import calculate_fees
 _ZERO = Decimal("0")
 _HUNDRED = Decimal("100")
 
+# P0-3: Maximum time (seconds) to wait for any REST call inside the monitor loop.
+# Without this, a TCP-connected-but-non-responding exchange can freeze the entire
+# asyncio loop for 2–4 min (OS TCP timeout), silencing liquidation & exit checks.
+_MONITOR_REST_TIMEOUT: float = 8.0
+
 if TYPE_CHECKING:
     pass  # all attribute access via self (mixin pattern)
 
@@ -315,30 +320,49 @@ class _ExitComputationsMixin:
 
         # Preferred path: VWAP executable prices.
         try:
-            raw_l_price, raw_s_price = await asyncio.gather(
-                long_adapter.get_executable_price(
-                    trade.symbol, trade.long_qty, side="sell"
+            raw_l_price, raw_s_price = await asyncio.wait_for(
+                asyncio.gather(
+                    long_adapter.get_executable_price(
+                        trade.symbol, trade.long_qty, side="sell"
+                    ),
+                    short_adapter.get_executable_price(
+                        trade.symbol, trade.short_qty, side="buy"
+                    ),
                 ),
-                short_adapter.get_executable_price(
-                    trade.symbol, trade.short_qty, side="buy"
-                ),
+                timeout=_MONITOR_REST_TIMEOUT,
             )
             l_price = _to_decimal_price(raw_l_price)
             s_price = _to_decimal_price(raw_s_price)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[{trade.symbol}] Executable-price fetch timed out after "
+                f"{_MONITOR_REST_TIMEOUT}s — falling back to ticker",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
         except Exception as e:
             logger.debug(f"Executable price fetch failed for {trade.symbol}: {e}")
 
         # Fallback path (tests / adapters without order-book pricing): ticker last.
         if l_price is None or s_price is None:
             try:
-                long_ticker, short_ticker = await asyncio.gather(
-                    long_adapter.get_ticker(trade.symbol),
-                    short_adapter.get_ticker(trade.symbol),
+                long_ticker, short_ticker = await asyncio.wait_for(
+                    asyncio.gather(
+                        long_adapter.get_ticker(trade.symbol),
+                        short_adapter.get_ticker(trade.symbol),
+                    ),
+                    timeout=_MONITOR_REST_TIMEOUT,
                 )
                 if l_price is None:
                     l_price = _to_decimal_price(long_ticker.get("last"))
                 if s_price is None:
                     s_price = _to_decimal_price(short_ticker.get("last"))
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{trade.symbol}] Ticker fallback timed out after "
+                    f"{_MONITOR_REST_TIMEOUT}s — skipping PnL calculation this cycle",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
+                return None
             except Exception as e:
                 logger.debug(f"Ticker price fetch failed for {trade.symbol}: {e}")
                 return None
@@ -475,11 +499,25 @@ class _ExitComputationsMixin:
         safety_pct = float(self._cfg.trading_params.liquidation_safety_pct)
 
         try:
-            long_positions, short_positions = await asyncio.gather(
-                long_adapter.get_positions(trade.symbol),
-                short_adapter.get_positions(trade.symbol),
+            long_positions, short_positions = await asyncio.wait_for(
+                asyncio.gather(
+                    long_adapter.get_positions(trade.symbol),
+                    short_adapter.get_positions(trade.symbol),
+                ),
+                timeout=_MONITOR_REST_TIMEOUT,
             )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[{trade.symbol}] Liquidation check timed out after "
+                f"{_MONITOR_REST_TIMEOUT}s — skipping this cycle",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return False
+        except Exception as e:
+            logger.debug(f"Liquidation check failed for {trade.symbol}: {e}")
+            return False
 
+        try:
             for positions, exchange, side in [
                 (long_positions, trade.long_exchange, "LONG"),
                 (short_positions, trade.short_exchange, "SHORT"),
@@ -491,6 +529,16 @@ class _ExitComputationsMixin:
                     margin = float(pos.entry_price * pos.quantity) / leverage if pos.entry_price > 0 else 0
                     if margin <= 0:
                         continue
+                    # P0-1: Some exchanges omit unrealized_pnl (Gate, Bitget under load).
+                    # float(None) raises TypeError → caught as generic Exception → debug-only log.
+                    # Guard explicitly so liquidation safety never silently disables itself.
+                    if pos.unrealized_pnl is None:
+                        logger.warning(
+                            f"[{trade.symbol}] {exchange} returned no unrealized_pnl "
+                            f"for {side} — cannot compute margin ratio, skipping position",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                        )
+                        continue
                     equity = margin + float(pos.unrealized_pnl)
                     margin_ratio = (equity / margin) * 100
 
@@ -498,7 +546,8 @@ class _ExitComputationsMixin:
                         logger.warning(
                             f"🚨 LIQUIDATION RISK: {trade.symbol} {side} on {exchange} — "
                             f"margin_ratio={margin_ratio:.1f}% < safety={safety_pct}% "
-                            f"(equity=${equity:.2f}, margin=${margin:.2f}, uPnL=${float(pos.unrealized_pnl):.2f})",
+                            f"(equity=${equity:.2f}, margin=${margin:.2f}, "
+                            f"uPnL=${float(pos.unrealized_pnl):.2f})",
                             extra={
                                 "trade_id": trade.trade_id,
                                 "symbol": trade.symbol,
@@ -516,6 +565,6 @@ class _ExitComputationsMixin:
                         await self._close_trade(trade)
                         return True
         except Exception as e:
-            logger.debug(f"Liquidation check failed for {trade.symbol}: {e}")
+            logger.debug(f"Liquidation position-scan failed for {trade.symbol}: {e}")
 
         return False
