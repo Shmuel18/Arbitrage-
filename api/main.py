@@ -2,6 +2,11 @@
 Trinity Bot API - Main FastAPI Application
 """
 
+# Load .env before anything else so ADMIN_TOKEN / READ_TOKEN are available
+# when uvicorn is started as a standalone process (not via main.py).
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv()
+
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -20,7 +25,6 @@ from threading import Lock
 
 from .auth import require_read_token
 from .broadcast_service import BroadcastService
-from .routes import positions, trades, controls, analytics
 from .routes import positions, trades, controls, analytics, alerts
 from .websocket_manager import ConnectionManager
 from src.storage.redis_client import RedisClient
