@@ -324,6 +324,58 @@ class RiskGuard:
                             f"Panic close retry succeeded: {qty} {symbol} ({side_val}) on {eid}",
                             extra={"exchange": eid, "symbol": symbol, "action": "panic_close_retry_ok"},
                         )
+
+                # P2-2: Final verify after second-pass — confirm flat state.
+                # Without this, a successful retry log is only order-placement
+                # confirmation, not position-flat confirmation.  The final check
+                # provides audit closure and catches edge cases where the retry
+                # order itself partially filled or was rejected silently.
+                await asyncio.sleep(2)
+                _final_open: list[tuple[str, str, float]] = []
+                _retry_eids = {m[0] for m in _retry_meta}
+                _final_pos_results = await asyncio.gather(
+                    *[exchanges_to_check[eid].get_positions(symbol) for eid in _retry_eids
+                      if eid in exchanges_to_check],
+                    return_exceptions=True,
+                )
+                for eid, fp_result in zip(
+                    [eid for eid in _retry_eids if eid in exchanges_to_check],
+                    _final_pos_results,
+                ):
+                    if isinstance(fp_result, Exception):
+                        logger.warning(
+                            f"Panic final verify: position check failed on {eid}/{symbol}: {fp_result}",
+                            extra={"exchange": eid, "symbol": symbol},
+                        )
+                        continue
+                    for pos in fp_result:
+                        if abs(pos.quantity) > 0:
+                            _final_open.append((eid, pos.side.value, float(pos.quantity)))
+
+                if _final_open:
+                    _final_breakdown = "; ".join(
+                        f"{eid}({side}): {qty}" for eid, side, qty in _final_open
+                    )
+                    logger.critical(
+                        f"🚨 PANIC CLOSE FINAL VERIFY FAILED — {symbol} still open after 2 passes: "
+                        f"{_final_breakdown}. MANUAL INTERVENTION REQUIRED.",
+                        extra={"symbol": symbol, "action": "panic_close_final_failed",
+                               "data": {"remaining": _final_open}},
+                    )
+                    # Persist to Redis so operator sees it even after process restart
+                    try:
+                        _err_key = "trinity:panic_open"
+                        await self._redis.sadd(
+                            _err_key, f"{symbol}:{','.join(e for e, _, _ in _final_open)}"
+                        )
+                        await self._redis.expire(_err_key, 7 * 24 * 3600)
+                    except Exception as _re:
+                        logger.debug(f"Failed to persist panic_open to Redis: {_re}")
+                else:
+                    logger.info(
+                        f"✅ Panic close final verify — {symbol} confirmed flat after retry pass.",
+                        extra={"symbol": symbol, "action": "panic_close_final_verified"},
+                    )
         else:
             logger.info(
                 f"✅ Panic close verified — all {symbol} positions confirmed closed.",

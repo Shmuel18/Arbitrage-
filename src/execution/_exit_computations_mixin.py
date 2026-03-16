@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, Optional
 
@@ -235,6 +235,8 @@ class _ExitComputationsMixin:
                 f"(exchange history unavailable)",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
             )
+            # P2-1: Record estimate so deferred retry can compute exact correction.
+            trade._pending_long_estimate = _long_usd
 
         if short_just_paid and not _short_actual_used:
             _sr = trade.short_funding_rate
@@ -246,6 +248,26 @@ class _ExitComputationsMixin:
                 f"[{trade.symbol}] Short funding estimated from entry rate: "
                 f"rate={float(_sr or 0):.6f} → ${float(_short_usd):+.4f} "
                 f"(exchange history unavailable)",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            # P2-1: Record estimate so deferred retry can compute exact correction.
+            trade._pending_short_estimate = _short_usd
+
+        # P2-1: Schedule a single deferred re-fetch 90 s after payment.
+        # At T+0 the exchange is under peak load; history endpoints often return
+        # empty for 30-90 s.  One retry at T+90 is enough to replace the estimate
+        # with real data for the in-session PnL display and negative-funding guard.
+        # The final reconcile on close always fetches history again regardless.
+        _HISTORY_RETRY_DELAY_S: float = 90.0
+        if (
+            (long_just_paid and not _long_actual_used) or
+            (short_just_paid and not _short_actual_used)
+        ):
+            trade._funding_history_retry_at = now + timedelta(seconds=_HISTORY_RETRY_DELAY_S)
+            logger.info(
+                f"[{trade.symbol}] Funding history retry scheduled at "
+                f"{trade._funding_history_retry_at.strftime('%H:%M:%S')} UTC "
+                f"(+{_HISTORY_RETRY_DELAY_S:.0f}s)",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
             )
 
@@ -524,7 +546,115 @@ class _ExitComputationsMixin:
         )
         return qualifies
 
-    async def _check_liquidation_risk(self, trade: TradeRecord, long_adapter, short_adapter) -> bool:
+    async def _retry_deferred_funding_history(
+        self,
+        trade: "TradeRecord",
+        long_adapter,
+        short_adapter,
+        now: datetime,
+    ) -> None:
+        """One-shot re-fetch of funding history for payments recorded as estimate.
+
+        P2-1: Called from _check_exit when _funding_history_retry_at has elapsed.
+        Attempts to replace the estimate in funding_collected_usd with actual
+        exchange-settled amounts.  Always clears the retry flag so it fires once.
+
+        Correction formula:
+          correction = real_this_payment - estimate_used
+          funding_collected_usd += correction
+          _actual_xxx_funding_sum = real_total_from_exchange  (enables next delta)
+        """
+        trade._funding_history_retry_at = None  # one-shot — clear unconditionally
+
+        _opened_ms = int(trade.opened_at.timestamp() * 1000) if trade.opened_at else None
+        _now_ms = int(now.timestamp() * 1000)
+        if not _opened_ms:
+            return
+
+        _tasks = []
+        _sides: list[str] = []
+        if trade._pending_long_estimate is not None:
+            _tasks.append(
+                long_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
+            )
+            _sides.append("long")
+        if trade._pending_short_estimate is not None:
+            _tasks.append(
+                short_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
+            )
+            _sides.append("short")
+
+        if not _tasks:
+            return
+
+        try:
+            _results = await asyncio.wait_for(
+                asyncio.gather(*_tasks, return_exceptions=True),
+                timeout=_MONITOR_REST_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[{trade.symbol}] Deferred funding history retry timed out — keeping estimate",
+                extra={"trade_id": trade.trade_id},
+            )
+            return
+
+        for side, result in zip(_sides, _results):
+            if isinstance(result, Exception):
+                logger.debug(f"[{trade.symbol}] Deferred retry {side} failed: {result}")
+                continue
+            if not isinstance(result, dict) or result.get("source") != "exchange" or not result.get("payments"):
+                logger.debug(f"[{trade.symbol}] Deferred retry {side}: still no exchange data")
+                continue
+
+            real_total = Decimal(str(result["net_usd"]))
+
+            if side == "long":
+                estimate_used = trade._pending_long_estimate or _ZERO
+                real_this_payment = real_total - trade._actual_long_funding_sum
+                correction = real_this_payment - estimate_used
+                trade.funding_collected_usd += correction
+                trade._funding_tracked_long += correction
+                trade._actual_long_funding_sum = real_total
+                trade._pending_long_estimate = None
+                logger.info(
+                    f"[{trade.symbol}] Deferred funding history CONFIRMED (long): "
+                    f"estimate=${float(estimate_used):+.4f} → real=${float(real_this_payment):+.4f} "
+                    f"(correction={float(correction):+.4f})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "funding_history_retry_confirmed"},
+                )
+            else:
+                estimate_used = trade._pending_short_estimate or _ZERO
+                real_this_payment = real_total - trade._actual_short_funding_sum
+                correction = real_this_payment - estimate_used
+                trade.funding_collected_usd += correction
+                trade._funding_tracked_short += correction
+                trade._actual_short_funding_sum = real_total
+                trade._pending_short_estimate = None
+                logger.info(
+                    f"[{trade.symbol}] Deferred funding history CONFIRMED (short): "
+                    f"estimate=${float(estimate_used):+.4f} → real=${float(real_this_payment):+.4f} "
+                    f"(correction={float(correction):+.4f})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "funding_history_retry_confirmed"},
+                )
+
+        # Re-check negative funding guard after correction
+        _cumulative = float(trade.funding_collected_usd)
+        if _cumulative < 0:
+            logger.warning(
+                f"[{trade.symbol}] Deferred retry: cumulative funding now "
+                f"${_cumulative:.4f} (negative after correction) — will trigger exit on next cycle",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+
+    async def _check_liquidation_risk(
+        self,
+        trade: TradeRecord,
+        long_adapter,
+        short_adapter,
+    ) -> bool:
         """Check if either side is approaching liquidation.
 
         Returns True if trade was closed due to liquidation risk.

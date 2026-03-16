@@ -265,3 +265,10 @@ class TradeRecord:
     # crash+recovery the next payment delta is computed correctly (no double-count).
     _actual_long_funding_sum: Decimal = field(default=Decimal("0"), compare=False, repr=False)
     _actual_short_funding_sum: Decimal = field(default=Decimal("0"), compare=False, repr=False)
+    # P2-1: Deferred funding history retry.
+    # When T+0 history fetch returns estimate-only (exchange not yet settled),
+    # record when to retry (90s later) and what estimate was used per side so
+    # the correction can be computed exactly: real_amount − estimate_used.
+    _funding_history_retry_at: Optional[datetime] = field(default=None, compare=False, repr=False)
+    _pending_long_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)
+    _pending_short_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)

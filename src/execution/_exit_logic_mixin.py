@@ -81,6 +81,16 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             logger.warning(f"Missing adapter for {trade.symbol}, skipping exit check")
             return
 
+        # ── P2-1: Deferred funding history retry ─────────────────
+        # If a prior payment was recorded as estimate-only (exchange history
+        # unavailable at T+0), retry 90 s later for the actual settled amount.
+        # Fires at most once per payment \u2014 _funding_history_retry_at is cleared
+        # immediately by the retry method regardless of outcome.
+        if trade._funding_history_retry_at and now >= trade._funding_history_retry_at:
+            await self._retry_deferred_funding_history(
+                trade, long_adapter, short_adapter, now
+            )
+
         # ── 1. LIQUIDATION CHECK ─────────────────────────────────
         liquidation_exit = await self._check_liquidation_risk(trade, long_adapter, short_adapter)
         if liquidation_exit:
@@ -120,6 +130,25 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         # ── Track funding payment status ─────────────────────────
         long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
         short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
+
+        # Warn when the cache has no funding data for a held trade — this means
+        # the payment tracker (next_funding_long/short) can never be populated and
+        # sections 4-5 (basis recovery/hard stop) will be silently bypassed.
+        # The no-funding-received safety exit (below) acts as the final guard.
+        _hold_sec_for_warn = (now - trade.opened_at).total_seconds() if trade.opened_at else 0
+        if _hold_sec_for_warn > 60 and not long_funding:
+            logger.warning(
+                f"[{trade.symbol}] Funding rate cache EMPTY for {trade.long_exchange} (long) "
+                f"after {int(_hold_sec_for_warn)}s — payment tracker cannot be set, "
+                f"exit logic may not fire on time.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+        if _hold_sec_for_warn > 60 and not short_funding:
+            logger.warning(
+                f"[{trade.symbol}] Funding rate cache EMPTY for {trade.short_exchange} (short) "
+                f"after {int(_hold_sec_for_warn)}s — payment tracker cannot be set.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
 
         if long_funding:
             long_next_ts = long_funding.get("next_timestamp")
@@ -177,6 +206,45 @@ class _ExitLogicMixin(_ExitComputationsMixin):
 
         # ── Display current status ───────────────────────────────
         hold_min = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
+
+        # ── NO-FUNDING-RECEIVED SAFETY EXIT ─────────────────────
+        # Triggered when the payment tracker (next_funding_long / next_funding_short)
+        # was never populated — likely because the WebSocket cache had no
+        # next_timestamp for this symbol after entry.  This leaves long_paid and
+        # short_paid permanently False, so sections 4-5 (basis recovery / hard stop)
+        # are never reached, causing the trade to hold indefinitely.
+        #
+        # Condition: trade has been open longer than (max_entry_window + basis_timeout)
+        # minutes AND no funding was ever collected AND the payment tracker never fired.
+        # This covers the case where the scanner's next_timestamp was stale or the
+        # exchange never delivered the anticipated funding payment.
+        _no_funding_threshold_min = (
+            float(tp.max_entry_window_minutes) + float(tp.basis_recovery_timeout_minutes)
+        )
+        if (
+            not trade._funding_paid_at
+            and trade.funding_collected_usd == _ZERO
+            and not (long_paid or short_paid)
+            and hold_min >= _no_funding_threshold_min
+        ):
+            _no_fund_reason = f"no_funding_received_{hold_min}min"
+            logger.warning(
+                f"⏰ [{trade.symbol}] NO FUNDING RECEIVED after {hold_min}min "
+                f"(threshold={int(_no_funding_threshold_min)}min). "
+                f"Payment tracker was never set — expected income never arrived. "
+                f"Exiting to avoid indefinite hold.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "no_funding_received_exit"},
+            )
+            trade._exit_reason = _no_fund_reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_no_fund_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
         tier_tag = f" [{trade.entry_tier.upper()}]" if trade.entry_tier else ""
 
         if not trade._hold_logged_until or trade._hold_logged_until < now:
