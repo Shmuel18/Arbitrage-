@@ -153,12 +153,15 @@ class _UtilMixin:
     async def _close_orphan(
         self, adapter, exchange: str, symbol: str,
         side: OrderSide, fill: dict, fallback_qty: Optional[Decimal] = None,
-    ) -> None:
+    ) -> bool:
         """Emergency close of a single orphaned leg.
 
         Retries up to 3 times with 2-second back-off. If all attempts fail,
         publishes a critical alert so the operator is notified immediately
         rather than silently leaving an unhedged position.
+
+        Returns True if the position was successfully closed (or was already
+        gone), False if all retries failed and manual intervention is required.
         """
         filled_qty = Decimal(str(fill.get("filled", 0)))
         if filled_qty <= 0:
@@ -169,7 +172,7 @@ class _UtilMixin:
                 )
                 filled_qty = fallback_qty
             else:
-                return
+                return True  # nothing to close — treat as success
 
         req = OrderRequest(
             exchange=exchange,
@@ -180,6 +183,7 @@ class _UtilMixin:
         )
 
         _MAX_RETRIES = 3
+        _succeeded = False
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 # P1-1: Wrap in wait_for to prevent event-loop HOL blocking.
@@ -193,6 +197,7 @@ class _UtilMixin:
                     f"Orphan closed (attempt {attempt}): {filled_qty} {symbol} on {exchange}",
                     extra={"exchange": exchange, "symbol": symbol, "action": "orphan_closed"},
                 )
+                _succeeded = True
                 break
             except Exception as e:
                 logger.error(
@@ -202,28 +207,30 @@ class _UtilMixin:
                 )
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(2 * attempt)  # 2s, 4s back-off
-                else:
-                    # All retries exhausted — alert operator
-                    alert_msg = (
-                        f"🚨 ORPHAN CLOSE FAILED after {_MAX_RETRIES} attempts: "
-                        f"{filled_qty} {symbol} on {exchange}. MANUAL INTERVENTION REQUIRED."
+
+        if not _succeeded:
+            # All retries exhausted — alert operator
+            alert_msg = (
+                f"🚨 ORPHAN CLOSE FAILED after {_MAX_RETRIES} attempts: "
+                f"{filled_qty} {symbol} on {exchange}. MANUAL INTERVENTION REQUIRED."
+            )
+            logger.critical(alert_msg, extra={"exchange": exchange, "symbol": symbol})
+            if self._publisher:
+                try:
+                    await self._publisher.publish_alert(
+                        alert_msg,
+                        severity="critical",
+                        alert_type="orphan",
+                        symbol=symbol,
+                        exchange=exchange,
                     )
-                    logger.critical(alert_msg, extra={"exchange": exchange, "symbol": symbol})
-                    if self._publisher:
-                        try:
-                            await self._publisher.publish_alert(
-                                alert_msg,
-                                severity="critical",
-                                alert_type="orphan",
-                                symbol=symbol,
-                                exchange=exchange,
-                            )
-                        except Exception as exc:
-                            logger.debug(f"Alert publish failed: {exc}")
-                    self._blacklist.add(symbol, exchange)
+                except Exception as exc:
+                    logger.debug(f"Alert publish failed: {exc}")
+            self._blacklist.add(symbol, exchange)
 
         cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
         await self._redis.set_cooldown(symbol, cooldown_sec)
+        return _succeeded
     # ── Trade registration ────────────────────────────────────────
 
     def _register_trade(self, trade: TradeRecord) -> None:

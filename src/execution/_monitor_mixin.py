@@ -37,6 +37,19 @@ _DEFAULT_TAKER_FEE: Decimal = Decimal("0.00075")  # conservative fallback when f
 
 class _MonitorMixin(_ExitLogicMixin):
     async def _exit_monitor_loop(self) -> None:
+        # P1-2: Spawn a dedicated fast-path liquidation loop (3s cadence)
+        # so margin breaches are detected and closed well before the 10s
+        # main exit loop cycle. Supervised with a done-callback.
+        _liq_task = asyncio.create_task(
+            self._liquidation_fast_loop(), name="liquidation-fast-loop"
+        )
+        _liq_task.add_done_callback(
+            lambda t: (
+                logger.error(f"liquidation-fast-loop exited unexpectedly: {t.exception()}")
+                if not t.cancelled() and t.exception()
+                else None
+            )
+        )
         reconcile_counter = 0
         balance_snapshot_counter = 0  # snapshot every 180 cycles (30min)
         while self._running:
@@ -56,19 +69,85 @@ class _MonitorMixin(_ExitLogicMixin):
                     balance_snapshot_counter = 0
                     await self._journal_balance_snapshot()
 
-                for trade_id, trade in list(self._active_trades.items()):
-                    if not trade or trade.state != TradeState.OPEN:
-                        continue
-                    # Check for upgrade BEFORE normal exit check
-                    upgraded = await self._check_upgrade(trade)
-                    if upgraded:
-                        continue  # trade was closed, skip exit check
-                    await self._check_exit(trade)
+                # P2: run upgrade+exit checks for all open trades concurrently.
+                # Sequential was fine for 1 trade but with N trades on slow
+                # exchanges, one stuck REST call delayed every other trade's
+                # exit logic by up to N × timeout seconds (HOL blocking).
+                open_trades = [
+                    t for t in list(self._active_trades.values())
+                    if t and t.state == TradeState.OPEN
+                ]
+                if open_trades:
+                    await asyncio.gather(
+                        *[self._check_trade(t) for t in open_trades],
+                        return_exceptions=True,
+                    )
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
             await asyncio.sleep(10)
+        # Cleanup fast-path task when monitor loop exits
+        _liq_task.cancel()
+        try:
+            await _liq_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _liquidation_fast_loop(self) -> None:
+        """Dedicated 3-second fast-path for liquidation risk checks.
+
+        P1-2: Runs independently of the 10s main monitor loop so a margin breach
+        is detected and acted on within 3s rather than potentially 10+s.  Uses
+        asyncio.gather for all active trades in parallel with the same bounded
+        REST timeout as the main loop (8s via _MONITOR_REST_TIMEOUT).
+        """
+        while self._running:
+            try:
+                # Build validated list so gather tasks and results zip correctly.
+                valid: list[tuple] = []
+                for t in list(self._active_trades.values()):
+                    if not t or t.state != TradeState.OPEN:
+                        continue
+                    la = self._exchanges.get(t.long_exchange)
+                    sa = self._exchanges.get(t.short_exchange)
+                    if la and sa:
+                        valid.append((t, la, sa))
+
+                if valid:
+                    results = await asyncio.gather(
+                        *[self._check_liquidation_risk(t, la, sa) for t, la, sa in valid],
+                        return_exceptions=True,
+                    )
+                    for (t, _, _), result in zip(valid, results):
+                        if isinstance(result, Exception):
+                            logger.debug(
+                                f"[fast-liq] {t.symbol} check error: {result}"
+                            )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.error(f"Liquidation fast loop error: {exc}")
+            await asyncio.sleep(3)
+
+
+    async def _check_trade(self, trade: TradeRecord) -> None:
+        """Run upgrade-then-exit check for a single trade.
+
+        Extracted so _exit_monitor_loop can dispatch all trades in parallel
+        via asyncio.gather rather than sequentially (P2 HOL fix).
+        """
+        try:
+            upgraded = await self._check_upgrade(trade)
+            if not upgraded:
+                await self._check_exit(trade)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                f"[{trade.trade_id}] _check_trade error: {exc}",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
 
     async def _check_upgrade(self, trade: TradeRecord) -> bool:
         """Check if a significantly better opportunity exists.
@@ -428,11 +507,21 @@ class _MonitorMixin(_ExitLogicMixin):
                     },
                 )
                 short_adapter = self._exchanges.get(trade.short_exchange)
+                orphan_ok = True
                 if short_adapter:
-                    await self._close_orphan(
+                    orphan_ok = await self._close_orphan(
                         short_adapter, trade.short_exchange, trade.symbol,
                         OrderSide.BUY, {"filled": float(trade.short_qty)},
                     )
+                # P0-1: Only mark CLOSED if orphan close actually succeeded.
+                # If it failed, leave trade OPEN so reconcile retries next cycle.
+                if not orphan_ok:
+                    logger.error(
+                        f"[{trade.trade_id}] Orphan close FAILED for remaining short — "
+                        f"trade stays OPEN for next reconcile cycle",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_close_failed_keep_open"},
+                    )
+                    continue
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
                 await self._record_manual_close(trade)
@@ -452,11 +541,20 @@ class _MonitorMixin(_ExitLogicMixin):
                     },
                 )
                 long_adapter = self._exchanges.get(trade.long_exchange)
+                orphan_ok = True
                 if long_adapter:
-                    await self._close_orphan(
+                    orphan_ok = await self._close_orphan(
                         long_adapter, trade.long_exchange, trade.symbol,
                         OrderSide.SELL, {"filled": float(trade.long_qty)},
                     )
+                # P0-1: Only mark CLOSED if orphan close actually succeeded.
+                if not orphan_ok:
+                    logger.error(
+                        f"[{trade.trade_id}] Orphan close FAILED for remaining long — "
+                        f"trade stays OPEN for next reconcile cycle",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_close_failed_keep_open"},
+                    )
+                    continue
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
                 await self._record_manual_close(trade)

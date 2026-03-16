@@ -65,6 +65,33 @@ class _CloseMixin(_CloseFinalizeMixin):
             trade.exit_price_long = _h.extract_avg_price(long_fill)
             trade.exit_price_short = _h.extract_avg_price(short_fill)
 
+            # P1-3: Post-close dust reconcile.
+            # Verify both positions are actually flat. If a partial fill or
+            # exchange step-size residue was left, the position stays open
+            # technically — consuming margin and accumulating funding costs.
+            # We log a warning (not a fatal error) since the main risk guard
+            # delta loop will also catch unbalanced positions independently.
+            try:
+                _long_has_dust, _short_has_dust = await asyncio.gather(
+                    long_adapter.has_open_position(trade.symbol) if long_adapter else asyncio.sleep(0),
+                    short_adapter.has_open_position(trade.symbol) if short_adapter else asyncio.sleep(0),
+                    return_exceptions=True,
+                )
+                if _long_has_dust is True:
+                    logger.warning(
+                        f"[{trade.symbol}] DUST DETECTED on {trade.long_exchange} after close "
+                        f"— position not fully flat. Risk guard delta loop will flag this.",
+                        extra={"trade_id": trade.trade_id, "action": "dust_detected_long"},
+                    )
+                if _short_has_dust is True:
+                    logger.warning(
+                        f"[{trade.symbol}] DUST DETECTED on {trade.short_exchange} after close "
+                        f"— position not fully flat. Risk guard delta loop will flag this.",
+                        extra={"trade_id": trade.trade_id, "action": "dust_detected_short"},
+                    )
+            except Exception as _dust_exc:
+                logger.debug(f"[{trade.symbol}] Post-close dust check failed: {_dust_exc}")
+
             # ── Fallback: if exchange didn't return avg price ──
             # Priority: (1) trades API (actual fill), (2) ticker (last resort)
             if trade.exit_price_long is None and long_adapter:
@@ -420,13 +447,14 @@ class _CloseMixin(_CloseFinalizeMixin):
                 # One leg may have closed successfully while the other timed out.
                 # Leaving a naked directional position without attempting auto-close
                 # risks unlimited loss if the market moves against the open leg.
+                _orphan_ok = True
                 if _long_still_open and not _short_still_open and long_adapter:
                     logger.warning(
                         f"[{trade.trade_id}] Short closed but LONG still open — "
                         f"auto-closing orphaned LONG on {trade.long_exchange}",
                         extra={"trade_id": trade.trade_id, "action": "orphan_auto_close_long"},
                     )
-                    await self._close_orphan(
+                    _orphan_ok = await self._close_orphan(
                         long_adapter, trade.long_exchange, trade.symbol,
                         OrderSide.SELL, {"filled": float(trade.long_qty)},
                     )
@@ -436,19 +464,25 @@ class _CloseMixin(_CloseFinalizeMixin):
                         f"auto-closing orphaned SHORT on {trade.short_exchange}",
                         extra={"trade_id": trade.trade_id, "action": "orphan_auto_close_short"},
                     )
-                    await self._close_orphan(
+                    _orphan_ok = await self._close_orphan(
                         short_adapter, trade.short_exchange, trade.symbol,
                         OrderSide.BUY, {"filled": float(trade.short_qty)},
                     )
 
+                _state_msg = (
+                    "orphan leg auto-closed successfully"
+                    if _orphan_ok
+                    else "orphan leg close FAILED — position still open on exchange"
+                )
                 trade.state = TradeState.ERROR
                 await self._persist_trade(trade)
                 # Free exchange locks so a single failed close doesn't block the whole bot.
                 self._deregister_trade(trade)
                 logger.error(
-                    f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED "
-                    f"(long_open={_long_still_open} short_open={_short_still_open}, "
-                    f"exchange locks released, cooldown applied)",
+                    f"Trade {trade.trade_id} partially closed "
+                    f"({_state_msg}) — "
+                    f"long_open={_long_still_open} short_open={_short_still_open}. "
+                    f"Exchange locks released, cooldown applied.",
                     extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
                 )
                 # P2-3: Persist ERROR trade ID to Redis so it survives process restart

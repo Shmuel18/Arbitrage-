@@ -193,11 +193,18 @@ class RiskGuard:
 
     async def _panic_close(self, symbol: str, target_exchanges: set[str] | None = None) -> None:
         """Close all positions for a symbol.
-        
+
+        P1-1: Dispatches close orders to all target exchanges IN PARALLEL with
+        bounded timeout per order — was sequential and unbounded, which meant a
+        single stuck TCP connection could burn seconds while the exchange's own
+        liquidation engine was already running.
+
         If target_exchanges is provided, only close on those exchanges
         (avoids noisy errors on exchanges that don't list the symbol).
         Otherwise falls back to trying all exchanges.
         """
+        _PANIC_ORDER_TIMEOUT: float = 6.0  # hard wall per order — liquidation races are time-critical
+
         logger.warning(f"PANIC CLOSE triggered for {symbol}",
                        extra={"symbol": symbol, "action": "panic_close"})
 
@@ -208,28 +215,55 @@ class RiskGuard:
             else self._exchanges.all()
         )
 
-        for eid, adapter in exchanges_to_check.items():
-            try:
-                positions = await adapter.get_positions(symbol)
-                if not positions:
-                    continue
-                for pos in positions:
-                    close_side = OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY
-                    req = OrderRequest(
-                        exchange=eid,
-                        symbol=symbol,
-                        side=close_side,
-                        quantity=pos.quantity,
-                        reduce_only=True,
+        # ── Fetch positions in parallel ──────────────────────────
+        eid_list = list(exchanges_to_check.keys())
+        pos_results = await asyncio.gather(
+            *[exchanges_to_check[eid].get_positions(symbol) for eid in eid_list],
+            return_exceptions=True,
+        )
+
+        # Build close tasks for all open positions
+        close_tasks: list = []
+        close_meta: list[tuple[str, str, float]] = []  # (eid, side, qty)
+        for eid, result in zip(eid_list, pos_results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    f"Panic close: position fetch failed on {eid}/{symbol}: {result}",
+                    extra={"exchange": eid, "symbol": symbol},
+                )
+                continue
+            adapter = exchanges_to_check[eid]
+            for pos in result:
+                close_side = OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY
+                req = OrderRequest(
+                    exchange=eid,
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=pos.quantity,
+                    reduce_only=True,
+                )
+                close_tasks.append(
+                    asyncio.wait_for(adapter.place_order(req), timeout=_PANIC_ORDER_TIMEOUT)
+                )
+                close_meta.append((eid, close_side.value, float(pos.quantity)))
+
+        if not close_tasks:
+            logger.info(f"Panic close: no open positions found for {symbol}",
+                        extra={"symbol": symbol})
+        else:
+            # ── Dispatch ALL orders simultaneously ───────────────
+            close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
+            for (eid, side, qty), res in zip(close_meta, close_results):
+                if isinstance(res, Exception):
+                    logger.error(
+                        f"Panic close failed on {eid}/{symbol} ({side} {qty}): {res}",
+                        extra={"exchange": eid, "symbol": symbol},
                     )
-                    await adapter.place_order(req)
+                else:
                     logger.info(
-                        f"Panic-closed {pos.quantity} {symbol} on {eid}",
+                        f"Panic-closed {qty} {symbol} ({side}) on {eid}",
                         extra={"exchange": eid, "symbol": symbol, "action": "panic_closed"},
                     )
-            except Exception as e:
-                logger.error(f"Panic close failed on {eid}/{symbol}: {e}",
-                             extra={"exchange": eid, "symbol": symbol})
 
         # ── Verify positions are actually gone ───────────────────
         await asyncio.sleep(2)  # brief settle time for exchange state
