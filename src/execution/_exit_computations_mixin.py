@@ -84,7 +84,23 @@ class _ExitComputationsMixin:
             _funding_fetch_sides.append("short")
 
         if _funding_fetch_tasks:
-            _results = await asyncio.gather(*_funding_fetch_tasks, return_exceptions=True)
+            try:
+                # P1-1: Bound the funding-history REST calls.
+                # At T+0 after a payment, every bot in the world hammers the exchange API
+                # simultaneously.  Without a timeout, a slow response stalls the entire
+                # asyncio event loop for the OS TCP timeout (2-4 min), during which
+                # liquidation checks and PnL calculations are frozen.
+                _results = await asyncio.wait_for(
+                    asyncio.gather(*_funding_fetch_tasks, return_exceptions=True),
+                    timeout=_MONITOR_REST_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{trade.symbol}] Funding history fetch timed out after "
+                    f"{_MONITOR_REST_TIMEOUT}s — falling back to rate-based estimate",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
+                _results = [None] * len(_funding_fetch_tasks)
             for _side, _res in zip(_funding_fetch_sides, _results):
                 if _side == "long":
                     _real_long_hist = _res if isinstance(_res, dict) else None
@@ -416,6 +432,23 @@ class _ExitComputationsMixin:
         """
         tp = self._cfg.trading_params
 
+        # P1-2: Cache-grace guard — immediately after a funding payment fires,
+        # the WS cache may still show the just-fired timestamp as the "next" one
+        # (i.e., next_timestamp = now-5s).  If _next_funding_qualifies is called
+        # before the cache refreshes, it would incorrectly evaluate the PAST
+        # payment's rate/timestamp as the upcoming one and return a false True.
+        # Wait 60s for the cache to update before making an exit decision.
+        _CACHE_GRACE_AFTER_PAYMENT_S: float = 60.0
+        if trade._funding_paid_at:
+            _secs_since = (datetime.now(timezone.utc) - trade._funding_paid_at).total_seconds()
+            if 0 < _secs_since < _CACHE_GRACE_AFTER_PAYMENT_S:
+                logger.info(
+                    f"[{trade.symbol}] _next_funding_qualifies: cache grace — "
+                    f"{_secs_since:.0f}s since payment < {_CACHE_GRACE_AFTER_PAYMENT_S:.0f}s — hold",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+                )
+                return True  # optimistic stay — recheck after cache updates
+
         long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
         short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
         if not long_funding or not short_funding:
@@ -526,6 +559,22 @@ class _ExitComputationsMixin:
                     if pos.symbol != trade.symbol:
                         continue
                     leverage = pos.leverage or 5
+                    # P0-2: leverage=0 is how several exchanges (Gate.io, Bitget under cross-margin)
+                    # signal that the account is in CROSS-MARGIN mode.  The isolated-margin
+                    # formula (margin = notional / leverage) does NOT apply to cross-margin
+                    # accounts — the entire account equity backs all positions, so a loss on
+                    # any OTHER open position drains the buffer for this one.  We cannot compute
+                    # an accurate margin_ratio without the full account balance, so we fall back
+                    # to leverage=1 (100% isolated proxy — most conservative) and warn once.
+                    if pos.leverage == 0:
+                        leverage = 1
+                        logger.warning(
+                            f"[{trade.symbol}] {exchange} {side}: leverage=0 indicates CROSS-MARGIN. "
+                            f"Liquidation ratio computed with leverage=1 (isolated proxy — may "
+                            f"underestimate real risk). Configure isolated margin for accurate monitoring.",
+                            extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                                   "action": "cross_margin_fallback"},
+                        )
                     margin = float(pos.entry_price * pos.quantity) / leverage if pos.entry_price > 0 else 0
                     if margin <= 0:
                         continue

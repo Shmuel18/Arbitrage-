@@ -267,7 +267,7 @@ class RiskGuard:
 
         # ── Verify positions are actually gone ───────────────────
         await asyncio.sleep(2)  # brief settle time for exchange state
-        still_open = []
+        still_open: list[tuple[str, str, float]] = []
         for eid, adapter in exchanges_to_check.items():
             try:
                 remaining = await adapter.get_positions(symbol)
@@ -282,12 +282,48 @@ class RiskGuard:
 
         if still_open:
             breakdown = "; ".join(f"{eid}({side}): {qty}" for eid, side, qty in still_open)
-            logger.error(
-                f"⚠️ PANIC CLOSE INCOMPLETE — positions still open for {symbol}: {breakdown}. "
-                f"Manual intervention required!",
-                extra={"symbol": symbol, "action": "panic_close_incomplete",
-                        "data": {"remaining": still_open}},
+            logger.warning(
+                f"⚠️ PANIC CLOSE INCOMPLETE after first pass — positions still open for {symbol}: {breakdown}. "
+                f"Attempting second-pass flatten...",
+                extra={"symbol": symbol, "action": "panic_close_second_pass"},
             )
+            # P2: Second-pass flatten for any position that survived the first pass.
+            # The first-pass order may have timed out or been rejected while the
+            # exchange's own deleverage engine was running.  One immediate retry
+            # (still parallel + bounded) catches most of these transient failures.
+            _retry_tasks: list = []
+            _retry_meta: list[tuple[str, str, float]] = []
+            for eid, side_val, qty in still_open:
+                _adapter = exchanges_to_check.get(eid)
+                if not _adapter:
+                    continue
+                _close_side = OrderSide.SELL if side_val == OrderSide.BUY.value else OrderSide.BUY
+                _req = OrderRequest(
+                    exchange=eid,
+                    symbol=symbol,
+                    side=_close_side,
+                    quantity=Decimal(str(qty)),
+                    reduce_only=True,
+                )
+                _retry_tasks.append(
+                    asyncio.wait_for(_adapter.place_order(_req), timeout=_PANIC_ORDER_TIMEOUT)
+                )
+                _retry_meta.append((eid, side_val, qty))
+
+            if _retry_tasks:
+                _retry_results = await asyncio.gather(*_retry_tasks, return_exceptions=True)
+                for (eid, side_val, qty), res in zip(_retry_meta, _retry_results):
+                    if isinstance(res, Exception):
+                        logger.error(
+                            f"Panic close RETRY failed on {eid}/{symbol} ({side_val} {qty}): {res}. "
+                            f"Manual intervention required!",
+                            extra={"exchange": eid, "symbol": symbol, "action": "panic_close_retry_failed"},
+                        )
+                    else:
+                        logger.info(
+                            f"Panic close retry succeeded: {qty} {symbol} ({side_val}) on {eid}",
+                            extra={"exchange": eid, "symbol": symbol, "action": "panic_close_retry_ok"},
+                        )
         else:
             logger.info(
                 f"✅ Panic close verified — all {symbol} positions confirmed closed.",

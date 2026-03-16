@@ -174,6 +174,32 @@ class _UtilMixin:
             else:
                 return True  # nothing to close — treat as success
 
+        # P1-4: Quantize to exchange lot_size before placing the close order.
+        # GateIO, Bitget and OKX reject orders whose quantity is not an exact
+        # multiple of lot_size (e.g. 0.1234567 BTC when step=0.001).  Without
+        # quantization all three retry attempts fail with a validation error —
+        # not a network failure — triggering a false CRITICAL alert and blacklist.
+        _spec = (
+            adapter.get_cached_instrument_spec(symbol)
+            if hasattr(adapter, "get_cached_instrument_spec")
+            else None
+        )
+        if _spec and _spec.lot_size > 0:
+            _steps = int(filled_qty / _spec.lot_size)
+            _q_qty = _spec.lot_size * Decimal(str(_steps))
+            if _q_qty <= 0:
+                logger.warning(
+                    f"[{symbol}] _close_orphan: qty {filled_qty} < lot_size {_spec.lot_size} "
+                    f"on {exchange} — sub-minimal dust, treating as success",
+                )
+                return True  # sub-minimal residual — no order needed
+            if _q_qty != filled_qty:
+                logger.debug(
+                    f"[{symbol}] _close_orphan: qty quantized "
+                    f"{filled_qty} → {_q_qty} (lot_size={_spec.lot_size}) on {exchange}",
+                )
+            filled_qty = _q_qty
+
         req = OrderRequest(
             exchange=exchange,
             symbol=symbol,

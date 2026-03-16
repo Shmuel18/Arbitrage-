@@ -438,27 +438,43 @@ class _MonitorMixin(_ExitLogicMixin):
         if not exchanges_needed:
             return
 
-        # One REST call per exchange to get all positions
+        # P1-3: Fetch all exchanges in parallel with per-exchange failure isolation.
+        # Old code: sequential + fail-fast (any single exchange error aborted ALL
+        # reconciliation, meaning an OKX orphan went undetected because Bybit timed out).
+        # New code: parallel gather — only trades on the failed exchange are skipped;
+        # trades on exchanges with successful responses are still reconciled.
+        eid_list = [eid for eid in exchanges_needed if self._exchanges.get(eid)]
+        pos_results = await asyncio.gather(
+            *[self._exchanges.get(eid).get_positions() for eid in eid_list],
+            return_exceptions=True,
+        )
         exchange_positions: Dict[str, List[Position]] = {}
-        for exch_id in exchanges_needed:
-            adapter = self._exchanges.get(exch_id)
-            if not adapter:
-                continue
-            try:
-                positions = await adapter.get_positions()
-                exchange_positions[exch_id] = positions
-            except Exception as e:
+        failed_exchanges: set[str] = set()
+        for eid, result in zip(eid_list, pos_results):
+            if isinstance(result, Exception):
                 logger.warning(
-                    f"Reconcile: failed to fetch positions from {exch_id}: {e}",
-                    extra={"exchange": exch_id, "action": "reconcile_error"},
+                    f"Reconcile: failed to fetch positions from {eid}: {result}",
+                    extra={"exchange": eid, "action": "reconcile_error"},
                 )
-                # Don't act on incomplete data — skip this cycle entirely
-                return
+                failed_exchanges.add(eid)
+            else:
+                exchange_positions[eid] = result
 
         # Check each active trade against real positions
         for trade_id in list(self._active_trades):
             trade = self._active_trades.get(trade_id)
             if not trade or trade.state != TradeState.OPEN:
+                continue
+
+            # P1-3: If either exchange for this trade failed to respond, we cannot
+            # safely determine whether a leg is missing — skip to avoid false orphan
+            # detection on incomplete data.  The next reconcile cycle (30s) retries.
+            if trade.long_exchange in failed_exchanges or trade.short_exchange in failed_exchanges:
+                logger.debug(
+                    f"Reconcile: skipping {trade.trade_id} ({trade.symbol}) — "
+                    f"position data incomplete for "
+                    f"{trade.long_exchange if trade.long_exchange in failed_exchanges else trade.short_exchange}",
+                )
                 continue
 
             long_positions = exchange_positions.get(trade.long_exchange, [])

@@ -26,6 +26,18 @@ logger = get_logger("execution")
 
 class _CloseMixin(_CloseFinalizeMixin):
     async def _close_trade(self, trade: TradeRecord) -> None:
+        # P0-1: Gate on OPEN state to prevent double-close race.
+        # Both the liquidation fast-loop (3s) and the main monitor loop (10s)
+        # run concurrently for the same trade and both can trigger _close_trade
+        # in the same asyncio cycle.  Without this guard, _close_leg is called
+        # twice simultaneously — market orders are fire-and-forget and the
+        # second call can flip the position into an unintended reverse direction.
+        if trade.state != TradeState.OPEN:
+            logger.debug(
+                f"[{trade.trade_id}] _close_trade skipped — already {trade.state.value}",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return
         trade.state = TradeState.CLOSING
         await self._persist_trade(trade)
 
@@ -66,28 +78,38 @@ class _CloseMixin(_CloseFinalizeMixin):
             trade.exit_price_short = _h.extract_avg_price(short_fill)
 
             # P1-3: Post-close dust reconcile.
-            # Verify both positions are actually flat. If a partial fill or
-            # exchange step-size residue was left, the position stays open
-            # technically — consuming margin and accumulating funding costs.
-            # We log a warning (not a fatal error) since the main risk guard
-            # delta loop will also catch unbalanced positions independently.
+            # Verify both positions are actually flat.  If a partial fill or
+            # exchange step-size residue was left, actively try to close it
+            # via _close_orphan (reduce_only) rather than just logging.
+            # has_open_position() already uses lot_size/2 as threshold so
+            # pure ledger-rounding residuals (< half a step) are ignored.
             try:
                 _long_has_dust, _short_has_dust = await asyncio.gather(
                     long_adapter.has_open_position(trade.symbol) if long_adapter else asyncio.sleep(0),
                     short_adapter.has_open_position(trade.symbol) if short_adapter else asyncio.sleep(0),
                     return_exceptions=True,
                 )
-                if _long_has_dust is True:
+                if _long_has_dust is True and long_adapter:
                     logger.warning(
                         f"[{trade.symbol}] DUST DETECTED on {trade.long_exchange} after close "
-                        f"— position not fully flat. Risk guard delta loop will flag this.",
+                        f"— attempting cleanup close (reduce_only).",
                         extra={"trade_id": trade.trade_id, "action": "dust_detected_long"},
                     )
-                if _short_has_dust is True:
+                    # Use trade.long_qty as approximate qty; reduce_only ensures
+                    # the exchange closes only what is actually there.
+                    await self._close_orphan(
+                        long_adapter, trade.long_exchange, trade.symbol,
+                        OrderSide.SELL, {"filled": float(trade.long_qty)},
+                    )
+                if _short_has_dust is True and short_adapter:
                     logger.warning(
                         f"[{trade.symbol}] DUST DETECTED on {trade.short_exchange} after close "
-                        f"— position not fully flat. Risk guard delta loop will flag this.",
+                        f"— attempting cleanup close (reduce_only).",
                         extra={"trade_id": trade.trade_id, "action": "dust_detected_short"},
+                    )
+                    await self._close_orphan(
+                        short_adapter, trade.short_exchange, trade.symbol,
+                        OrderSide.BUY, {"filled": float(trade.short_qty)},
                     )
             except Exception as _dust_exc:
                 logger.debug(f"[{trade.symbol}] Post-close dust check failed: {_dust_exc}")
@@ -404,18 +426,30 @@ class _CloseMixin(_CloseFinalizeMixin):
             _long_still_open = True
             _short_still_open = True
             try:
-                if long_adapter:
-                    _live_long_pos = await long_adapter.get_positions(trade.symbol)
+                # P2-2: Parallel + bounded fetch for the ERROR-path reconcile.
+                # Sequential unbounded calls compound the risk: the exchange is
+                # already stressed (that's why _close_leg failed), so an OS-level
+                # TCP timeout (2-4 min) per call would freeze the event loop for
+                # 4-8 min, silencing every other trade's liquidation check.
+                _POST_RECONCILE_TIMEOUT: float = 8.0
+                _raw_long_pos, _raw_short_pos = await asyncio.wait_for(
+                    asyncio.gather(
+                        long_adapter.get_positions(trade.symbol) if long_adapter else asyncio.sleep(0),
+                        short_adapter.get_positions(trade.symbol) if short_adapter else asyncio.sleep(0),
+                        return_exceptions=True,
+                    ),
+                    timeout=_POST_RECONCILE_TIMEOUT,
+                )
+                if long_adapter and not isinstance(_raw_long_pos, BaseException):
                     _long_still_open = any(
                         abs(float(getattr(p, "quantity", 0) or 0)) > 1e-9
-                        for p in _live_long_pos
+                        for p in _raw_long_pos
                         if getattr(p, "side", None) == OrderSide.BUY
                     )
-                if short_adapter:
-                    _live_short_pos = await short_adapter.get_positions(trade.symbol)
+                if short_adapter and not isinstance(_raw_short_pos, BaseException):
                     _short_still_open = any(
                         abs(float(getattr(p, "quantity", 0) or 0)) > 1e-9
-                        for p in _live_short_pos
+                        for p in _raw_short_pos
                         if getattr(p, "side", None) == OrderSide.SELL
                     )
             except Exception as _rc_exc:
@@ -443,10 +477,26 @@ class _CloseMixin(_CloseFinalizeMixin):
                     0.0, 0.0, "estimate", None, None,
                 )
             else:
-                # P0-2: Before declaring ERROR, attempt to close the still-open leg.
-                # One leg may have closed successfully while the other timed out.
-                # Leaving a naked directional position without attempting auto-close
-                # risks unlimited loss if the market moves against the open leg.
+                # ── P0: Both legs still open ──────────────────────────────────────────
+                # Both close attempts returned no fill — likely a transient exchange
+                # outage.  DO NOT deregister.  Reset state to OPEN so the monitor
+                # loop retries _check_exit on the next tick.
+                # Only move to ERROR if ONE leg closed and the orphan-close fails
+                # (genuine partial state that requires manual intervention).
+                if _long_still_open and _short_still_open:
+                    trade.state = TradeState.OPEN
+                    await self._persist_trade(trade)
+                    logger.error(
+                        f"[{trade.trade_id}] Close failed — BOTH legs still open "
+                        f"({trade.long_exchange} + {trade.short_exchange}). "
+                        f"Resetting to OPEN so monitor retries on next cycle.",
+                        extra={"trade_id": trade.trade_id, "action": "close_both_legs_open_retry"},
+                    )
+                    cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
+                    await self._redis.set_cooldown(trade.symbol, cooldown_sec)
+                    return  # leave in active_trades — monitor will retry
+
+                # ── P0-2: One leg closed, the other still open → auto-close orphan ──
                 _orphan_ok = True
                 if _long_still_open and not _short_still_open and long_adapter:
                     logger.warning(
@@ -469,22 +519,29 @@ class _CloseMixin(_CloseFinalizeMixin):
                         OrderSide.BUY, {"filled": float(trade.short_qty)},
                     )
 
-                _state_msg = (
-                    "orphan leg auto-closed successfully"
-                    if _orphan_ok
-                    else "orphan leg close FAILED — position still open on exchange"
-                )
-                trade.state = TradeState.ERROR
-                await self._persist_trade(trade)
-                # Free exchange locks so a single failed close doesn't block the whole bot.
-                self._deregister_trade(trade)
-                logger.error(
-                    f"Trade {trade.trade_id} partially closed "
-                    f"({_state_msg}) — "
-                    f"long_open={_long_still_open} short_open={_short_still_open}. "
-                    f"Exchange locks released, cooldown applied.",
-                    extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
-                )
+                # ── P1: Orphan close succeeded → finalize as CLOSED, not ERROR ─────
+                # The trade is now flat.  Recording it as ERROR would be a lie:
+                # there is no open exposure, no manual action needed, and the
+                # spurious ERROR state would suppress future trades on this symbol.
+                if _orphan_ok:
+                    logger.info(
+                        f"[{trade.trade_id}] Orphan leg auto-closed successfully — "
+                        f"trade is flat. Finalizing as CLOSED.",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_closed_finalize"},
+                    )
+                    trade.state = TradeState.CLOSED
+                    trade.closed_at = datetime.now(timezone.utc)
+                    await self._finalize_and_publish_close(
+                        trade,
+                        trade.fees_paid_total or Decimal("0"),
+                        long_adapter,
+                        short_adapter,
+                        0.0, 0.0, "estimate", None, None,
+                    )
+                    return  # done — don't fall through to ERROR
+
+                # ── Genuine ERROR: orphan close failed ───────────────────────────────
+                _state_msg = "orphan leg close FAILED — position still open on exchange"
                 # P2-3: Persist ERROR trade ID to Redis so it survives process restart
                 # and remains visible to operators even if the alert publish fails.
                 # Key: trinity:error_trades (Redis set, 7-day TTL).

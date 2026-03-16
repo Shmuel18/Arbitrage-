@@ -467,7 +467,17 @@ class _MarketDataMixin:
         """
         try:
             positions = await self.get_positions(symbol)
-            return any(abs(float(p.quantity)) > 1e-12 for p in positions)
+            # P2-1: Use lot_size/2 as the minimum meaningful threshold instead of 1e-12.
+            # Several exchanges (Gate.io, Bitget, OKX) return tiny ledger-rounding residuals
+            # (~1e-6 to 1e-9 base units) after a close that are NOT real positions — they
+            # don't consume margin and dissolve on the next settlement.  With 1e-12 every
+            # normal close fires DUST DETECTED, flooding logs and drowning real alerts.
+            # Using lot_size/2 means: "anything smaller than half a tradeable step is noise."
+            spec = self.get_cached_instrument_spec(symbol)
+            _min_threshold: float = (
+                float(spec.lot_size) / 2 if (spec and spec.lot_size > 0) else 1e-6
+            )
+            return any(abs(float(p.quantity)) > _min_threshold for p in positions)
         except Exception as exc:
             logger.debug(
                 f"has_open_position({symbol}) failed on {self.exchange_id}: {exc}"
