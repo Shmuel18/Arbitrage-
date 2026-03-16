@@ -313,9 +313,19 @@ class _ScannerEvaluatorMixin:
             tp.min_funding_spread, tp.weak_min_funding_excess,
         )
 
-        # Hard safety policy: never ENTER when live entry basis is adverse.
-        # Positive price_spread means ask_long > bid_short (buy expensive, sell cheap).
-        _adverse_price_gate = _live_basis_available and price_spread_pct > Decimal("0")
+        # Safety policy: reject when live entry basis is so adverse that no
+        # tier classification could justify it.  MEDIUM/WEAK tiers already
+        # account for a positive price spread (MEDIUM: spread ≤ total_cost,
+        # WEAK: funding excess covers it).  The old `> 0` check made those
+        # tiers dead code — any micro-cap cross-exchange spread oscillating
+        # around zero would randomly reject perfectly viable entries.
+        # The execution layer (max_entry_basis_spread_pct) provides a second
+        # safety net at order-placement time.
+        _adverse_price_gate = (
+            _live_basis_available
+            and price_spread_pct > Decimal("0")
+            and entry_tier is None          # tier classification already rejected
+        )
         if _adverse_price_gate:
             entry_tier = "adverse"
 
@@ -758,6 +768,11 @@ class _ScannerEvaluatorMixin:
 
         price = Decimal(str(long_ticker.get("last", 0)))
         if price <= 0:
+            logger.warning(
+                f"[{symbol}] _build_opportunity skipped: {long_eid} ticker has no "
+                f"valid last price (got {long_ticker.get('last', 'MISSING')})",
+                extra={"symbol": symbol, "action": "build_opportunity_no_price"},
+            )
             return None
         quantity = notional / price
 

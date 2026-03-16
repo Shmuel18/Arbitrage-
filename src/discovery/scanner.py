@@ -139,6 +139,11 @@ class Scanner(_ScannerEvaluatorMixin):
         # Mini-OB refresh: (exchange_id, symbol) pairs to keep fresh every 3s.
         self._ob_refresh_targets: set[tuple[str, str]] = set()
         self._ob_refresh_task: Optional[asyncio.Task] = None
+        # Near-window watch: symbols approaching the entry window that need
+        # more frequent evaluation than the ~3-minute full scan cycle provides.
+        # The hot-scan loop injects these on its 1s timeout so they are
+        # re-evaluated every second until they enter (or pass) the window.
+        self._near_window_watch: set[str] = set()
 
     def _should_emit_opportunity_log(
         self,
@@ -573,17 +578,58 @@ class Scanner(_ScannerEvaluatorMixin):
                                 f"🎯 Sending BEST for {opp.long_exchange}↔{opp.short_exchange}: "
                                 f"{opp.symbol} net={opp.net_edge_pct:.4f}%"
                             )
-                            await callback(opp)
+                            _task_name = (
+                                f"scan-entry:{opp.symbol}"
+                                f"|{opp.long_exchange}|{opp.short_exchange}"
+                            )
+                            _t = asyncio.create_task(
+                                callback(opp), name=_task_name,
+                            )
+                            _t.add_done_callback(_hot_entry_task_done)
                     else:
                         # Send top qualified opportunities — controller handles further filtering
                         for opp in qualified_opps[:5]:
-                            await callback(opp)
+                            _task_name = (
+                                f"scan-entry:{opp.symbol}"
+                                f"|{opp.long_exchange}|{opp.short_exchange}"
+                            )
+                            _t = asyncio.create_task(
+                                callback(opp), name=_task_name,
+                            )
+                            _t.add_done_callback(_hot_entry_task_done)
                 else:
                     if self._publisher:
                         await self._publisher.publish_opportunities([])
                         if time.time() - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                             self._last_top_log_ts = time.time()
                             await self._publisher.publish_log("INFO", "Top 5 updated: 0 opportunities found")
+
+                # ── Near-window watch ────────────────────────────────
+                # Identify display-only candidates whose funding enters the
+                # 15-min entry window within the next 5 minutes.  The hot-scan
+                # loop injects these on its 1s timer so they are re-evaluated
+                # every second — much faster than the ~3-min full scan cycle.
+                _tp_nw = self._cfg.trading_params
+                _now_ms_nw = time.time() * 1000
+                _window_min_nw = float(_tp_nw.narrow_entry_window_minutes)
+                _margin_min_nw = 5.0
+                _old_watch = self._near_window_watch
+                self._near_window_watch = set()
+                for o in (all_opps if opps else []):
+                    if (not o.qualified
+                            and float(o.net_edge_pct) >= float(_tp_nw.min_funding_spread)
+                            and o.entry_tier not in (None, "adverse")
+                            and o.next_funding_ms is not None):
+                        _mins_nw = (o.next_funding_ms - _now_ms_nw) / 60_000
+                        if 0 < _mins_nw <= _window_min_nw + _margin_min_nw:
+                            self._near_window_watch.add(o.symbol)
+                if self._near_window_watch and self._near_window_watch != _old_watch:
+                    logger.info(
+                        f"⏰ {len(self._near_window_watch)} symbol(s) approaching entry window "
+                        f"— fast-tracking via hot-scan: "
+                        f"{sorted(self._near_window_watch)[:5]}",
+                        extra={"action": "near_window_watch"},
+                    )
             except asyncio.CancelledError:
                 return
             except Exception as e:
@@ -631,20 +677,31 @@ class Scanner(_ScannerEvaluatorMixin):
         while self._running:
             try:
                 # Block until at least one update arrives (or 1s timeout to recheck _running)
+                _got_ws_tick = False
                 try:
                     _, first_sym = await asyncio.wait_for(self._hot_queue.get(), timeout=1.0)
+                    _got_ws_tick = True
                 except asyncio.TimeoutError:
-                    continue
+                    # No WS tick — but near-window candidates still need evaluation.
+                    if not self._near_window_watch:
+                        continue
 
                 # Collect all updates that arrive within the debounce window
-                dirty: set[str] = {first_sym}
+                dirty: set[str] = {first_sym} if _got_ws_tick else set()
                 await asyncio.sleep(debounce_ms)
-                while not self._hot_queue.empty():
-                    try:
-                        _, sym = self._hot_queue.get_nowait()
-                        dirty.add(sym)
-                    except asyncio.QueueEmpty:
-                        break
+                if _got_ws_tick:
+                    while not self._hot_queue.empty():
+                        try:
+                            _, sym = self._hot_queue.get_nowait()
+                            dirty.add(sym)
+                        except asyncio.QueueEmpty:
+                            break
+
+                # Timer-based: inject near-window candidates that need fast-tracking.
+                # These micro-cap symbols rarely get WS ticks but need second-level
+                # evaluation to catch the exact moment funding enters the window.
+                if self._near_window_watch:
+                    dirty |= self._near_window_watch
 
                 # Bail early if common_symbols not yet built
                 if not self._common_symbols_cache:
@@ -836,7 +893,7 @@ class Scanner(_ScannerEvaluatorMixin):
 
         async def bounded_scan(symbol):
             async with semaphore:
-                return await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols)
+                return await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols, cheap=True)
 
         gathered = await asyncio.gather(*[bounded_scan(s) for s in symbol_list], return_exceptions=True)
 

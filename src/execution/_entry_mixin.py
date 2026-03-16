@@ -120,11 +120,15 @@ class _EntryMixin(_EntryOrdersMixin):
                 return
 
         # ── Hard price-spread gate (defense-in-depth) ──
-        # Positive spread = buy expensive, sell cheap → never enter.
-        if opp.price_spread_pct > Decimal("0"):
+        # The scanner already classifies tiers: TOP (spread ≤ 0), MEDIUM (spread ≤ cost),
+        # WEAK (funding excess covers spread).  Trust the tier classification here
+        # and only reject when the spread is truly uncovered (no tier or adverse).
+        # Live VWAP check (_check_pre_entry_liquidity) and post-entry basis check
+        # (max_entry_basis_spread_pct=0.15%) provide additional defense.
+        if opp.entry_tier in (None, "adverse") and opp.price_spread_pct > Decimal("0"):
             logger.info(
                 f"🚫 Skipping {opp.symbol}: adverse price spread "
-                f"{float(opp.price_spread_pct):+.4f}% (hard block)"
+                f"{float(opp.price_spread_pct):+.4f}% (no qualifying tier)"
             )
             return
 
