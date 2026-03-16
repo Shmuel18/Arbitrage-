@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import socket
 import sys
 
 import uvicorn
@@ -27,8 +28,46 @@ from src.api.publisher import APIPublisher
 
 logger = get_logger("main")
 
+_WS_NOISE_PHRASES = (
+    "ping-pong keepalive",
+    "closing code 1006",
+    "closing code 1000",
+    "closing code 1001",
+    "cannot write to closing transport",
+    "the specified network name is no longer available",
+)
+
+
+def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Suppress noisy 'Future exception was never retrieved' from ccxt WS internals.
+
+    ccxt spawns internal asyncio Futures for ping-pong keepalive. When the
+    WebSocket disconnects those futures raise RequestTimeout / NetworkError but
+    nothing awaits them, so Python would normally spam the console. We demote
+    those to DEBUG and let everything else go to the default handler.
+    """
+    exc = context.get("exception")
+    msg = context.get("message", "")
+
+    _msg_lower = msg.lower()
+    if exc is not None and (
+        "future exception was never retrieved" in _msg_lower
+        or "task exception was never retrieved" in _msg_lower
+        or "accept failed on a socket" in _msg_lower
+    ):
+        exc_str = str(exc).lower()
+        if any(phrase in exc_str for phrase in _WS_NOISE_PHRASES):
+            if logger.isEnabledFor(10):  # DEBUG
+                logger.debug(f"[WS noise suppressed] {exc}")
+            return
+
+    loop.default_exception_handler(context)
+
 
 async def main() -> None:
+    # ── Suppress ccxt WS ping-pong noise ─────────────────────────
+    asyncio.get_running_loop().set_exception_handler(_asyncio_exception_handler)
+
     # ── Config ───────────────────────────────────────────────────
     cfg = init_config()
     cfg.validate_safety()
@@ -141,32 +180,54 @@ async def main() -> None:
     # Inject bot Redis client into FastAPI application state for route DI.
     api_app.state.redis_client = redis
 
-    uvicorn_config = uvicorn.Config(
-        api_app, host="0.0.0.0", port=8000,
-        log_level="warning",   # suppress noisy access logs
-        lifespan="off",        # we manage lifecycle ourselves (Redis already connected)
-        ws_ping_interval=60,   # ping every 60s (default 20) — tolerates event-loop congestion
-        ws_ping_timeout=60,    # wait 60s for pong (default 20) — avoids premature disconnects
-    )
-    uvicorn_server = uvicorn.Server(uvicorn_config)
+    # Probe port 8000 before attempting to bind.  If an external API server
+    # (e.g. the VS Code "Run API Server" task) is already listening, skip the
+    # embedded server rather than crashing with OSError / SystemExit(1).
+    def _port_in_use(host: str, port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as _s:
+            try:
+                _s.bind((host, port))
+                return False
+            except OSError:
+                return True
 
-    api_task = asyncio.create_task(uvicorn_server.serve(), name="api-server")
-    # Start the WebSocket broadcast loop (extracted to BroadcastService)
-    broadcast_svc = BroadcastService(ws_manager, redis)
-    broadcast_task = asyncio.create_task(
-        broadcast_svc.run_forever(), name="ws-broadcast",
-    )
+    uvicorn_server = None
+    api_task = None
+    broadcast_task = None
 
-    def _broadcast_done(t: asyncio.Task) -> None:
-        if t.cancelled():
-            return
-        exc = t.exception()
-        if exc:
-            logger.error(f"Task {t.get_name()} failed: {exc}")
+    if _port_in_use("0.0.0.0", 8000):
+        logger.warning(
+            "Port 8000 already in use — skipping embedded API server. "
+            "An external API server is likely running.",
+            extra={"action": "api_skipped"},
+        )
+    else:
+        uvicorn_config = uvicorn.Config(
+            api_app, host="0.0.0.0", port=8000,
+            log_level="warning",   # suppress noisy access logs
+            lifespan="off",        # we manage lifecycle ourselves (Redis already connected)
+            ws_ping_interval=60,   # ping every 60s (default 20) — tolerates event-loop congestion
+            ws_ping_timeout=60,    # wait 60s for pong (default 20) — avoids premature disconnects
+        )
+        uvicorn_server = uvicorn.Server(uvicorn_config)
 
-    broadcast_task.add_done_callback(_broadcast_done)
-    logger.info("Embedded API server started on port 8000",
-                extra={"action": "api_started"})
+        api_task = asyncio.create_task(uvicorn_server.serve(), name="api-server")
+        # Start the WebSocket broadcast loop (extracted to BroadcastService)
+        broadcast_svc = BroadcastService(ws_manager, redis)
+        broadcast_task = asyncio.create_task(
+            broadcast_svc.run_forever(), name="ws-broadcast",
+        )
+
+        def _broadcast_done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc:
+                logger.error(f"Task {t.get_name()} failed: {exc}")
+
+        broadcast_task.add_done_callback(_broadcast_done)
+        logger.info("Embedded API server started on port 8000",
+                    extra={"action": "api_started"})
 
     # ── Shutdown signal ──────────────────────────────────────────
     shutdown_event = asyncio.Event()
@@ -200,13 +261,19 @@ async def main() -> None:
     scanner.stop()
     scan_task.cancel()
     status_task.cancel()
-    broadcast_task.cancel()
-    uvicorn_server.should_exit = True
-    await asyncio.gather(scan_task, status_task, broadcast_task, return_exceptions=True)
+    if broadcast_task is not None:
+        broadcast_task.cancel()
+    if uvicorn_server is not None:
+        uvicorn_server.should_exit = True
+    tasks_to_gather = [scan_task, status_task]
+    if broadcast_task is not None:
+        tasks_to_gather.append(broadcast_task)
+    await asyncio.gather(*tasks_to_gather, return_exceptions=True)
     # Give uvicorn a moment to close sockets
     await asyncio.sleep(0.5)
-    api_task.cancel()
-    await asyncio.gather(api_task, return_exceptions=True)
+    if api_task is not None:
+        api_task.cancel()
+        await asyncio.gather(api_task, return_exceptions=True)
 
     # Close all open positions before exiting
     await controller.close_all_positions()

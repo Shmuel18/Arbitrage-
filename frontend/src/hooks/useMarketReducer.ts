@@ -51,6 +51,7 @@ export interface Opportunity {
   immediate_net_pct?: number;
   entry_tier?: string | null;
   price_spread_pct?: number | null;
+  stale_price?: boolean;
   [k: string]: unknown;
 }
 
@@ -246,22 +247,24 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         if (!d.opportunities) return prev.opportunities;
         const prevOps = prev.opportunities?.opportunities || [];
         const newOps = d.opportunities.opportunities || [];
-        if (prevOps.length !== newOps.length) return d.opportunities;
-        if (prevOps.length === 0) return prev.opportunities;
-        const pFirst = prevOps[0];
-        const nFirst = newOps[0];
-        const pLast = prevOps[prevOps.length - 1];
-        const nLast = newOps[newOps.length - 1];
-        if (
-          pFirst?.symbol === nFirst?.symbol &&
-          pFirst?.long_exchange === nFirst?.long_exchange &&
-          pLast?.symbol === nLast?.symbol &&
-          pLast?.long_exchange === nLast?.long_exchange &&
-          prev.opportunities?.count === d.opportunities.count &&
-          // Also compare net_pct of first + last — catches rate changes with same set of symbols
-          pFirst?.net_pct === nFirst?.net_pct &&
-          pLast?.net_pct === nLast?.net_pct
-        ) {
+        if (prevOps.length === 0 && newOps.length === 0) return prev.opportunities;
+        // Compare the displayed list (top 5) by fingerprint — ignore the total count
+        // which fluctuates every scan cycle by ±10 and causes constant re-renders.
+        // Build a stable fingerprint that is:
+        //  • order-independent (sort keys before joining) — rank shuffles from
+        //    price_spread_pct tiebreaking don't count as a change
+        //  • coarse on net_pct (0.1 % resolution) — avoids flicker from tiny
+        //    funding-rate drift between 8-hour resets
+        //  • sensitive to stale_price and qualified flags — real status changes
+        //    do trigger an update
+        const fingerprint = (ops: Opportunity[]) => {
+          const keys = ops.slice(0, 5).map(o =>
+            `${o.symbol}|${o.long_exchange}|${o.short_exchange}` +
+            `|${o.stale_price ? 1 : 0}|${o.qualified ? 1 : 0}|${((o.net_pct ?? 0) * 10 | 0)}`
+          );
+          return keys.sort().join(',');
+        };
+        if (fingerprint(prevOps) === fingerprint(newOps)) {
           return prev.opportunities;
         }
         return d.opportunities;

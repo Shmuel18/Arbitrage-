@@ -106,9 +106,27 @@ class StatusPublisher:
                 total_val = bal.get("total")
                 if isinstance(total_val, dict):
                     total_val = total_val.get("USDT")
+                free_val = bal.get("free", 0)
+                used_val = bal.get("used", 0)
+
                 if total_val is None:
-                    total_val = bal.get("free", 0)
+                    total_val = free_val
+
                 value = float(total_val or 0)
+                if value <= 0:
+                    try:
+                        recomputed = float(free_val or 0) + float(used_val or 0)
+                    except (TypeError, ValueError):
+                        recomputed = 0.0
+                    if recomputed > 0:
+                        value = recomputed
+
+                if value <= 0:
+                    cached = self._last_good_balances.get(eid, 0.0)
+                    if cached > 0:
+                        logger.debug(f"Using cached balance for {eid}: {cached:.2f} (zero/invalid payload)")
+                        return eid, cached
+
                 if value > 0:
                     self._last_good_balances[eid] = value
                 return eid, value

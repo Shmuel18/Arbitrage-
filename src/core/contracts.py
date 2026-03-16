@@ -134,6 +134,7 @@ class OpportunityCandidate:
     # Tier-based entry strategy
     entry_tier: Optional[str] = None       # TOP / MEDIUM / WEAK (see EntryTier)
     price_spread_pct: Decimal = Decimal("0")  # cross-exchange price diff % (positive = favorable)
+    stale_price: bool = False              # True when prices are too old to trust for entry, display-only
 
 
 # ── Trade record ─────────────────────────────────────────────────

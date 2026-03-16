@@ -64,12 +64,12 @@ class _LifecycleMixin:
             "options": {
                 "defaultType": self._cfg.get("default_type", "swap"),
                 # adjustForTimeDifference + load_time_difference() at connect time
-                # compensate for clock skew automatically — so we can keep
-                # recvWindow at the Binance-recommended minimum (5000ms).
-                # A smaller window reduces the replay-attack surface: any
-                # intercepted signed request becomes invalid after 5 seconds.
+                # compensate for clock skew automatically. In practice, under
+                # exchange/API congestion a 5s signed-request window is too
+                # tight for long-running bots and can trigger false timestamp
+                # drift rejections (notably on Bybit) even after clock sync.
                 "adjustForTimeDifference": True,
-                "recvWindow": 5000,
+                "recvWindow": 10000,
             },
         }
         if pw := self._cfg.get("api_passphrase"):

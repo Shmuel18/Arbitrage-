@@ -18,6 +18,7 @@ from src.core.logging import get_logger
 from src.discovery.calculator import calculate_fees
 
 _ZERO = Decimal("0")
+_HUNDRED = Decimal("100")
 
 if TYPE_CHECKING:
     pass  # all attribute access via self (mixin pattern)
@@ -151,7 +152,16 @@ class _ExitComputationsMixin:
                     extra={"trade_id": trade.trade_id},
                 )
                 _long_usd = -_long_usd
-                trade._actual_long_funding_sum = -(trade._actual_long_funding_sum)
+                # P2-1: Do NOT negate the cumulative tracker — that corrupts the delta
+                # used on the NEXT payment: _long_usd_n = total_n - prev_sum, and
+                # negating prev_sum doubles the base, inflating all future deltas.
+                # Instead, reset to zero so the next payment starts from scratch.
+                trade._actual_long_funding_sum = _ZERO
+                logger.warning(
+                    f"[{trade.symbol}] Funding long tracker reset after sign correction "
+                    f"(prev_sum invalidated)",
+                    extra={"trade_id": trade.trade_id},
+                )
 
         if _short_actual_used and _short_usd != _ZERO and abs(_short_rate_for_sign) > 0.00005:
             _expect_short_positive = _short_rate_for_sign > 0
@@ -163,7 +173,13 @@ class _ExitComputationsMixin:
                     extra={"trade_id": trade.trade_id},
                 )
                 _short_usd = -_short_usd
-                trade._actual_short_funding_sum = -(trade._actual_short_funding_sum)
+                # P2-1: Same fix as long side — reset rather than negate the cumulative.
+                trade._actual_short_funding_sum = _ZERO
+                logger.warning(
+                    f"[{trade.symbol}] Funding short tracker reset after sign correction "
+                    f"(prev_sum invalidated)",
+                    extra={"trade_id": trade.trade_id},
+                )
 
         # ── Cross-check: compare exchange amount vs rate-based estimate ──
         if _long_actual_used and abs(_long_rate_for_sign) > 0.00005:
@@ -414,9 +430,8 @@ class _ExitComputationsMixin:
             )
             return False
 
-        _HUNDRED = Decimal("100")
-        imminent_income_pct = Decimal("0")
-        imminent_cost_pct = Decimal("0")
+        imminent_income_pct = _ZERO
+        imminent_cost_pct = _ZERO
         if long_imminent:
             imminent_income_pct += abs(long_rate) * _HUNDRED
         if short_imminent:

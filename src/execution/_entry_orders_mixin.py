@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 
 logger = get_logger("execution")
 
+_ONE: Decimal = Decimal("1")
+_FALLBACK_LOT: Decimal = Decimal("0.001")  # last-resort lot step when spec is missing
+
 
 class _EntryOrdersMixin:
     """Order-placement helpers for trade entry — inherited by _EntryMixin."""
@@ -54,11 +57,17 @@ class _EntryOrdersMixin:
             long_adapter.ensure_trading_settings(opp.symbol),
             short_adapter.ensure_trading_settings(opp.symbol),
         )
-
-        # ── Mark grace period BEFORE placing first order ─────────
-        if self._risk_guard:
-            self._risk_guard.mark_trade_opened(opp.symbol)
-            logger.info(f"✅ Grace period activated for {opp.symbol} (60s delta skip)")
+        # ── Pre-entry order book depth + VWAP check (P0-2) ──────────────
+        # Placed HERE (after settings, immediately before the first order) to
+        # minimise the adverse-selection window: scanner snapshot → settings
+        # → FRESH L1 snapshot → first order. The prior location (before sizing
+        # and settings) left a 400ms–1.4s gap during which price could move.
+        if not await self._check_pre_entry_liquidity(opp, long_adapter, short_adapter, order_qty):
+            return None
+        # NOTE: grace period (mark_trade_opened) is set AFTER both legs fill
+        # — see below the "🔓 Trade FULLY OPEN" log. Setting it here (before any
+        # orders) created a 60-second delta-skip window while long was open
+        # and short had not yet been placed (P0-2).
 
         # ── Place long order ─────────────────────────────────────
         long_fill = await self._place_with_timeout(
@@ -111,6 +120,11 @@ class _EntryOrdersMixin:
                 extra={"symbol": opp.symbol, "exchange": opp.long_exchange, "action": "zero_fill"},
             )
             await self._redis.set_cooldown(opp.symbol, 300)
+            # P2: Zero-fill is exchange-specific (the long exchange rejected the order);
+            # route cooldown prevents retry on this pair, symbol stays open for other routes.
+            await self._redis.set_route_cooldown(
+                opp.symbol, opp.long_exchange, opp.short_exchange, 300, reason="zero_fill_long",
+            )
             return None
 
         long_adapter.update_taker_fee_from_fill(opp.symbol, long_fill)
@@ -174,6 +188,20 @@ class _EntryOrdersMixin:
                     long_adapter, opp.long_exchange, opp.symbol,
                     OrderSide.SELL, long_fill, long_actual_filled,
                 )
+                # Journal the ghost trade so it appears in history
+                _orphan_price = _h.extract_avg_price(long_fill) or opp.reference_price
+                _orphan_notional = float(_orphan_price * long_actual_filled) if _orphan_price else 0.0
+                _orphan_fee_est = float(long_actual_filled * _orphan_price * Decimal("0.001")) if _orphan_price else 0.0
+                self._journal.event(
+                    "ghost_trade",
+                    symbol=opp.symbol,
+                    long_exchange=opp.long_exchange,
+                    short_exchange=opp.short_exchange,
+                    reason="short_leg_failed",
+                    qty=float(long_actual_filled),
+                    notional=_orphan_notional,
+                    estimated_loss=_orphan_fee_est * 2,
+                )
                 return None
 
         # ── Zero-fill guard (short) ───────────────────────────────
@@ -200,6 +228,16 @@ class _EntryOrdersMixin:
             f"SHORT({opp.short_exchange})={short_actual_filled} — "
             f"Expecting delta=0 in next position fetch"
         )
+        # P0-2: Mark grace period only AFTER both legs are confirmed hedged.
+        # Activating the grace period before the long order (old location) left
+        # the risk guard blind for up to 60 s while a naked long was open (short
+        # might still fail or time out). Bilateral hedge is proven at this point.
+        if self._risk_guard:
+            self._risk_guard.mark_trade_opened(opp.symbol)
+            logger.info(
+                f"✅ [{opp.symbol}] Grace period activated (60s delta skip) "
+                f"— bilateral hedge confirmed"
+            )
 
         # ── Extract fill quantities and prices ────────────────────
         long_filled_qty = Decimal(str(long_fill["filled"]))
@@ -213,14 +251,16 @@ class _EntryOrdersMixin:
                 t = await long_adapter.get_ticker(opp.symbol)
                 entry_price_long = Decimal(str(t.get("last", 0)))
                 logger.info(f"[{opp.symbol}] Long entry price from ticker: {entry_price_long}")
-            except Exception:
+            except Exception as _e:
+                logger.debug(f"[{opp.symbol}] Long ticker fallback failed: {_e} — using reference_price")
                 entry_price_long = opp.reference_price
         if entry_price_short is None:
             try:
                 t = await short_adapter.get_ticker(opp.symbol)
                 entry_price_short = Decimal(str(t.get("last", 0)))
                 logger.info(f"[{opp.symbol}] Short entry price from ticker: {entry_price_short}")
-            except Exception:
+            except Exception as _e:
+                logger.debug(f"[{opp.symbol}] Short ticker fallback failed: {_e} — using reference_price")
                 entry_price_short = opp.reference_price
 
         # Refresh specs (in case cache was stale before)
@@ -296,14 +336,23 @@ class _EntryOrdersMixin:
                 )
                 trim_fill = await self._place_with_timeout(long_adapter, trim_req)
                 if trim_fill:
+                    # P0-1: Never use `else excess` fallback — a zero-fill on the trim
+                    # is a real failure.  Set trimmed=0 so P0-3 residual check aborts.
                     _trim_raw = float(trim_fill.get("filled", 0))
-                    trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
-                    long_filled_qty -= trimmed
-                    entry_fees += _h.extract_fee(trim_fill, long_spec.taker_fee)
-                    logger.info(
-                        f"✅ Delta corrected: trimmed {trimmed} on {opp.long_exchange}, "
-                        f"L={long_filled_qty} S={short_filled_qty} now balanced"
-                    )
+                    trimmed = Decimal(str(_trim_raw))
+                    if trimmed > 0:
+                        long_filled_qty -= trimmed
+                        entry_fees += _h.extract_fee(trim_fill, long_spec.taker_fee)
+                        logger.info(
+                            f"✅ Delta corrected: trimmed {trimmed} on {opp.long_exchange}, "
+                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ DELTA CORRECTION ZERO-FILL for {opp.symbol} — "
+                            f"trim order accepted but filled=0 (unhedged {excess} on "
+                            f"{opp.long_exchange}) — P0-3 residual check will abort"
+                        )
                 else:
                     logger.error(
                         f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
@@ -330,14 +379,23 @@ class _EntryOrdersMixin:
                 )
                 trim_fill = await self._place_with_timeout(short_adapter, trim_req)
                 if trim_fill:
+                    # P0-1: Never use `else excess` fallback — a zero-fill on the trim
+                    # is a real failure.  Set trimmed=0 so P0-3 residual check aborts.
                     _trim_raw = float(trim_fill.get("filled", 0))
-                    trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
-                    short_filled_qty -= trimmed
-                    entry_fees += _h.extract_fee(trim_fill, short_spec.taker_fee)
-                    logger.info(
-                        f"✅ Delta corrected: trimmed {trimmed} on {opp.short_exchange}, "
-                        f"L={long_filled_qty} S={short_filled_qty} now balanced"
-                    )
+                    trimmed = Decimal(str(_trim_raw))
+                    if trimmed > 0:
+                        short_filled_qty -= trimmed
+                        entry_fees += _h.extract_fee(trim_fill, short_spec.taker_fee)
+                        logger.info(
+                            f"✅ Delta corrected: trimmed {trimmed} on {opp.short_exchange}, "
+                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
+                        )
+                    else:
+                        logger.error(
+                            f"❌ DELTA CORRECTION ZERO-FILL for {opp.symbol} — "
+                            f"trim order accepted but filled=0 (unhedged {excess} on "
+                            f"{opp.short_exchange}) — P0-3 residual check will abort"
+                        )
                 else:
                     logger.error(
                         f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
@@ -348,6 +406,89 @@ class _EntryOrdersMixin:
                     f"❌ DELTA CORRECTION ERROR for {opp.symbol}: {e} — "
                     f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
                 )
+
+        # ── P0-3: Verify delta correction result ─────────────────────────────
+        # A partial-fill on the correction order itself can leave a residual
+        # imbalance.  If it exceeds half a lot step we cannot safely register
+        # the trade — an unhedged position would sail through the 60-second
+        # grace period undetected by the risk guard.
+        _long_cs = Decimal(str(long_spec.contract_size)) if long_spec and long_spec.contract_size else _ONE
+        _short_cs = Decimal(str(short_spec.contract_size)) if short_spec and short_spec.contract_size else _ONE
+        _long_lot_base = Decimal(str(long_spec.lot_size)) * _long_cs if long_spec else _FALLBACK_LOT
+        _short_lot_base = Decimal(str(short_spec.lot_size)) * _short_cs if short_spec else _FALLBACK_LOT
+        _lot = max(_long_lot_base, _short_lot_base)
+        post_correction_residual = abs(long_filled_qty - short_filled_qty)
+        if post_correction_residual > _lot * Decimal("0.5"):
+            logger.error(
+                f"❌ [{opp.symbol}] Residual delta {post_correction_residual} after correction "
+                f"(L={long_filled_qty} S={short_filled_qty}, threshold={_lot * Decimal('0.5')}) — "
+                f"aborting trade registration and emergency-closing both legs",
+                extra={"symbol": opp.symbol, "action": "residual_delta_abort"},
+            )
+            # Emergency close: unwind whichever leg is larger
+            _failed: list = []  # initialise before try so the cooldown calc always has a value
+            try:
+                close_tasks = []
+                if long_filled_qty > 0:
+                    close_tasks.append(
+                        self._place_with_timeout(
+                            long_adapter,
+                            OrderRequest(
+                                exchange=opp.long_exchange,
+                                symbol=opp.symbol,
+                                side=OrderSide.SELL,
+                                quantity=long_filled_qty,
+                                reduce_only=True,
+                            ),
+                        )
+                    )
+                if short_filled_qty > 0:
+                    close_tasks.append(
+                        self._place_with_timeout(
+                            short_adapter,
+                            OrderRequest(
+                                exchange=opp.short_exchange,
+                                symbol=opp.symbol,
+                                side=OrderSide.BUY,
+                                quantity=short_filled_qty,
+                                reduce_only=True,
+                            ),
+                        )
+                    )
+                if close_tasks:
+                    _close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
+                    _failed = [r for r in _close_results if isinstance(r, Exception) or r is None]
+                    if _failed:
+                        logger.error(
+                            f"❌ [{opp.symbol}] Emergency unwind FAILED ({len(_failed)} legs) — "
+                            f"MANUAL INTERVENTION REQUIRED"
+                        )
+                    else:
+                        logger.info(
+                            f"✅ [{opp.symbol}] Emergency unwind after residual delta: both legs closed"
+                        )
+            except Exception as _unwind_err:
+                logger.error(
+                    f"❌ [{opp.symbol}] Emergency unwind ERROR: {_unwind_err} — "
+                    f"MANUAL INTERVENTION REQUIRED"
+                )
+                _failed = [True]  # treat exception as failure for cooldown below
+
+            # P1-3: Apply a much longer cooldown when the emergency close itself
+            # failed — the position may still be open on the exchange with no
+            # trade record in _active_trades.  24 h forces manual review;
+            # 300 s is only appropriate when the unwind confirmed success.
+            _cooldown_secs = 86400 if _failed else 300
+            await self._redis.set_cooldown(opp.symbol, _cooldown_secs)
+            # P2: Also set route cooldown with same duration.
+            # The 86400 s (24 h) case means positions may still be open on this route —
+            # block re-entry on this specific pair until manual review.
+            await self._redis.set_route_cooldown(
+                opp.symbol, opp.long_exchange, opp.short_exchange,
+                _cooldown_secs,
+                reason="residual_delta_unwind_failed" if _failed else "residual_delta",
+            )
+            return None
 
         # If after correction both legs are zero, abort trade
         if long_filled_qty <= 0 or short_filled_qty <= 0:

@@ -19,6 +19,15 @@ from src.exchanges._funding_cache_mixin import _FundingCacheMixin
 
 logger = get_logger("exchanges")
 
+_TIMEOUT_ERROR_PHRASES = (
+    "ping-pong keepalive",
+    "connection timeout",
+    "timed out",
+    "closing code 1006",
+    "cannot connect to host",
+    "timeout while contacting dns servers",
+)
+
 
 class _FundingMixin(_FundingCacheMixin):
     """Funding rate watchers, polling loops, and warm-up."""
@@ -33,6 +42,22 @@ class _FundingMixin(_FundingCacheMixin):
     # KuCoin futures enforces a maximum number of WS subscriptions per session.
     # Keep a safety margin below the hard 400 limit to avoid session churn.
     _KUCOIN_WS_TICKER_MAX_SUBSCRIPTIONS = 380
+
+    async def _refresh_prices_via_poll_once(self, symbols: List[str]) -> int:
+        """Run a single REST ticker refresh to keep bid/ask cache alive during WS issues."""
+        resolved = [self._resolve_symbol(s) for s in symbols]
+        async with self._rest_semaphore:
+            tickers = await self._exchange.fetch_tickers(resolved)
+
+        updated = 0
+        for sym_raw, ticker in tickers.items():
+            sym = self._normalize_symbol(sym_raw)
+            if sym not in symbols:
+                continue
+            self._update_price_cache_from_ticker(sym, ticker, source="poll")
+            if ticker.get("bid") is not None or ticker.get("ask") is not None:
+                updated += 1
+        return updated
 
     async def start_funding_rate_watchers(self, symbols: List[str]) -> None:
         """Start funding rate polling — batch if supported, per-symbol otherwise."""
@@ -145,17 +170,36 @@ class _FundingMixin(_FundingCacheMixin):
                     return
 
                 if consecutive_failures <= 3:
-                    logger.warning(
-                        f"Price WebSocket error on {self.exchange_id}: {exc}",
-                        extra={"exchange": self.exchange_id, "retry": consecutive_failures},
-                    )
+                    if self._should_log_transient_error(f"price_ws_warn:{self.exchange_id}", 10.0):
+                        logger.warning(
+                            f"Price WebSocket error on {self.exchange_id}: {exc}",
+                            extra={"exchange": self.exchange_id, "retry": consecutive_failures},
+                        )
                 elif consecutive_failures % 10 == 0:
                     logger.error(
                         f"Price WebSocket has failed {consecutive_failures} times in a row on "
                         f"{self.exchange_id} — bid/ask freshness may be STALE: {exc}",
                         extra={"exchange": self.exchange_id, "retry": consecutive_failures},
                     )
-                await asyncio.sleep(min(2 ** min(consecutive_failures - 1, 4), 15))
+
+                if any(phrase in msg for phrase in _TIMEOUT_ERROR_PHRASES):
+                    should_refresh = consecutive_failures == 3 or consecutive_failures % 5 == 0
+                    if should_refresh:
+                        try:
+                            updated = await self._refresh_prices_via_poll_once(symbols)
+                            if updated > 0 and logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    f"[{self.exchange_id}] REST price refresh kept {updated}/{len(symbols)} symbols fresh during WS outage",
+                                    extra={"exchange": self.exchange_id, "action": "price_poll_fallback"},
+                                )
+                        except Exception as refresh_exc:
+                            if self._should_log_transient_error(f"price_poll_refresh:{self.exchange_id}", 20.0):
+                                logger.debug(
+                                    f"[{self.exchange_id}] REST price refresh during WS outage failed: {refresh_exc}",
+                                    extra={"exchange": self.exchange_id, "action": "price_poll_fallback_error"},
+                                )
+
+                await asyncio.sleep(min(2 ** min(consecutive_failures - 1, 5), 30))
 
     async def _watch_funding_rate_loop(self, symbol: str) -> None:
         """Continuously watch funding rate for a symbol via WebSocket.
@@ -332,7 +376,9 @@ class _FundingMixin(_FundingCacheMixin):
                 return
             except Exception as e:
                 consecutive_failures += 1
-                if consecutive_failures <= 3:
+                if consecutive_failures <= 3 and self._should_log_transient_error(
+                    f"batch_funding_warn:{self.exchange_id}", 30.0,
+                ):
                     logger.warning(
                         f"Batch funding poll error on {self.exchange_id}: {e}",
                         extra={"exchange": self.exchange_id, "retry": consecutive_failures},
@@ -369,7 +415,9 @@ class _FundingMixin(_FundingCacheMixin):
                 await asyncio.gather(*[_fetch(s) for s in symbols], return_exceptions=True)
                 if count == 0 and symbols:
                     consecutive_full_failures += 1
-                    if consecutive_full_failures <= 3:
+                    if consecutive_full_failures <= 3 and self._should_log_transient_error(
+                        f"sequential_funding_zero:{self.exchange_id}", 30.0,
+                    ):
                         logger.warning(
                             f"Sequential funding refresh: 0/{len(symbols)} succeeded on {self.exchange_id}",
                             extra={"exchange": self.exchange_id,
@@ -392,7 +440,9 @@ class _FundingMixin(_FundingCacheMixin):
                 return
             except Exception as e:
                 consecutive_full_failures += 1
-                if consecutive_full_failures <= 3:
+                if consecutive_full_failures <= 3 and self._should_log_transient_error(
+                    f"sequential_funding_err:{self.exchange_id}", 30.0,
+                ):
                     logger.warning(
                         f"Sequential funding poll error on {self.exchange_id}: {e}",
                         extra={"exchange": self.exchange_id,

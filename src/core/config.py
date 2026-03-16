@@ -45,11 +45,17 @@ class TradingParams(BaseModel):
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy
     weak_min_funding_excess: Decimal = Decimal("0.5")  # WEAK tier: funding must exceed adverse spread by this %
+    # Post-entry validation — tolerance for price basis widening between scan and fill.
+    # At 0 (default): any adverse fill basis triggers emergency close (too strict for market orders).
+    # Pydantic v2 BaseModel silently drops unknown YAML fields, so this MUST be declared here
+    # (using hasattr() as a fallback produces Decimal("0") and triggers false rejections).
+    max_entry_basis_spread_pct: Decimal = Decimal("0.15")  # 0.15% tolerance for altcoin slippage
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
+    min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
     liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
 
 
@@ -66,6 +72,9 @@ class RiskGuardConfig(BaseModel):
     deep_loop_interval_sec: int = 60
     enable_panic_close: bool = True
     scanner_interval_sec: int = 10
+    # How long (seconds) to skip delta checks after a trade opens.
+    # Covers fill latency: positions may not yet appear on both exchanges.
+    delta_grace_seconds: int = 60
 
 
 class ExchangeConfig(BaseModel):

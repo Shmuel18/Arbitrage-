@@ -162,11 +162,16 @@ def mock_exchange_mgr(mock_adapter):
 def mock_redis():
     r = AsyncMock()
     r.is_cooled_down.return_value = False
+    r.is_route_cooled_down.return_value = False      # P1-2: per-route cooldown check
     r.acquire_lock.return_value = True
+    r.acquire_lock_with_token.return_value = True    # P0-1: token-owned lock
+    r.release_lock_if_owner.return_value = True      # P0-1: safe release
+    r.extend_lock.return_value = True                # P0-1: heartbeat renewal
     r.get_all_trades.return_value = {}
     r.health_check.return_value = True
     r.set_trade_state = AsyncMock(return_value=True)
     r.set_cooldown = AsyncMock(return_value=True)
+    r.set_route_cooldown = AsyncMock(return_value=True)  # P1-2
     r.get_cooled_down_symbols.return_value = set()  # sync set — prevents AsyncMock default
     return r
 

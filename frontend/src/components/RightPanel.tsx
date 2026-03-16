@@ -239,7 +239,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
             {tierBadge(opp.entry_tier)}
             {opp.price_spread_pct != null && (
               <span className="nx-price-spread" style={{
-                color: opp.price_spread_pct >= 0 ? 'var(--green)' : 'var(--red)',
+                color: opp.price_spread_pct > 0 ? 'var(--red)' : opp.price_spread_pct < 0 ? 'var(--green)' : 'var(--text-muted)',
               }}>
                 P:{opp.price_spread_pct >= 0 ? '+' : ''}{opp.price_spread_pct.toFixed(2)}%
               </span>

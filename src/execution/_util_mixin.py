@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 logger = get_logger("execution")
 
 
+_ORPHAN_CLOSE_TIMEOUT_SEC: float = 15.0  # P1-1: prevent HOL blocking during network partition
+
+
 class _UtilMixin:
     async def _place_with_timeout(self, adapter, req: OrderRequest) -> Optional[dict]:
         """Place order with timeout. Returns fill dict or None.
@@ -90,6 +93,14 @@ class _UtilMixin:
                         await self._close_orphan(
                             adapter, req.exchange, req.symbol,
                             close_side, {"filled": float(filled_base)},
+                        )
+                        # Journal the timeout orphan so it appears in history
+                        self._journal.event(
+                            "ghost_trade",
+                            symbol=req.symbol,
+                            exchange=req.exchange,
+                            reason="timeout_orphan",
+                            qty=float(filled_base),
                         )
                 except Exception as check_exc:
                     logger.error(
@@ -171,7 +182,13 @@ class _UtilMixin:
         _MAX_RETRIES = 3
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                await adapter.place_order(req)
+                # P1-1: Wrap in wait_for to prevent event-loop HOL blocking.
+                # Without a timeout, a TCP-connected-but-non-responding exchange hangs
+                # the entire asyncio loop for 2-4 min per attempt (OS TCP timeout),
+                # during which the exit monitor and risk guard loops are frozen.
+                await asyncio.wait_for(
+                    adapter.place_order(req), timeout=_ORPHAN_CLOSE_TIMEOUT_SEC
+                )
                 logger.info(
                     f"Orphan closed (attempt {attempt}): {filled_qty} {symbol} on {exchange}",
                     extra={"exchange": exchange, "symbol": symbol, "action": "orphan_closed"},
@@ -335,9 +352,22 @@ class _UtilMixin:
                     balances[exchange_id] = None
                     continue
 
-                usdt = float(result.get("free", 0))
-                balances[exchange_id] = usdt
-                total += usdt
+                total_val = result.get("total")
+                free_val = result.get("free", 0)
+                used_val = result.get("used", 0)
+
+                if total_val is None:
+                    total_val = free_val
+
+                equity = float(total_val or 0)
+                if equity <= 0:
+                    try:
+                        equity = float(free_val or 0) + float(used_val or 0)
+                    except (TypeError, ValueError):
+                        equity = 0.0
+
+                balances[exchange_id] = equity
+                total += equity
 
             self._journal.balance_snapshot(balances, total=total)
         except Exception as e:

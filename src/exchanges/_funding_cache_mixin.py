@@ -188,6 +188,10 @@ class _FundingCacheMixin:
             return None
         return now_ms - ts
 
+    def has_live_ask(self, symbol: str) -> bool:
+        """Return True when a real ask price (from ticker, not mark fallback) is cached."""
+        return symbol in self._ask_cache and self._ask_cache[symbol] > 0
+
     def get_best_ask(self, symbol: str) -> Optional[float]:
         """Return best cached ask price for symbol (no API call).
 
@@ -203,6 +207,55 @@ class _FundingCacheMixin:
         if ts is not None:
             return now_ms - ts
         return self.get_mark_price_age_ms(symbol)
+
+    def has_live_bid(self, symbol: str) -> bool:
+        """Return True when a real bid price (from ticker, not mark fallback) is cached."""
+        return symbol in self._bid_cache and self._bid_cache[symbol] > 0
+
+    async def fetch_top_of_book(self, symbol: str) -> bool:
+        """Fetch L1 ask/bid from the order book (REST) and cache them.
+
+        Lightweight fallback for symbols whose ticker stream does not include
+        ask/bid.  Only requests ``limit=5`` (shallowest supported depth) to
+        minimise latency and rate-limit footprint.
+
+        Returns True if at least one of ask/bid was populated.
+        """
+        try:
+            async with self._rest_semaphore:
+                ob = await self._exchange.fetch_order_book(
+                    self._resolve_symbol(symbol), limit=5
+                )
+            now_ms = _time.time() * 1000
+            populated = False
+            asks = ob.get("asks")
+            bids = ob.get("bids")
+            if asks and len(asks) > 0:
+                best_ask = float(asks[0][0])
+                if best_ask > 0:
+                    self._ask_cache[symbol] = best_ask
+                    self._ask_timestamp_cache[symbol] = now_ms
+                    populated = True
+            if bids and len(bids) > 0:
+                best_bid = float(bids[0][0])
+                if best_bid > 0:
+                    self._bid_cache[symbol] = best_bid
+                    self._bid_timestamp_cache[symbol] = now_ms
+                    populated = True
+            if populated and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"[{self.exchange_id}] OB fallback for {symbol}: "
+                    f"ask={self._ask_cache.get(symbol)} bid={self._bid_cache.get(symbol)}",
+                    extra={"exchange": self.exchange_id, "symbol": symbol,
+                           "action": "ob_fallback"},
+                )
+            return populated
+        except Exception as e:
+            logger.debug(
+                f"[{self.exchange_id}] OB fallback failed for {symbol}: {e}",
+                extra={"exchange": self.exchange_id, "symbol": symbol},
+            )
+            return False
 
     def get_best_bid(self, symbol: str) -> Optional[float]:
         """Return best cached bid price for symbol (no API call).

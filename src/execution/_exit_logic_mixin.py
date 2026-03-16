@@ -39,6 +39,17 @@ if TYPE_CHECKING:
 logger = get_logger("execution")
 
 
+def _funding_ts_to_dt(ts: float) -> "datetime":
+    """Convert an exchange funding timestamp (ms or s) to a UTC-aware datetime.
+
+    P2-3 / P3-1: Some exchanges deliver epoch-seconds (~1.7×10⁹) instead of
+    epoch-milliseconds (~1.7×10¹²).  Normalise to ms before converting so
+    that monitor-cycle comparisons produce correct (future) datetimes.
+    """
+    ms = ts * 1000 if ts < 1e12 else ts
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
 class _ExitLogicMixin(_ExitComputationsMixin):
     """Hold-or-exit decision logic — tier-aware profit-target strategy."""
 
@@ -53,6 +64,13 @@ class _ExitLogicMixin(_ExitComputationsMixin):
           5. Basis hard stop: exit after timeout if no recovery
           6. Time-based: if next funding qualifies → stay, else → exit
         """
+        # P0-1: Mark that _check_exit is active (persists until explicitly reset
+        # in the "stay next cycle" branch or until _check_upgrade in the following
+        # cycle reads it). This allows _check_upgrade to distinguish "funding just
+        # fired, not yet processed" (False) from "already recorded this payment
+        # in a prior cycle" (True), preventing upgrades before PnL is accounted.
+        trade._exit_check_active = True
+
         now = datetime.now(timezone.utc)
         tp = self._cfg.trading_params
 
@@ -66,6 +84,13 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         # ── 1. LIQUIDATION CHECK ─────────────────────────────────
         liquidation_exit = await self._check_liquidation_risk(trade, long_adapter, short_adapter)
         if liquidation_exit:
+            return
+
+        # ── MIN HOLD GUARD ───────────────────────────────────────
+        # Prevents immediate exit caused by stale exchange timestamps setting
+        # next_funding_long to a past value → long_paid=True on first cycle.
+        hold_sec = (now - trade.opened_at).total_seconds() if trade.opened_at else 0
+        if hold_sec < tp.min_hold_seconds:
             return
 
         # ── 2. CHERRY_PICK HARD STOP ─────────────────────────────
@@ -99,21 +124,34 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         if long_funding:
             long_next_ts = long_funding.get("next_timestamp")
             if long_next_ts:
-                candidate = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
-                if not trade.next_funding_long or (
+                candidate = _funding_ts_to_dt(long_next_ts)
+                if not trade.next_funding_long:
+                    # At initialization: only accept FUTURE timestamps.
+                    # Stale exchanges sometimes return an already-past timestamp
+                    # immediately after a funding event; accepting it would cause
+                    # long_paid=True on the very first monitor cycle → immediate exit.
+                    if candidate > now:
+                        trade.next_funding_long = candidate
+                elif (
                     trade.next_funding_long < now and not trade._funding_paid_long
-                    and candidate <= now
+                    and candidate > trade.next_funding_long
                 ):
+                    # Advance to a strictly newer timestamp only.
                     trade.next_funding_long = candidate
 
         if short_funding:
             short_next_ts = short_funding.get("next_timestamp")
             if short_next_ts:
-                candidate = datetime.fromtimestamp(short_next_ts / 1000, tz=timezone.utc)
-                if not trade.next_funding_short or (
+                candidate = _funding_ts_to_dt(short_next_ts)
+                if not trade.next_funding_short:
+                    # At initialization: only accept FUTURE timestamps (same reason as above).
+                    if candidate > now:
+                        trade.next_funding_short = candidate
+                elif (
                     trade.next_funding_short < now and not trade._funding_paid_short
-                    and candidate <= now
+                    and candidate > trade.next_funding_short
                 ):
+                    # Advance to a strictly newer timestamp only.
                     trade.next_funding_short = candidate
 
         exit_offset = tp.exit_offset_seconds
@@ -205,7 +243,7 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         if l_price > 0 and s_price > 0:
             _current_basis = (l_price - s_price) / s_price * Decimal("100")
 
-        _tolerance = getattr(tp, 'basis_recovery_tolerance_pct', Decimal("0.10"))
+        _tolerance = tp.basis_recovery_tolerance_pct
         _basis_favorable = _current_basis >= (_entry_basis - _tolerance)
 
         if _basis_favorable:
@@ -228,7 +266,7 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             return
 
         # ── 5. BASIS HARD STOP (30min timeout) ───────────────────
-        basis_timeout_min = float(getattr(tp, 'basis_recovery_timeout_minutes', 30))
+        basis_timeout_min = float(tp.basis_recovery_timeout_minutes)  # P2-2: direct field access
         time_since_funding_min = 0.0
         if trade._funding_paid_at:
             time_since_funding_min = (now - trade._funding_paid_at).total_seconds() / 60
@@ -254,11 +292,11 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 if long_funding:
                     _ln = long_funding.get("next_timestamp")
                     if _ln:
-                        trade.next_funding_long = datetime.fromtimestamp(_ln / 1000, tz=timezone.utc)
+                        trade.next_funding_long = _funding_ts_to_dt(_ln)
                 if short_funding:
                     _sn = short_funding.get("next_timestamp")
                     if _sn:
-                        trade.next_funding_short = datetime.fromtimestamp(_sn / 1000, tz=timezone.utc)
+                        trade.next_funding_short = _funding_ts_to_dt(_sn)
 
                 # Update stored rates for next cycle
                 if long_funding and "rate" in long_funding:

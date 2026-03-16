@@ -30,15 +30,17 @@ interface TierTranslations {
   tierMedium?: string;
   tierWeak?: string;
   tierAdverse?: string;
+  tierStale?: string;
 }
 
 export const getTierInfo = (tier: string | null | undefined, t: TierTranslations): TierInfo | null => {
   if (!tier) return null;
   const key = tier.toLowerCase();
-  if (key === 'top')     return { emoji: '🏆 ', label: t.tierTop     ?? 'TOP',     color: 'var(--tier-top-color)',     bg: 'var(--tier-top-bg)' };
-  if (key === 'medium')  return { emoji: '📊 ', label: t.tierMedium  ?? 'MEDIUM',  color: 'var(--tier-medium-color)',  bg: 'var(--tier-medium-bg)' };
-  if (key === 'weak')    return { emoji: '⚡ ', label: t.tierWeak    ?? 'WEAK',    color: 'var(--tier-weak-color)',    bg: 'var(--tier-weak-bg)' };
-  if (key === 'adverse') return { emoji: '',     label: t.tierAdverse ?? 'ADVERSE', color: 'var(--tier-adverse-color)', bg: 'var(--tier-adverse-bg)' };
+  if (key === 'top')         return { emoji: '🏆 ', label: t.tierTop     ?? 'TOP',     color: 'var(--tier-top-color)',     bg: 'var(--tier-top-bg)' };
+  if (key === 'medium')      return { emoji: '📊 ', label: t.tierMedium  ?? 'MEDIUM',  color: 'var(--tier-medium-color)',  bg: 'var(--tier-medium-bg)' };
+  if (key === 'weak')        return { emoji: '⚡ ', label: t.tierWeak    ?? 'WEAK',    color: 'var(--tier-weak-color)',    bg: 'var(--tier-weak-bg)' };
+  if (key === 'adverse')     return { emoji: '',     label: t.tierAdverse ?? 'ADVERSE', color: 'var(--tier-adverse-color)', bg: 'var(--tier-adverse-bg)' };
+  if (key === 'stale_price') return { emoji: '⏳ ', label: t.tierStale   ?? 'STALE',   color: 'var(--warn, #f59e0b)',      bg: 'rgba(245,158,11,0.12)' };
   return null;
 };
 

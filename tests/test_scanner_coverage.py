@@ -521,7 +521,7 @@ class TestEvaluateDirection:
 
     @pytest.mark.asyncio
     async def test_stale_bid_ask_data_disqualifies_entry(self, config) -> None:
-        """Price snapshots older than the freshness threshold must not qualify."""
+        """Price snapshots older than the freshness threshold are skipped."""
         config.trading_params.min_funding_spread = Decimal("0.01")
         config.trading_params.max_market_data_age_ms = 500
 
@@ -548,9 +548,7 @@ class TestEvaluateDirection:
             adapters=adapters,
         )
 
-        assert opp is not None
-        assert opp.qualified is False
-        assert opp.entry_tier == "stale_price"
+        assert opp is None
 
     # ── Missing instrument spec → None ───────────────────────────
 
@@ -994,9 +992,9 @@ class TestHotScanLoop:
         a.register_price_update_queue.assert_called_once_with(q)
 
     @pytest.mark.asyncio
-    async def test_hot_scan_skips_symbol_filtered_by_candidates(self, config) -> None:
-        """When _hot_candidates is populated and does NOT contain the pushed symbol,
-        the hot-scan loop must NOT call the callback."""
+    async def test_hot_scan_evaluates_symbols_regardless_of_candidates(self, config) -> None:
+        """P1-4: _hot_candidates filter removed — a symbol in _common_symbols_cache
+        must be evaluated even if _hot_candidates does not contain it."""
         config.trading_params.min_funding_spread = Decimal("0.01")
 
         a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
@@ -1006,24 +1004,32 @@ class TestHotScanLoop:
         scanner = _scanner_with(config, adapters, redis)
 
         scanner._common_symbols_cache = {"ETH/USDT", "BTC/USDT"}
-        # Candidates only contains BTC — ETH should be ignored
+        # _hot_candidates only contains BTC — after P1-4 this has no filtering effect
         scanner._hot_candidates = {"BTC/USDT"}
         scanner._running = True
 
+        scanned: list[str] = []
+        _orig_scan = scanner._scan_symbol
+
+        async def _spy_scan(symbol, *args, **kwargs):
+            scanned.append(symbol)
+            return await _orig_scan(symbol, *args, **kwargs)
+
+        scanner._scan_symbol = _spy_scan
+
         await scanner._hot_queue.put(("ex_a", "ETH/USDT"))
 
-        received: list = []
-
-        async def _cb(opp):
-            received.append(opp)
+        async def _dummy_cb(opp):
+            pass
 
         try:
-            await asyncio.wait_for(scanner._hot_scan_loop(_cb), timeout=0.5)
+            await asyncio.wait_for(scanner._hot_scan_loop(_dummy_cb), timeout=0.5)
         except asyncio.TimeoutError:
             pass
 
         scanner._running = False
-        assert received == []
+        # ETH/USDT must reach _scan_symbol — the candidates filter is gone
+        assert "ETH/USDT" in scanned
 
     @pytest.mark.asyncio
     async def test_scan_all_updates_hot_candidates(self, config, mock_exchange_mgr, mock_redis) -> None:
@@ -1070,7 +1076,8 @@ class TestHotScanLoop:
         scanner._running = True
 
         # Simulate the symbol was already fired 2 seconds ago (within 10s cooldown)
-        scanner._hot_cb_last_fire["ETH/USDT"] = asyncio.get_event_loop().time() - 2
+        # P1-2: debounce key is now route-based: "{symbol}|{long}|{short}"
+        scanner._hot_cb_last_fire["ETH/USDT|ex_a|ex_b"] = asyncio.get_event_loop().time() - 2
 
         await scanner._hot_queue.put(("ex_a", "ETH/USDT"))
 

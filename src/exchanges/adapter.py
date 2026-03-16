@@ -13,6 +13,7 @@ Implementation is split into four mixins for maintainability:
 from __future__ import annotations
 
 import asyncio
+import time as _time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -63,6 +64,8 @@ class ExchangeAdapter(
         self._ws_funding_disabled_logged = False
         self._ws_ticker_supported = True
         self._ws_ticker_disabled_logged = False
+        self._ws_error_last_logged: Dict[str, float] = {}  # error_key → last log time (epoch-s)
+        self._transient_log_last_logged: Dict[str, float] = {}  # log_key → last log time (monotonic-s)
         self._batch_funding_supported = True  # set to False if fetchFundingRates fails
         self._funding_intervals: Dict[str, int] = {}  # symbol → interval hours (from exchange API)
         # Candidate tracking for interval change confirmation (avoids false changes from
@@ -80,6 +83,15 @@ class ExchangeAdapter(
     def register_price_update_queue(self, queue: "asyncio.Queue[tuple[str, str]]") -> None:
         """Attach a hot-scan queue so fresh ticker updates trigger immediate re-evaluation."""
         self._price_update_queue = queue
+
+    def _should_log_transient_error(self, key: str, interval_seconds: float) -> bool:
+        """Rate-limit repetitive transient warnings per adapter instance."""
+        now = _time.monotonic()
+        last = self._transient_log_last_logged.get(key, 0.0)
+        if now - last < interval_seconds:
+            return False
+        self._transient_log_last_logged[key] = now
+        return True
 
 
 # ── Manager ──────────────────────────────────────────────────────

@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 
 logger = get_logger("execution")
 
+_HUNDRED: Decimal = Decimal("100")
+_TWO: Decimal = Decimal("2")
+_DEFAULT_TAKER_FEE: Decimal = Decimal("0.00075")  # conservative fallback when fee not yet loaded
+
 
 class _MonitorMixin(_ExitLogicMixin):
     async def _exit_monitor_loop(self) -> None:
@@ -114,9 +118,14 @@ class _MonitorMixin(_ExitLogicMixin):
         # Outside 3min, the net_pct comparison + basis guard handle the decision.
         if upgrade_funding_lock_secs > 0:
             now_ms = _time.time() * 1000
-            # Prefer live cache timestamps; fall back to TradeRecord fields
-            long_next_ts = long_funding.get("next_timestamp")
-            short_next_ts = short_funding.get("next_timestamp")
+            # Prefer live cache timestamps; fall back to TradeRecord fields.
+            # P3-2: Normalise to ms — some exchanges deliver epoch-seconds.
+            def _to_ms(ts: Optional[float]) -> Optional[float]:
+                if ts is None:
+                    return None
+                return ts * 1000 if ts < 1e12 else ts
+            long_next_ts = _to_ms(long_funding.get("next_timestamp"))
+            short_next_ts = _to_ms(short_funding.get("next_timestamp"))
             current_next_ts: Optional[float] = None
             if long_next_ts is not None and short_next_ts is not None:
                 current_next_ts = min(long_next_ts, short_next_ts)
@@ -177,12 +186,12 @@ class _MonitorMixin(_ExitLogicMixin):
 
         # Projected net for current trade: income spread minus round-trip fees.
         # This mirrors the scanner's net_pct formula so comparisons are apples-to-apples.
-        current_immediate = (-long_funding["rate"] + short_funding["rate"]) * Decimal("100")
+        current_immediate = (-long_funding["rate"] + short_funding["rate"]) * _HUNDRED
         fee_per_side = (
-            (trade.long_taker_fee or Decimal("0.00075"))
-            + (trade.short_taker_fee or Decimal("0.00075"))
+            (trade.long_taker_fee or _DEFAULT_TAKER_FEE)
+            + (trade.short_taker_fee or _DEFAULT_TAKER_FEE)
         )
-        fee_roundtrip_pct = fee_per_side * Decimal("2") * Decimal("100")  # open + close
+        fee_roundtrip_pct = fee_per_side * _TWO * _HUNDRED  # open + close
         current_projected_net = current_immediate - fee_roundtrip_pct
 
         # Read latest opportunities from Redis
@@ -191,6 +200,26 @@ class _MonitorMixin(_ExitLogicMixin):
             if not raw:
                 return False
             data = json.loads(raw)
+            # P2-1: Guard against stale snapshot — if the scanner paused/crashed,
+            # opportunities may be minutes old; upgrading on that data risks
+            # closing a profitable trade for an opportunity that no longer exists.
+            _updated_at_str = data.get("updated_at")
+            if _updated_at_str:
+                try:
+                    _updated_at = datetime.fromisoformat(
+                        _updated_at_str.replace("Z", "+00:00")
+                    )
+                    _snapshot_age_s = (
+                        datetime.now(timezone.utc) - _updated_at
+                    ).total_seconds()
+                    if _snapshot_age_s > 60:
+                        logger.debug(
+                            f"Upgrade check: skipping — opportunities snapshot is "
+                            f"{int(_snapshot_age_s)}s old (threshold=60s)",
+                        )
+                        return False
+                except (ValueError, TypeError):
+                    pass  # malformed timestamp — proceed; age guard is best-effort
             candidates = data.get("opportunities", [])
         except Exception as e:
             logger.debug(f"Upgrade check: cannot read opportunities: {e}")

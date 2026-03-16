@@ -5,6 +5,7 @@ Do NOT import this module directly; use ExecutionController from controller.py.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time as _time
 import uuid
 from datetime import datetime, timezone
@@ -43,6 +44,16 @@ class _EntryMixin(_EntryOrdersMixin):
 
         if await self._redis.is_cooled_down(opp.symbol):
             logger.info(f"❄️ Skipping {opp.symbol}: symbol is in cooldown")
+            return
+
+        # P1-2: Per-route cooldown — a failure on exchange_a→exchange_b must not
+        # suppress exchange_c→exchange_d for the same symbol.  The route key is
+        # symbol|long_exchange|short_exchange, independent of the symbol cooldown.
+        if await self._redis.is_route_cooled_down(opp.symbol, opp.long_exchange, opp.short_exchange):
+            logger.info(
+                f"❄️ Skipping {opp.symbol}: route "
+                f"{opp.long_exchange}→{opp.short_exchange} is in cooldown"
+            )
             return
 
         upgrade_expiry = self._upgrade_cooldown.get(opp.symbol)
@@ -179,9 +190,63 @@ class _EntryMixin(_EntryOrdersMixin):
 
         logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
 
+        # ── P0-1: Acquire distributed lock BEFORE rate re-verification ────────
+        # Moved from just-before-orders to here so the lock TTL covers the FULL
+        # entry path: rate fetch + sizing + settings + pre-flight + orders + fills.
+        # Token ownership prevents a stale `release_lock` (after our TTL expired)
+        # from clobbering a lock that a second instance legitimately acquired.
+        # A heartbeat task renews the TTL every 15 s to survive slow entries.
+        lock_key = f"trade:{opp.symbol}"
+        lock_token = str(uuid.uuid4())
+        if not await self._redis.acquire_lock_with_token(lock_key, lock_token, ttl=60):
+            logger.info(
+                f"🔒 [{opp.symbol}] Distributed lock already held by another instance — skipping"
+            )
+            return
+
+        _lock_heartbeat_task = asyncio.create_task(
+            self._lock_heartbeat(lock_key, lock_token),
+            name=f"lock_hb:{opp.symbol}",
+        )
+        _lock_heartbeat_task.add_done_callback(
+            lambda t: logger.warning(
+                f"[{opp.symbol}] Lock heartbeat ended unexpectedly: {t.exception()}"
+            ) if not t.cancelled() and t.exception() else None
+        )
+
         # ── Rate direction re-verification ─────────────────────────────────
+        # P1-2: If the cached rate is >30s old, do a live REST fetch before
+        # checking direction. The old code read from a cache with a 1h TTL,
+        # giving a false appearance of safety: a rate that flipped 59 minutes
+        # ago would silently pass the direction check.
+        _RATE_FRESHNESS_SEC = 30.0
+        _now_verify = _time.time()
         _verify_long = long_adapter.get_funding_rate_cached(opp.symbol) if long_adapter else None
         _verify_short = short_adapter.get_funding_rate_cached(opp.symbol) if short_adapter else None
+
+        _long_stale = (
+            _verify_long is None or
+            (_now_verify * 1000 - float(_verify_long.get("cached_at_ms") or 0)) / 1000 > _RATE_FRESHNESS_SEC
+        )
+        _short_stale = (
+            _verify_short is None or
+            (_now_verify * 1000 - float(_verify_short.get("cached_at_ms") or 0)) / 1000 > _RATE_FRESHNESS_SEC
+        )
+        if _long_stale or _short_stale:
+            _refresh_tasks = []
+            if _long_stale and long_adapter:
+                _refresh_tasks.append(long_adapter.get_funding_rate(opp.symbol))
+            if _short_stale and short_adapter:
+                _refresh_tasks.append(short_adapter.get_funding_rate(opp.symbol))
+            try:
+                await asyncio.gather(*_refresh_tasks, return_exceptions=True)
+            except Exception as _re:
+                logger.debug(f"[{opp.symbol}] Rate refresh before verify failed: {_re}")
+            _verify_long = long_adapter.get_funding_rate_cached(opp.symbol) if long_adapter else None
+            _verify_short = short_adapter.get_funding_rate_cached(opp.symbol) if short_adapter else None
+            if _long_stale or _short_stale:
+                logger.debug(f"[{opp.symbol}] Rate re-verification: fetched live rates (cache was stale)")
+
         if _verify_long and _verify_short:
             _vl_rate = Decimal(str(_verify_long["rate"]))
             _vs_rate = Decimal(str(_verify_short["rate"]))
@@ -196,12 +261,32 @@ class _EntryMixin(_EntryOrdersMixin):
                     f"→ Now: L={float(_vl_rate)*100:+.4f}% S={float(_vs_rate)*100:+.4f}%",
                     extra={"symbol": opp.symbol, "action": "rate_flip_abort"},
                 )
+                # P0-1: must clean up lock + heartbeat before early return
+                # (these returns are outside the inner try/finally block)
+                _lock_heartbeat_task.cancel()
+                await self._redis.release_lock_if_owner(lock_key, lock_token)
                 return
-
-        # ── Acquire lock ─────────────────────────────────────────────────────
-        lock_key = f"trade:{opp.symbol}"
-        if not await self._redis.acquire_lock(lock_key):
-            return
+            # P1-2: Magnitude check — direction unchanged but rate may have collapsed.
+            # Re-compute live net spread; abort if it no longer clears min_funding_spread.
+            # (A rate falling from 0.40% to 0.07% is not a flip, but the trade is unprofitable.)
+            _live_income = (
+                (abs(_vl_rate) if _vl_rate < 0 else Decimal("0"))
+                + (abs(_vs_rate) if _vs_rate > 0 else Decimal("0"))
+            )
+            _live_net = _live_income * Decimal("100") - tp.slippage_buffer_pct - tp.safety_buffer_pct
+            if _live_net < tp.min_funding_spread:
+                logger.warning(
+                    f"\U0001f6ab [{opp.symbol}] Rate COLLAPSED since scan \u2014 aborting entry! "
+                    f"Live net {float(_live_net):.4f}% < min {float(tp.min_funding_spread):.4f}% "
+                    f"(scan: L={float(opp.long_funding_rate)*100:+.4f}% S={float(opp.short_funding_rate)*100:+.4f}% "
+                    f"\u2192 now: L={float(_vl_rate)*100:+.4f}% S={float(_vs_rate)*100:+.4f}%)",
+                    extra={"symbol": opp.symbol, "action": "rate_collapse_abort"},
+                )
+                # P0-1: same early-return cleanup
+                _lock_heartbeat_task.cancel()
+                await self._redis.release_lock_if_owner(lock_key, lock_token)
+                return
+        # (lock is held from above — no second acquire needed)
 
         trade_id = str(uuid.uuid4())[:12]
         try:
@@ -223,7 +308,10 @@ class _EntryMixin(_EntryOrdersMixin):
             # entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * 100
             # Positive spread = adverse (long more expensive than short)
             tp = self._cfg.trading_params
-            entry_basis_threshold = tp.max_entry_basis_spread_pct if hasattr(tp, "max_entry_basis_spread_pct") else Decimal("0")
+            # P0-1: max_entry_basis_spread_pct is now a declared TradingParams field (Decimal "0.15").
+            # The prior hasattr() fallback returned Decimal("0"), causing false rejections on every
+            # normal market-order execution where ask_long > bid_short by the bid-ask spread.
+            entry_basis_threshold = tp.max_entry_basis_spread_pct
             if entry_basis_pct > entry_basis_threshold:
                 logger.warning(
                     f"🚫 [{opp.symbol}] POST-ENTRY REJECTION: actual spread {float(entry_basis_pct):+.4f}% "
@@ -269,15 +357,83 @@ class _EntryMixin(_EntryOrdersMixin):
                             f"MANUAL INTERVENTION REQUIRED — positions may be unhedged"
                         )
                     else:
-                        logger.info(
-                            f"✅ [{opp.symbol}] Emergency close SUCCESSFUL — "
-                            f"adverse trade rejected and closed"
-                        )
+                        # P1-5: Order accepted ≠ order filled. Verify actual position
+                        # is flat before declaring success (partial fills leave phantom
+                        # positions that bypass the 60s risk-guard grace window).
+                        await asyncio.sleep(0.5)  # brief settle for exchange to process
+                        _residual_legs: list[str] = []
+                        try:
+                            _pos_checks = []
+                            _pos_labels: list[str] = []
+                            if long_filled_qty > 0 and long_adapter:
+                                _pos_checks.append(long_adapter.get_positions(opp.symbol))
+                                _pos_labels.append(opp.long_exchange)
+                            if short_filled_qty > 0 and short_adapter:
+                                _pos_checks.append(short_adapter.get_positions(opp.symbol))
+                                _pos_labels.append(opp.short_exchange)
+                            _pos_results = await asyncio.gather(*_pos_checks, return_exceptions=True)
+                            for _label, _pres in zip(_pos_labels, _pos_results):
+                                if isinstance(_pres, Exception):
+                                    logger.warning(f"[{opp.symbol}] Post-close position check failed on {_label}: {_pres}")
+                                    continue
+                                for _p in (_pres or []):
+                                    if getattr(_p, "symbol", None) == opp.symbol and getattr(_p, "quantity", 0) > 0:
+                                        _residual_legs.append(f"{_label}:{_p.quantity}")
+                        except Exception as _ve:
+                            logger.warning(f"[{opp.symbol}] Emergency close fill verification error: {_ve}")
+
+                        if _residual_legs:
+                            logger.error(
+                                f"❌ [{opp.symbol}] Emergency close INCOMPLETE — "
+                                f"residual positions: {', '.join(_residual_legs)} — "
+                                f"MANUAL INTERVENTION REQUIRED"
+                            )
+                        else:
+                            logger.info(
+                                f"✅ [{opp.symbol}] Emergency close CONFIRMED filled — "
+                                f"adverse trade rejected and positions verified flat"
+                            )
                 except Exception as e:
                     logger.error(
                         f"❌ [{opp.symbol}] Emergency close ERROR: {e} — "
                         f"MANUAL INTERVENTION REQUIRED"
                     )
+
+                # ── Journal the ghost trade so it appears in history ──────
+                _ghost_fees = entry_fees * Decimal("2")  # entry + exit fees
+                _ghost_notional = float(entry_price_long * long_filled_qty) if entry_price_long and long_filled_qty else 0.0
+                self._journal.trade_closed(
+                    trade_id=f"ghost-{trade_id}",
+                    symbol=opp.symbol,
+                    mode=opp.mode or "unknown",
+                    duration_min=0.0,
+                    entry_price_long=entry_price_long,
+                    entry_price_short=entry_price_short,
+                    exit_price_long=entry_price_long,
+                    exit_price_short=entry_price_short,
+                    fees=float(_ghost_fees),
+                    net_profit=-float(_ghost_fees),
+                    invested=_ghost_notional,
+                    exit_reason="post_entry_rejection",
+                    long_exchange=opp.long_exchange,
+                    short_exchange=opp.short_exchange,
+                )
+                if self._publisher:
+                    self._publisher.record_trade(is_win=False, pnl=-_ghost_fees)
+
+                # ── Cooldown: prevent immediate re-entry into same symbol ─
+                _rejection_cooldown = self._cfg.trading_params.cooldown_after_close_seconds
+                await self._redis.set_cooldown(opp.symbol, _rejection_cooldown)
+                # P2: Also set per-route cooldown — post-entry rejection is
+                # route-specific (adverse fill on this long→short exchange pair).
+                # A different route for same symbol should not be blocked.
+                await self._redis.set_route_cooldown(
+                    opp.symbol, opp.long_exchange, opp.short_exchange,
+                    _rejection_cooldown, reason="post_entry_rejection",
+                )
+                logger.info(
+                    f"❄️ [{opp.symbol}] Cooldown {_rejection_cooldown}s after post-entry rejection"
+                )
                 return
 
             trade = TradeRecord(
@@ -303,8 +459,40 @@ class _EntryMixin(_EntryOrdersMixin):
                 entry_tier=opp.entry_tier,
                 price_spread_pct=opp.price_spread_pct,
             )
+            # P0-3: Persist BEFORE registering in memory.
+            # If persist fails after real fills, positions are open on the exchange
+            # but nothing is in _active_trades — a crash/restart loses them forever.
+            # Unwind immediately if Redis rejects the write.
+            try:
+                await self._persist_trade(trade)
+            except Exception as _persist_exc:
+                logger.critical(
+                    f"❌ [{opp.symbol}] CRITICAL: persist_trade failed after fills — "
+                    f"positions OPEN on exchange but NOT saved; emergency unwinding.",
+                    extra={"trade_id": trade_id, "action": "persist_failed"},
+                    exc_info=_persist_exc,
+                )
+                _ew: list = []
+                if long_filled_qty > 0:
+                    _ew.append(self._close_orphan(
+                        long_adapter, opp.long_exchange, opp.symbol,
+                        OrderSide.SELL, {"filled": float(long_filled_qty)},
+                    ))
+                if short_filled_qty > 0:
+                    _ew.append(self._close_orphan(
+                        short_adapter, opp.short_exchange, opp.symbol,
+                        OrderSide.BUY, {"filled": float(short_filled_qty)},
+                    ))
+                if _ew:
+                    await asyncio.gather(*_ew, return_exceptions=True)
+                # 1h symbol cooldown + route cooldown after persist failure with live fills
+                await self._redis.set_cooldown(opp.symbol, 3600)
+                await self._redis.set_route_cooldown(
+                    opp.symbol, opp.long_exchange, opp.short_exchange,
+                    3600, reason="persist_failed",
+                )
+                return
             self._register_trade(trade)
-            await self._persist_trade(trade)
 
             mode_str = f" mode={opp.mode}"
             tier_str = f" tier={opp.entry_tier.upper()}" if opp.entry_tier else ""
@@ -417,7 +605,97 @@ class _EntryMixin(_EntryOrdersMixin):
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
-            await self._redis.release_lock(lock_key)
+            _lock_heartbeat_task.cancel()
+            await self._redis.release_lock_if_owner(lock_key, lock_token)
+
+    # ── Pre-entry order book depth + VWAP check ──────────────────────────────
+    async def _check_pre_entry_liquidity(
+        self,
+        opp: OpportunityCandidate,
+        long_adapter,
+        short_adapter,
+        qty: Optional[Decimal] = None,
+    ) -> bool:
+        """Fetch live order book for both legs and verify there is enough depth.
+
+        Returns True (safe to proceed) or False (entry should be skipped).
+
+        Steps:
+          1. Walk asks on the long exchange (we BUY there).
+          2. Walk bids on the short exchange (we SELL there).
+          3. If either book cannot fill our full qty → skip.
+          4. If the resulting VWAP spread is adverse (positive %) → skip.
+
+        P1-1: ``qty`` is the sizer's ``order_qty`` rather than
+        ``opp.suggested_qty``.  The scanner snapshot can be 30–60 s stale and
+        sized from a different balance baseline; checking depth against the
+        wrong quantity either passes a too-shallow book or rejects a perfectly
+        good entry.
+        """
+        # P1-1: Prefer the live order_qty from the sizer if provided.
+        check_qty = qty if (qty is not None and qty > Decimal("0")) else opp.suggested_qty
+        if check_qty <= Decimal("0"):
+            # No qty estimate — allow entry; sizer will handle it
+            return True
+
+        symbol = opp.symbol
+        try:
+            long_vwap, long_ok = await long_adapter.get_vwap_and_depth(symbol, check_qty, "buy")
+            short_vwap, short_ok = await short_adapter.get_vwap_and_depth(symbol, check_qty, "sell")
+        except Exception as exc:
+            logger.warning(
+                f"[{symbol}] Pre-entry liquidity check error: {exc} — allowing entry",
+                extra={"symbol": symbol, "action": "depth_check_error"},
+            )
+            return True
+
+        if not long_ok:
+            logger.info(
+                f"📊 [{symbol}] PRE-ENTRY BLOCK: {opp.long_exchange} book too shallow "
+                f"to fill {float(check_qty):.4g} units (BUY) — skipping",
+                extra={"symbol": symbol, "action": "depth_insufficient"},
+            )
+            return False
+
+        if not short_ok:
+            logger.info(
+                f"📊 [{symbol}] PRE-ENTRY BLOCK: {opp.short_exchange} book too shallow "
+                f"to fill {float(check_qty):.4g} units (SELL) — skipping",
+                extra={"symbol": symbol, "action": "depth_insufficient"},
+            )
+            return False
+
+        if long_vwap <= Decimal("0") or short_vwap <= Decimal("0"):
+            logger.warning(
+                f"[{symbol}] Pre-entry depth check returned zero price — allowing entry"
+            )
+            return True
+
+        vwap_spread_pct = (long_vwap - short_vwap) / short_vwap * Decimal("100")
+        if vwap_spread_pct > Decimal("0"):
+            logger.info(
+                f"📊 [{symbol}] PRE-ENTRY BLOCK: VWAP spread adverse "
+                f"({float(vwap_spread_pct):+.4f}%) — "
+                f"{opp.long_exchange} ask={float(long_vwap):.6f} > "
+                f"{opp.short_exchange} bid={float(short_vwap):.6f} — skipping",
+                extra={"symbol": symbol, "action": "vwap_adverse"},
+            )
+            # P2: VWAP adverse is route-local (this exchange pair has a bad spread
+            # right now; a different route for the same symbol should not be blocked).
+            # Use route cooldown only — 30 s is too short to justify a global symbol block.
+            await self._redis.set_route_cooldown(
+                symbol, opp.long_exchange, opp.short_exchange, 30, reason="vwap_adverse",
+            )
+            return False
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{symbol}] Pre-entry depth OK: "
+                f"{opp.long_exchange} ask_vwap={float(long_vwap):.6f} | "
+                f"{opp.short_exchange} bid_vwap={float(short_vwap):.6f} | "
+                f"spread={float(vwap_spread_pct):+.4f}%"
+            )
+        return True
 
     # ── Private helpers ──────────────────────────────────────────
 
@@ -450,5 +728,36 @@ class _EntryMixin(_EntryOrdersMixin):
             primary_next_ms = _live_next_ms
         return primary_next_ms
 
-    # ── Exit monitor ─────────────────────────────────────────────
+    # ── Lock heartbeat ────────────────────────────────────────────
+
+    async def _lock_heartbeat(
+        self,
+        lock_key: str,
+        token: str,
+        interval: int = 15,
+        ttl: int = 60,
+    ) -> None:
+        """Renew the distributed entry lock every ``interval`` seconds.
+
+        P0-1: Without renewal the 60 s TTL may expire during a slow entry
+        (large altcoin sizing + exchange settings + partial fills + delta trim
+        can exceed 60 s under load).  If renewal fails, the lock was already
+        lost; we log and return — the entry continues in a degraded state
+        (race protection is gone) rather than blocking indefinitely.
+        """
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                renewed = await self._redis.extend_lock(lock_key, token, ttl=ttl)
+                if not renewed:
+                    logger.warning(
+                        f"[{lock_key}] Lock heartbeat: renewal FAILED — lock expired or "
+                        f"stolen by another instance. Entry proceeding without exclusive lock.",
+                        extra={"lock_key": lock_key, "action": "lock_renewal_failed"},
+                    )
+                    return
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"[{lock_key}] Lock heartbeat: renewed (TTL={ttl}s)")
+        except asyncio.CancelledError:
+            pass  # normal shutdown — lock is about to be released by the caller
 

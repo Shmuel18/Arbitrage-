@@ -50,6 +50,16 @@ class RiskGuard:
         self._running = False
         self._tasks: list[asyncio.Task] = []
         self._grace_timestamps: Dict[str, float] = {}  # symbol -> timestamp
+        self._warn_last_logged: Dict[str, float] = {}  # warning key -> last log time (monotonic-s)
+
+    def _should_log_warning(self, key: str, interval_seconds: float) -> bool:
+        """Rate-limit repetitive warning logs during transient exchange outages."""
+        now = time.monotonic()
+        last = self._warn_last_logged.get(key, 0.0)
+        if now - last < interval_seconds:
+            return False
+        self._warn_last_logged[key] = now
+        return True
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -71,9 +81,10 @@ class RiskGuard:
         logger.info("Risk guard stopped")
 
     def mark_trade_opened(self, symbol: str) -> None:
-        """Mark symbol as having a recent trade - skip delta checks for 60s."""
+        """Mark symbol as having a recent trade — skip delta checks for grace period."""
         self._grace_timestamps[symbol] = time.time()
-        logger.debug(f"Grace period started for {symbol} (60s)")
+        grace = self._cfg.risk_guard.delta_grace_seconds
+        logger.debug(f"Grace period started for {symbol} ({grace}s)")
 
     # ── Fast loop (delta check) ──────────────────────────────────
 
@@ -111,8 +122,9 @@ class RiskGuard:
 
         for (eid, _), result in zip(adapters, position_results):
             if isinstance(result, Exception):
-                logger.warning(f"Cannot fetch positions from {eid}: {result}",
-                               extra={"exchange": eid})
+                if self._should_log_warning(f"positions_fetch:{eid}", 30.0):
+                    logger.warning(f"Cannot fetch positions from {eid}: {result}",
+                                   extra={"exchange": eid})
                 failed_exchanges.append(eid)
                 continue
 
@@ -127,12 +139,14 @@ class RiskGuard:
 
         # ── SAFETY: abort if any exchange failed ─────────────────
         if failed_exchanges:
-            logger.warning(
-                f"Delta check SKIPPED — {len(failed_exchanges)} exchange(s) "
-                f"failed to return positions: {', '.join(failed_exchanges)}. "
-                f"Cannot safely evaluate delta with incomplete data.",
-                extra={"action": "delta_skip"},
-            )
+            failed_key = ",".join(sorted(failed_exchanges))
+            if self._should_log_warning(f"delta_skip:{failed_key}", 30.0):
+                logger.warning(
+                    f"Delta check SKIPPED — {len(failed_exchanges)} exchange(s) "
+                    f"failed to return positions: {', '.join(failed_exchanges)}. "
+                    f"Cannot safely evaluate delta with incomplete data.",
+                    extra={"action": "delta_skip"},
+                )
             return
 
         # delta_threshold_pct is now compared as a PERCENTAGE of average
@@ -142,9 +156,9 @@ class RiskGuard:
         threshold_pct = self._cfg.risk_limits.delta_threshold_pct  # e.g. 5.0 = 5%
 
         for symbol, net in delta_by_symbol.items():
-            # Skip symbols in grace period (60 seconds after trade opened)
+            # Skip symbols in grace period (cfg.risk_guard.delta_grace_seconds)
             if symbol in self._grace_timestamps:
-                if now - self._grace_timestamps[symbol] < 60:
+                if now - self._grace_timestamps[symbol] < self._cfg.risk_guard.delta_grace_seconds:
                     continue
                 else:
                     del self._grace_timestamps[symbol]
@@ -279,8 +293,9 @@ class RiskGuard:
                 ]
                 await self._redis.set_position_snapshot(eid, data)
             except Exception as e:
-                logger.warning(f"Snapshot failed for {eid}: {e}",
-                               extra={"exchange": eid})
+                if self._should_log_warning(f"snapshot:{eid}", 60.0):
+                    logger.warning(f"Snapshot failed for {eid}: {e}",
+                                   extra={"exchange": eid})
 
         await asyncio.gather(
             *[_snapshot_one(eid, adapter) for eid, adapter in self._exchanges.all().items()],

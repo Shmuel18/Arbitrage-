@@ -79,6 +79,7 @@ export interface Translations {
   pnlChart: string;
   pnlChartInterval: string;
   waitingPnl: string;
+  noTradesInPeriod: string;
 
   // Recent trades
   last10Trades: string;
@@ -145,6 +146,7 @@ export interface Translations {
   tierMedium: string;
   tierWeak: string;
   tierAdverse: string;
+  tierStale: string;
 
   // StatsCards sub-labels
   subTotalAcross: string;
@@ -346,6 +348,7 @@ const en: Translations = {
   pnlChart: 'PnL Chart',
   pnlChartInterval: 'Interval',
   waitingPnl: 'Waiting for PnL data...',
+  noTradesInPeriod: 'No trades in this period',
 
   last10Trades: 'Recent Trades',
   entryLS: 'Entry L/S',
@@ -407,6 +410,7 @@ const en: Translations = {
   tierMedium: 'MEDIUM',
   tierWeak: 'WEAK',
   tierAdverse: 'PRICE ⛔',
+  tierStale: 'STALE',
 
   // StatsCards sub-labels
   subTotalAcross: 'Total across all exchanges',
@@ -608,6 +612,7 @@ const he: Translations = {
   pnlChart: 'גרף רווח והפסד',
   pnlChartInterval: 'טווח',
   waitingPnl: 'ממתין לנתוני רווח והפסד...',
+  noTradesInPeriod: 'אין עסקאות בתקופה זו',
 
   last10Trades: 'עסקאות אחרונות',
   entryLS: 'מחיר כניסה',
@@ -669,6 +674,7 @@ const he: Translations = {
   tierMedium: 'בינוני',
   tierWeak: 'חלש',
   tierAdverse: 'מחיר ⛔',
+  tierStale: 'מחיר ישן',
 
   // StatsCards sub-labels
   subTotalAcross: 'סה״כ בכל הבורסאות',

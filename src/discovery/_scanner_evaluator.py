@@ -8,6 +8,7 @@ Contains:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from datetime import datetime, timezone
@@ -78,6 +79,7 @@ class _ScannerEvaluatorMixin:
         eid_b: str,
         funding: Dict[str, dict],
         adapters: Dict[str, "ExchangeAdapter"],
+        cheap: bool = False,
     ) -> Optional[OpportunityCandidate]:
         rate_a = funding[eid_a]["rate"]
         rate_b = funding[eid_b]["rate"]
@@ -98,6 +100,7 @@ class _ScannerEvaluatorMixin:
                 long_rate, short_rate,
                 long_interval, short_interval,
                 funding, adapters,
+                cheap=cheap,
             )
             if opp is None:
                 continue
@@ -118,6 +121,7 @@ class _ScannerEvaluatorMixin:
         long_interval: int, short_interval: int,
         funding: Dict[str, dict],
         adapters: Dict[str, "ExchangeAdapter"],
+        cheap: bool = False,
     ) -> Optional[OpportunityCandidate]:
         """Evaluate one direction (long on A, short on B).
 
@@ -184,48 +188,101 @@ class _ScannerEvaluatorMixin:
         # ── Live price basis check (info only — NOT added to entry cost) ──
         price_basis_pct = Decimal("0")
         _live_basis_available = False
-        _stale_market_data_gate = False
-        try:
-            long_ask_age_fn = getattr(adapters[long_eid], "get_best_ask_age_ms", None)
-            short_bid_age_fn = getattr(adapters[short_eid], "get_best_bid_age_ms", None)
-            long_ask_age_ms = long_ask_age_fn(symbol) if callable(long_ask_age_fn) else None
-            short_bid_age_ms = short_bid_age_fn(symbol) if callable(short_bid_age_fn) else None
+        _mark_price_fallback = False
+        async def _call_metric(
+            adapter: "ExchangeAdapter",
+            method_name: str,
+            default: object,
+        ) -> object:
+            method = getattr(adapter, method_name, None)
+            if not callable(method):
+                return default
+            try:
+                value = method(symbol)
+                if inspect.isawaitable(value):
+                    value = await value
+                return value
+            except Exception:
+                return default
 
-            # Long leg: we BUY → realistic entry price is the ask.
-            # Short leg: we SELL → realistic entry price is the bid.
-            # Using ask/bid (cached every 15s) gives the same spread the
-            # exchange fill will produce, eliminating the mark-price illusion.
-            long_price_raw = adapters[long_eid].get_best_ask(symbol)
-            short_price_raw = adapters[short_eid].get_best_bid(symbol)
-            long_price = Decimal(str(long_price_raw)) if long_price_raw else Decimal("0")
-            short_price = Decimal(str(short_price_raw)) if short_price_raw else Decimal("0")
-            # Treat missing age telemetry as unknown (not automatically stale).
-            # Mark stale only when a provided age exceeds the configured threshold.
+        async def _snapshot_top_of_book() -> tuple[Decimal, Decimal, Optional[float], Optional[float], bool]:
+            long_ask_age_ms_raw = await _call_metric(adapters[long_eid], "get_best_ask_age_ms", None)
+            short_bid_age_ms_raw = await _call_metric(adapters[short_eid], "get_best_bid_age_ms", None)
+            long_ask_age = float(long_ask_age_ms_raw) if long_ask_age_ms_raw is not None else None
+            short_bid_age = float(short_bid_age_ms_raw) if short_bid_age_ms_raw is not None else None
+
+            long_has_live = bool(await _call_metric(adapters[long_eid], "has_live_ask", True))
+            short_has_live = bool(await _call_metric(adapters[short_eid], "has_live_bid", True))
+            mark_fallback = not (long_has_live and short_has_live)
+
+            long_price_raw = await _call_metric(adapters[long_eid], "get_best_ask", None)
+            short_price_raw = await _call_metric(adapters[short_eid], "get_best_bid", None)
+            long_px = Decimal(str(long_price_raw)) if long_price_raw else Decimal("0")
+            short_px = Decimal(str(short_price_raw)) if short_price_raw else Decimal("0")
+            return long_px, short_px, long_ask_age, short_bid_age, mark_fallback
+
+        try:
+            long_price, short_price, long_ask_age_ms, short_bid_age_ms, _mark_price_fallback = await _snapshot_top_of_book()
+
             _long_stale_by_age = (
-                long_ask_age_ms is not None and long_ask_age_ms > max_market_data_age_ms
+                long_ask_age_ms is None or long_ask_age_ms > max_market_data_age_ms
             )
             _short_stale_by_age = (
-                short_bid_age_ms is not None and short_bid_age_ms > max_market_data_age_ms
+                short_bid_age_ms is None or short_bid_age_ms > max_market_data_age_ms
             )
-            _prices_fresh = not (_long_stale_by_age or _short_stale_by_age)
-            if long_price > 0 and short_price > 0 and _prices_fresh:
-                _live_basis_available = True
-                raw_basis = (long_price - short_price) / short_price * Decimal("100")
-                price_basis_pct = raw_basis  # signed — informational only
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(
-                        f"[{symbol}] Entry price basis: {long_eid}=ask({long_price}) vs "
-                        f"{short_eid}=bid({short_price}) → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
-                    )
-            elif long_price > 0 and short_price > 0:
-                _stale_market_data_gate = True
+            _needs_refresh = (
+                _mark_price_fallback
+                or long_price <= 0
+                or short_price <= 0
+                or _long_stale_by_age
+                or _short_stale_by_age
+            )
+
+            if _needs_refresh:
+                await asyncio.gather(
+                    adapters[long_eid].fetch_top_of_book(symbol),
+                    adapters[short_eid].fetch_top_of_book(symbol),
+                    return_exceptions=True,
+                )
+                long_price, short_price, long_ask_age_ms, short_bid_age_ms, _mark_price_fallback = await _snapshot_top_of_book()
+                _long_stale_by_age = (
+                    long_ask_age_ms is None or long_ask_age_ms > max_market_data_age_ms
+                )
+                _short_stale_by_age = (
+                    short_bid_age_ms is None or short_bid_age_ms > max_market_data_age_ms
+                )
+
+            if _mark_price_fallback:
                 logger.debug(
-                    f"[{symbol}] Stale market data — skipping entry qualification: "
+                    f"[{symbol}] Skipping cycle: missing live top-of-book "
+                    f"after refresh ({long_eid}, {short_eid})"
+                )
+                return None
+            if long_price <= 0 or short_price <= 0:
+                logger.debug(
+                    f"[{symbol}] Skipping cycle: invalid top-of-book after refresh "
+                    f"({long_eid} ask={long_price}, {short_eid} bid={short_price})"
+                )
+                return None
+            if _long_stale_by_age or _short_stale_by_age:
+                logger.debug(
+                    f"[{symbol}] Skipping cycle: top-of-book still stale after refresh: "
                     f"{long_eid} ask age={long_ask_age_ms}ms, {short_eid} bid age={short_bid_age_ms}ms, "
                     f"threshold={max_market_data_age_ms}ms"
                 )
+                return None
+
+            _live_basis_available = True
+            raw_basis = (long_price - short_price) / short_price * Decimal("100")
+            price_basis_pct = raw_basis  # signed — informational only
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"[{symbol}] Entry price basis: {long_eid}=ask({long_price}) vs "
+                    f"{short_eid}=bid({short_price}) → {float(price_basis_pct):+.4f}% (info only, not added to cost)"
+                )
         except Exception as _basis_err:
             logger.debug(f"[{symbol}] Price basis check failed: {_basis_err}")
+            return None
 
         # Guard f-string: spec.taker_fee formatting on every pair per scan
         if logger.isEnabledFor(logging.DEBUG):
@@ -241,20 +298,20 @@ class _ScannerEvaluatorMixin:
         # ── Tier classification (funding arb + price arb) ─────────
         # Use consistent basis formula: (long - short) / short * 100
         # This matches entry_basis_pct calculation in _entry_orders_mixin.py
-        if _live_basis_available and short_price > 0:
+        # Always compute price_spread_pct from cached prices (even when stale)
+        # so the frontend shows the real spread rather than 0.00%.
+        # The _live_basis_available / _stale_market_data_gate flags still gate entry.
+        if short_price > 0 and long_price > 0:
             price_spread_pct = (long_price - short_price) / short_price * Decimal("100")
         else:
             price_spread_pct = Decimal("0")
 
         # Net funding after costs (used for tier classification)
         _tier_net = immediate_spread - total_cost_pct
-        if _stale_market_data_gate:
-            entry_tier = "stale_price"
-        else:
-            entry_tier = _classify_tier(
-                _tier_net, price_spread_pct, total_cost_pct,
-                tp.min_funding_spread, tp.weak_min_funding_excess,
-            )
+        entry_tier = _classify_tier(
+            _tier_net, price_spread_pct, total_cost_pct,
+            tp.min_funding_spread, tp.weak_min_funding_excess,
+        )
 
         # Hard safety policy: never ENTER when live entry basis is adverse.
         # Positive price_spread means ask_long > bid_short (buy expensive, sell cheap).
@@ -286,15 +343,22 @@ class _ScannerEvaluatorMixin:
 
         # ── Qualification tracking (soft gates for display) ──────
         qualified = True
-        if _stale_market_data_gate:
-            qualified = False
-
         # ── Entry window: ANY income side with imminent funding ────
         current_entry_window_minutes = tp.narrow_entry_window_minutes
 
         now_ms = time.time() * 1000
-        long_next = funding[long_eid].get("next_timestamp")
-        short_next = funding[short_eid].get("next_timestamp")
+
+        # P2-3: Normalize next_timestamp to milliseconds.  Some exchanges deliver
+        # epoch-seconds (~1.7×10⁹) rather than epoch-ms (~1.7×10¹²).  Without
+        # normalization (next_ts - now_ms) is a large negative, making long_mins=None
+        # so an income side is silently treated as "not imminent" and entry is skipped.
+        def _to_ms(ts: Optional[float]) -> Optional[float]:
+            if ts is None:
+                return None
+            return ts * 1000 if ts < 1e12 else ts
+
+        long_next = _to_ms(funding[long_eid].get("next_timestamp"))
+        short_next = _to_ms(funding[short_eid].get("next_timestamp"))
 
         # Classify each side: income or cost?
         long_is_income = long_rate < 0   # long on negative → we get paid
@@ -457,8 +521,11 @@ class _ScannerEvaluatorMixin:
                     income_pnl = None
 
                 if income_pnl is not None:
-                    cost_next_ts = funding[cost_eid].get("next_timestamp")
-                    income_next_ts = funding[income_eid].get("next_timestamp")
+                    # P1-1: Normalize to ms — same treatment as HOLD path above.
+                    # Epoch-seconds exchanges (~1.75×10⁹) yield ms_until_cost ≈ −1.74×10¹²
+                    # without normalization, silently killing this entire branch.
+                    cost_next_ts = _to_ms(funding[cost_eid].get("next_timestamp"))
+                    income_next_ts = _to_ms(funding[income_eid].get("next_timestamp"))
                     if cost_next_ts and income_next_ts:
                         cp_now_ms = time.time() * 1000
                         ms_until_cost = cost_next_ts - cp_now_ms
@@ -517,6 +584,42 @@ class _ScannerEvaluatorMixin:
 
         # ── Build opportunity ────────────────────────────────────
         if qualified:
+            if cheap:
+                # WS-only path: skip balance fetches, REST ticker, and VWAP walks.
+                # suggested_qty=0 is safe — execution sizer always recalculates
+                # from order_qty at entry time (P1-1 fix).
+                _min_iv = min(long_interval, short_interval)
+                _imm_net = immediate_spread - fees_pct
+                _hrly = _imm_net / Decimal(str(_min_iv)) if _min_iv > 0 else Decimal("0")
+                return OpportunityCandidate(
+                    symbol=symbol,
+                    long_exchange=long_eid,
+                    short_exchange=short_eid,
+                    long_funding_rate=long_rate,
+                    short_funding_rate=short_rate,
+                    funding_spread_pct=funding_spread,
+                    immediate_spread_pct=immediate_spread,
+                    immediate_net_pct=_imm_net,
+                    gross_edge_pct=gross_pct,
+                    fees_pct=fees_pct,
+                    net_edge_pct=net_pct,
+                    suggested_qty=Decimal("0"),
+                    reference_price=Decimal("0"),
+                    min_interval_hours=_min_iv,
+                    hourly_rate_pct=_hrly,
+                    next_funding_ms=closest_ms,
+                    long_next_funding_ms=long_next,
+                    short_next_funding_ms=short_next,
+                    long_interval_hours=long_interval,
+                    short_interval_hours=short_interval,
+                    mode=mode,
+                    exit_before=exit_before,
+                    n_collections=n_collections,
+                    entry_tier=entry_tier,
+                    price_spread_pct=price_spread_pct,
+                    stale_price=False,
+                    # qualified defaults to True
+                )
             opp = await self._build_opportunity(
                 symbol, long_eid, short_eid,
                 long_rate, short_rate,
@@ -531,6 +634,7 @@ class _ScannerEvaluatorMixin:
                 n_collections=n_collections,
                 entry_tier=entry_tier,
                 price_spread_pct=price_spread_pct,
+                stale_price=False,
             )
             return opp
         else:
@@ -600,6 +704,7 @@ class _ScannerEvaluatorMixin:
                 n_collections=n_collections,
                 entry_tier=entry_tier,
                 price_spread_pct=price_spread_pct,
+                stale_price=False,
             )
 
     async def _build_opportunity(
@@ -619,6 +724,7 @@ class _ScannerEvaluatorMixin:
         short_next_funding_ms: Optional[float] = None,
         entry_tier: Optional[str] = None,
         price_spread_pct: Decimal = Decimal("0"),
+        stale_price: bool = False,
     ) -> Optional[OpportunityCandidate]:
         """Build opportunity with position sizing (70% of min balance × leverage)."""
         # Parallelize balance fetches (both exchanges) with ticker fetch (long side only)
@@ -633,7 +739,19 @@ class _ScannerEvaluatorMixin:
         position_pct = self._cfg.risk_limits.position_size_pct
         long_exc_cfg = self._cfg.exchanges.get(long_eid)
         leverage = Decimal(str(long_exc_cfg.leverage if long_exc_cfg and long_exc_cfg.leverage else 5))
-        margin = free_usd * position_pct
+        # P2-2: Mirror the sizer's max_margin_usage cap so that suggested_qty
+        # never exceeds what sizer.compute() will actually approve.  Without
+        # this, _check_pre_entry_liquidity tests inflated depth and may reject
+        # entries the sizer would scale down to fit.
+        total_long_usd = long_bal.get("total", long_bal["free"])
+        total_short_usd = short_bal.get("total", short_bal["free"])
+        max_margin_usage = getattr(self._cfg.risk_limits, "max_margin_usage", Decimal("0.70"))
+        used_long = total_long_usd - long_bal["free"]
+        used_short = total_short_usd - short_bal["free"]
+        avail_long = max(Decimal("0"), total_long_usd * max_margin_usage - used_long)
+        avail_short = max(Decimal("0"), total_short_usd * max_margin_usage - used_short)
+        margin_capped = min(avail_long, avail_short, free_usd)
+        margin = margin_capped * position_pct
         notional = margin * leverage
         max_pos = self._cfg.risk_limits.max_position_size_usd
         notional = min(max_pos, notional)
@@ -648,6 +766,21 @@ class _ScannerEvaluatorMixin:
             long_interval_hours=long_interval_hours,
             short_interval_hours=short_interval_hours,
         )
+
+        # Use executable prices from live order book to report realistic price spread.
+        # Long leg enters with BUY (consume asks), short leg enters with SELL (consume bids).
+        long_exec_buy_raw, short_exec_sell_raw = await asyncio.gather(
+            adapters[long_eid].get_executable_price(symbol, quantity, side=OrderSide.BUY.value),
+            adapters[short_eid].get_executable_price(symbol, quantity, side=OrderSide.SELL.value),
+        )
+        try:
+            long_exec_buy = Decimal(str(long_exec_buy_raw))
+            short_exec_sell = Decimal(str(short_exec_sell_raw))
+        except Exception:
+            long_exec_buy = Decimal("0")
+            short_exec_sell = Decimal("0")
+        if long_exec_buy > 0 and short_exec_sell > 0:
+            price_spread_pct = (long_exec_buy - short_exec_sell) / short_exec_sell * Decimal("100")
 
         min_interval = min(long_interval_hours, short_interval_hours)
         immediate_net = spread_info["immediate_spread_pct"] - fees_pct
@@ -679,4 +812,5 @@ class _ScannerEvaluatorMixin:
             n_collections=n_collections,
             entry_tier=entry_tier,
             price_spread_pct=price_spread_pct,
+            stale_price=stale_price,
         )

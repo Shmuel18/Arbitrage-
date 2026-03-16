@@ -38,6 +38,7 @@ logger = get_logger("scanner")
 
 _FUNDING_STALE_SEC = 3600
 _TOP_OPPS_LOG_INTERVAL_SEC = 300
+_SUSPEND_GAP_SECONDS = 900.0
 # Debounce window for hot-scan: collect price updates for this many ms before evaluating.
 # Reduces CPU on exchanges that push tickers at 10+ Hz.
 _HOT_DEBOUNCE_MS = 100
@@ -45,7 +46,19 @@ _HOT_DEBOUNCE_MS = 100
 # Prevents flooding the controller when a price bounces repeatedly near a threshold.
 _HOT_CALLBACK_COOLDOWN_SEC = 10
 # Minimum gap between repeated INFO opportunity logs for the same route/signature.
-_OPPORTUNITY_LOG_COOLDOWN_SEC = 15
+_OPPORTUNITY_LOG_COOLDOWN_SEC = 60
+# Net penalty (%) applied to stale-price items in display sort.
+# Soft penalty instead of hard binary barrier so stale items with great
+# nets can still compete — avoids complete top-5 list swaps.
+_STALE_DISPLAY_PENALTY = 0.05
+# Mini-OB refresh: keep live ask/bid for the top stale candidates.
+_OB_REFRESH_INTERVAL_SEC = 3
+# P2-1: Circuit-breaker constants — hoisted to module level (were incorrectly
+# defined inside the while loop, re-binding every 5 s).
+_CB_MAX_ERRORS: int = 3
+_CB_BACKOFF_SEC: float = 300.0
+_OB_REFRESH_MAX_TARGETS = 10   # (exchange, symbol) pairs to track
+_OB_REFRESH_CONCURRENCY = 4   # max parallel OB REST calls
 
 
 def _hot_scan_task_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
@@ -54,6 +67,23 @@ def _hot_scan_task_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
     exc = task.exception()
     if exc:
         logger.error(f"[hot-scan] Task exited unexpectedly: {exc}")
+
+
+def _ob_refresh_task_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error(f"[ob-refresh] Task exited unexpectedly: {exc}")
+
+
+def _hot_entry_task_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
+    """Supervision callback for per-opportunity entry tasks spawned by hot-scan."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error(f"[hot-entry] Task {task.get_name()} failed: {exc}")
 
 
 class Scanner(_ScannerEvaluatorMixin):
@@ -75,7 +105,10 @@ class Scanner(_ScannerEvaluatorMixin):
         self._cache_exchange_ids: List[str] = []
         self._cache_scan_count: int = 0        # Hot-scan queue: adapters push (exchange_id, symbol) here on every fresh price update.
         # _hot_scan_loop() drains this queue and evaluates only the affected symbols.
-        self._hot_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=500)
+        # P1-1: Increased from 500 → 5000. At 10 Hz across 3 exchanges × 200 symbols
+        # the queue could saturate in under 1s during volatile pre-funding periods;
+        # dropped entries mean missed entries rather than slowed evaluation.
+        self._hot_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=5000)
         self._hot_scan_task: Optional[asyncio.Task] = None
         # Phase-3: candidates shortlist — only symbols with a meaningful funding spread
         # (updated after each full scan_all()) are evaluated in the hot-scan path.
@@ -88,6 +121,24 @@ class Scanner(_ScannerEvaluatorMixin):
         # scanner cycles evaluate the same stale candidate continuously.
         self._opp_log_last_fire: Dict[str, float] = {}
         self._opp_log_signature: Dict[str, str] = {}
+        # P2-2: Circuit breaker per exchange.  After _CB_MAX_ERRORS consecutive
+        # maybe_reload_markets failures the exchange is skipped for _CB_BACKOFF_SEC
+        # seconds, preventing log floods and wasted CPU during outages.
+        self._exchange_consecutive_errors: Dict[str, int] = {}
+        self._exchange_backoff_until: Dict[str, float] = {}
+        # Hysteresis: only push a new top-5 to Redis/WebSocket when the list
+        # changes meaningfully (symbol, exchange pair, stale flag, or net_pct
+        # rounded to 1 dp).  Prevents every-5s flicker from tiny price drift.
+        self._last_opp_fingerprint: str = ""
+        # Sticky top-5: remember the previous display list so new items must
+        # beat existing incumbents by a meaningful margin to earn a slot.
+        self._prev_display_keys: set[str] = set()
+        # Retain previous display opportunities for 1-cycle gap tolerance.
+        # Maps opp_key → (OpportunityCandidate, cycles_retained).
+        self._prev_display_opps: Dict[str, tuple] = {}
+        # Mini-OB refresh: (exchange_id, symbol) pairs to keep fresh every 3s.
+        self._ob_refresh_targets: set[tuple[str, str]] = set()
+        self._ob_refresh_task: Optional[asyncio.Task] = None
 
     def _should_emit_opportunity_log(
         self,
@@ -105,10 +156,13 @@ class Scanner(_ScannerEvaluatorMixin):
         they are rate-limited per (symbol, route, adverse-state).
         """
         log_key = f"{symbol}|{long_exchange}|{short_exchange}|{int(is_adverse)}"
+        # Coarse signature: 2 dp net, 1 dp price-spread.
+        # Prevents tiny price drift from resetting the cooldown timer
+        # (was 4 dp, causing 20+ logs/min for hot-scan symbols).
         signature = (
             f"{entry_tier or 'none'}|"
-            f"{net_pct.quantize(Decimal('0.0001'))}|"
-            f"{price_spread_pct.quantize(Decimal('0.0001'))}"
+            f"{net_pct.quantize(Decimal('0.01'))}|"
+            f"{price_spread_pct.quantize(Decimal('0.1'))}"
         )
         now_monotonic = time.monotonic()
         last_signature = self._opp_log_signature.get(log_key)
@@ -154,6 +208,12 @@ class Scanner(_ScannerEvaluatorMixin):
         )
         self._hot_scan_task.add_done_callback(_hot_scan_task_done)
 
+        # Run mini-OB refresh loop: keeps ask/bid fresh for top stale candidates.
+        self._ob_refresh_task = asyncio.create_task(
+            self._ob_refresh_loop(), name="ob-refresh"
+        )
+        self._ob_refresh_task.add_done_callback(_ob_refresh_task_done)
+
         logger.info(
             f"Scanner started (interval: {scan_interval}s, WebSocket monitoring {len(all_symbols)} symbols)",
             extra={"action": "scanner_start"},
@@ -161,18 +221,166 @@ class Scanner(_ScannerEvaluatorMixin):
 
         while self._running:
             try:
-                # Refresh market data (fees, specs) if stale — no-op on most cycles
-                await asyncio.gather(
-                    *[a.maybe_reload_markets() for a in self._exchanges.all().values()],
+                # Refresh market data (fees, specs) if stale — no-op on most cycles.
+                # Circuit breaker: skip adapters that have hit the error threshold
+                # and are still within their backoff window.
+                # (Constants _CB_MAX_ERRORS / _CB_BACKOFF_SEC defined at module level.)
+                _now_t = time.monotonic()
+                _reload_adapters = [
+                    (eid, a)
+                    for eid, a in self._exchanges.all().items()
+                    if _now_t >= self._exchange_backoff_until.get(eid, 0.0)
+                ]
+                _reload_results = await asyncio.gather(
+                    *[a.maybe_reload_markets() for _, a in _reload_adapters],
                     return_exceptions=True,
                 )
+                for _eid, _res in zip(
+                    [e for e, _ in _reload_adapters], _reload_results
+                ):
+                    if isinstance(_res, Exception):
+                        _cnt = self._exchange_consecutive_errors.get(_eid, 0) + 1
+                        self._exchange_consecutive_errors[_eid] = _cnt
+                        if _cnt >= _CB_MAX_ERRORS:
+                            self._exchange_backoff_until[_eid] = _now_t + _CB_BACKOFF_SEC
+                            logger.error(
+                                f"[circuit-breaker] {_eid}: {_cnt} consecutive reload "
+                                f"failures — backing off for {int(_CB_BACKOFF_SEC)}s: {_res}",
+                                extra={"exchange": _eid, "action": "circuit_breaker_open"},
+                            )
+                        elif _cnt == 1:
+                            logger.warning(
+                                f"[circuit-breaker] {_eid}: reload error "
+                                f"({_cnt}/{_CB_MAX_ERRORS}): {_res}"
+                            )
+                    else:
+                        if self._exchange_consecutive_errors.pop(_eid, None) is not None:
+                            logger.info(
+                                f"[circuit-breaker] {_eid}: reload recovered — circuit closed"
+                            )
+                        self._exchange_backoff_until.pop(_eid, None)
                 opps = await self.scan_all()
+
+                # ── Order-book enrichment for stale-price candidates ─────
+                # Symbols whose ticker stream lacks ask/bid get flagged
+                # stale_price=True.  For the most promising ones (funding
+                # rate above half the minimum threshold), fetch L1 from the
+                # order book so the scanner can compute a real price spread.
+                _ob_min_spread = self._cfg.trading_params.min_funding_spread / 2
+                _stale_candidates = [
+                    o for o in opps
+                    if getattr(o, "stale_price", False)
+                    and o.net_edge_pct >= _ob_min_spread
+                ]
+                if _stale_candidates:
+                    # Collect unique (exchange, symbol) pairs that need OB data
+                    _ob_tasks: set[tuple[str, str]] = set()
+                    for o in _stale_candidates:
+                        adapters = self._exchanges.all()
+                        long_adapter = adapters.get(o.long_exchange)
+                        short_adapter = adapters.get(o.short_exchange)
+                        if long_adapter and not long_adapter.has_live_ask(o.symbol):
+                            _ob_tasks.add((o.long_exchange, o.symbol))
+                        if short_adapter and not short_adapter.has_live_bid(o.symbol):
+                            _ob_tasks.add((o.short_exchange, o.symbol))
+
+                    if _ob_tasks:
+                        _ob_sem = asyncio.Semaphore(6)
+                        async def _fetch_ob(eid: str, sym: str) -> None:
+                            async with _ob_sem:
+                                adapter = self._exchanges.all().get(eid)
+                                if adapter:
+                                    await adapter.fetch_top_of_book(sym)
+
+                        await asyncio.gather(
+                            *[_fetch_ob(eid, sym) for eid, sym in _ob_tasks],
+                            return_exceptions=True,
+                        )
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                f"[OB-fallback] Fetched order book L1 for "
+                                f"{len(_ob_tasks)} (exchange, symbol) pairs",
+                                extra={"action": "ob_fallback"},
+                            )
+
+                        # Re-evaluate only the affected pairs with fresh ask/bid
+                        _re_eval_adapters = self._exchanges.all()
+                        _re_eval_set: set[tuple[str, str, str]] = set()
+                        for o in _stale_candidates:
+                            _re_eval_set.add((o.symbol, o.long_exchange, o.short_exchange))
+
+                        _funding_cache: dict[str, dict[str, dict]] = {}
+                        for sym, long_eid, short_eid in _re_eval_set:
+                            if sym not in _funding_cache:
+                                _funding_cache[sym] = {}
+                            for eid in (long_eid, short_eid):
+                                if eid not in _funding_cache[sym]:
+                                    cached = _re_eval_adapters[eid].get_funding_rate_cached(sym)
+                                    if cached:
+                                        _funding_cache[sym][eid] = cached
+
+                        _refreshed: list[OpportunityCandidate] = []
+                        for sym, long_eid, short_eid in _re_eval_set:
+                            sym_funding = _funding_cache.get(sym, {})
+                            if long_eid in sym_funding and short_eid in sym_funding:
+                                new_opp = await self._evaluate_pair(
+                                    sym, long_eid, short_eid,
+                                    sym_funding, _re_eval_adapters,
+                                )
+                                if new_opp:
+                                    _refreshed.append(new_opp)
+
+                        # Replace old stale entries with refreshed evaluations
+                        _stale_keys = {
+                            (o.symbol, o.long_exchange, o.short_exchange)
+                            for o in _stale_candidates
+                        }
+                        opps = [
+                            o for o in opps
+                            if (o.symbol, o.long_exchange, o.short_exchange) not in _stale_keys
+                        ]
+                        opps.extend(_refreshed)
+                        logger.info(
+                            f"📖 OB fallback: enriched {len(_refreshed)}/{len(_stale_candidates)} "
+                            f"stale candidates with live order-book ask/bid",
+                            extra={"action": "ob_fallback_done"},
+                        )
+
+                # ── Update mini-OB refresh targets ───────────────────────
+                # Collect (exchange, symbol) pairs that still lack live
+                # ask/bid from the current opportunities so the background
+                # _ob_refresh_loop keeps them fresh between full scans.
+                _new_ob_targets: set[tuple[str, str]] = set()
+                _ob_consider = sorted(
+                    opps, key=lambda o: o.net_edge_pct, reverse=True,
+                )
+                _adapters_snapshot = self._exchanges.all()
+                for o in _ob_consider:
+                    if len(_new_ob_targets) >= _OB_REFRESH_MAX_TARGETS:
+                        break
+                    long_a = _adapters_snapshot.get(o.long_exchange)
+                    short_a = _adapters_snapshot.get(o.short_exchange)
+                    if long_a and not long_a.has_live_ask(o.symbol):
+                        _new_ob_targets.add((o.long_exchange, o.symbol))
+                    if short_a and not short_a.has_live_bid(o.symbol):
+                        _new_ob_targets.add((o.short_exchange, o.symbol))
+                self._ob_refresh_targets = _new_ob_targets
 
                 # Split qualified (tradeable) and display-only
                 qualified_opps = [o for o in opps if o.qualified]
                 all_opps = list(opps)
 
-                # Sort for DISPLAY: near-term opportunities (payment within 1h) first.
+                # Sort for DISPLAY: near-term opportunities (payment within 1h) first,
+                # then by funding-only net_edge_pct (stable — does NOT change with live
+                # price ticks).  Avoid using immediate_net_pct or price_spread_pct as
+                # sort keys; those fluctuate every scan and cause constant rank-shuffling
+                # which makes the front-end list flicker.
+                #
+                # Stability measures:
+                #  • net_edge_pct is quantized to 2 dp so micro-drift (±0.001%) does
+                #    NOT cause two items to swap ranks back-and-forth.
+                #  • A deterministic tiebreaker (symbol name) guarantees that items
+                #    with identical scores keep a fixed order across scans.
                 _now_ms = time.time() * 1000
                 _one_hour_ms = 3600_000
                 _tier_rank = {"top": 3, "medium": 2, "weak": 1, "adverse": -1}
@@ -181,27 +389,76 @@ class Scanner(_ScannerEvaluatorMixin):
                         0 if o.entry_tier == "adverse" else 1,
                         1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
                         _tier_rank.get(o.entry_tier or "", 0),
-                        float(o.immediate_net_pct),
-                        float(o.price_spread_pct),
+                        round(float(o.net_edge_pct), 2),
+                        o.symbol,  # stable tiebreaker — prevents flickering
                     ),
                     reverse=True,
                 )
                 qualified_opps.sort(
-                    key=lambda o: (_tier_rank.get(o.entry_tier or "", 0), float(o.net_edge_pct), float(o.price_spread_pct)),
+                    key=lambda o: (
+                        _tier_rank.get(o.entry_tier or "", 0),
+                        round(float(o.net_edge_pct), 2),
+                        o.symbol,
+                    ),
                     reverse=True,
                 )
 
-                # Display top 5: qualified first, then fill with display-only
-                display_qualified = [o for o in all_opps if o.qualified][:5]
-                remaining_slots = 5 - len(display_qualified)
-                display_unqualified = [o for o in all_opps if not o.qualified][:remaining_slots] if remaining_slots > 0 else []
-                display_top = display_qualified + display_unqualified
+                # Display top 5: qualified first, then fill with display-only.
+                # Sticky hysteresis: items already in the previous display get a
+                # bonus so they are not swapped out by newcomers with a trivially
+                # higher net spread (prevents UI flicker).
+                #
+                # Retention: if an incumbent disappears from scan results for
+                # ≤ 2 cycles (cache miss, WS lag), inject it from cache to
+                # avoid jarring 1-cycle gaps.
+                _MAX_RETAIN_CYCLES = 2
+                _all_keys = {
+                    f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+                    for o in all_opps
+                }
+                for prev_key, (prev_opp, age) in list(self._prev_display_opps.items()):
+                    if prev_key not in _all_keys and age < _MAX_RETAIN_CYCLES:
+                        all_opps.append(prev_opp)
+
+                _STICKY_BONUS = 0.10  # 0.10% net bonus for incumbents
+                def _display_sort_key(o):
+                    opp_key = f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+                    bonus = _STICKY_BONUS if opp_key in self._prev_display_keys else 0.0
+                    # Soft stale penalty instead of binary barrier.
+                    # Stale items CAN still rank highly if their net edge is
+                    # sufficiently above the penalty — prevents complete
+                    # top-5 list swaps when items toggle stale/non-stale.
+                    stale_pen = _STALE_DISPLAY_PENALTY if getattr(o, "stale_price", False) else 0.0
+                    # entry_tier is NOT used as a sort dimension — it depends
+                    # on live price_spread which fluctuates every tick and
+                    # caused items to jump tiers (medium→top) abruptly.
+                    return (
+                        0 if o.entry_tier == "adverse" else 1,
+                        1 if o.qualified else 0,
+                        1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
+                        round(float(o.net_edge_pct) + bonus - stale_pen, 1),
+                        o.symbol,
+                    )
+                all_opps.sort(key=_display_sort_key, reverse=True)
+
+                display_top = all_opps[:5]
+                # Update sticky keys + retain cache for next cycle
+                self._prev_display_keys = set()
+                new_opps_cache: Dict[str, tuple] = {}
+                for o in display_top:
+                    opp_key = f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+                    self._prev_display_keys.add(opp_key)
+                    # If item was in scan results → age 0; if retained → age + 1
+                    old_age = self._prev_display_opps.get(opp_key, (None, -1))[1]
+                    new_age = 0 if opp_key in _all_keys else old_age + 1
+                    new_opps_cache[opp_key] = (o, new_age)
+                self._prev_display_opps = new_opps_cache
 
                 if display_top:
                     now_ts = time.time()
                     if now_ts - self._last_top_log_ts >= _TOP_OPPS_LOG_INTERVAL_SEC:
                         self._last_top_log_ts = now_ts
-                        if display_qualified:
+                        if qualified_opps:
                             logger.info(
                                 "📊 TOP 5 OPPORTUNITIES (near-term first, then by Net)",
                                 extra={"action": "top_opportunities"},
@@ -250,7 +507,20 @@ class Scanner(_ScannerEvaluatorMixin):
                             )
 
                     # Publish ALL display opportunities to Redis for frontend
-                    if self._publisher:
+                    # — but only when the list has changed meaningfully (hysteresis).
+                    # Fingerprint is ORDER-INDEPENDENT (sorted) so that pure rank
+                    # reshuffles of the same 5 items do NOT trigger a publish.
+                    _fp_parts = sorted(
+                        f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+                        f"|{1 if o.stale_price else 0}"
+                        f"|{round(float(o.net_edge_pct), 1):.1f}"
+                        for o in display_top
+                    )
+                    _new_fingerprint = ",".join(_fp_parts)
+                    _opp_changed = _new_fingerprint != self._last_opp_fingerprint
+                    if _opp_changed:
+                        self._last_opp_fingerprint = _new_fingerprint
+                    if self._publisher and _opp_changed:
                         opp_data = [
                             {
                                 "symbol": o.symbol,
@@ -275,6 +545,7 @@ class Scanner(_ScannerEvaluatorMixin):
                                 "short_interval_hours": o.short_interval_hours,
                                 "entry_tier": o.entry_tier,
                                 "price_spread_pct": float(o.price_spread_pct),
+                                "stale_price": o.stale_price,
                             }
                             for o in display_top
                         ]
@@ -328,6 +599,8 @@ class Scanner(_ScannerEvaluatorMixin):
         self._running = False
         if self._hot_scan_task and not self._hot_scan_task.done():
             self._hot_scan_task.cancel()
+        if self._ob_refresh_task and not self._ob_refresh_task.done():
+            self._ob_refresh_task.cancel()
         # Cancel all WebSocket watcher tasks via the adapter's public method,
         # which avoids accessing private attributes from outside the class.
         for adapter in self._exchanges.all().values():
@@ -349,6 +622,12 @@ class Scanner(_ScannerEvaluatorMixin):
         full scan cycle.  The debounce window (_HOT_DEBOUNCE_MS) collapses bursts of
         rapid ticker updates into a single evaluation pass per symbol."""
         debounce_ms = _HOT_DEBOUNCE_MS / 1000
+        # P2-3: Evict stale entries from per-route fire-time dicts every N iterations
+        # to prevent unbounded growth over multi-day uptime (200 symbols × 6 routes =
+        # ~1200 entries that otherwise accumulate forever, including delisted pairs).
+        _hot_loop_iter: int = 0
+        _EVICT_INTERVAL_ITERS: int = 1000
+        _EVICT_AFTER_SEC: float = _HOT_CALLBACK_COOLDOWN_SEC * 10  # 100 s
         while self._running:
             try:
                 # Block until at least one update arrives (or 1s timeout to recheck _running)
@@ -374,17 +653,36 @@ class Scanner(_ScannerEvaluatorMixin):
                 if not hot_symbols:
                     continue
 
-                # Filter to candidates with non-trivial spreads (phase-3 shortlist).
-                # If no candidates yet (first startup cycle), allow all common symbols.
-                if self._hot_candidates:
-                    hot_symbols &= self._hot_candidates
-                if not hot_symbols:
-                    continue
+                # P2-3: Periodically evict stale entries from all three fire-time dicts.
+                _hot_loop_iter += 1
+                if _hot_loop_iter % _EVICT_INTERVAL_ITERS == 0:
+                    _t_evict = time.monotonic()
+                    self._hot_cb_last_fire = {
+                        k: v for k, v in self._hot_cb_last_fire.items()
+                        if _t_evict - v < _EVICT_AFTER_SEC
+                    }
+                    self._opp_log_last_fire = {
+                        k: v for k, v in self._opp_log_last_fire.items()
+                        if _t_evict - v < _EVICT_AFTER_SEC
+                    }
+                    self._opp_log_signature = {
+                        k: v for k, v in self._opp_log_signature.items()
+                        if k in self._opp_log_last_fire
+                    }
 
                 adapters = self._exchanges.all()
                 exchange_ids = list(adapters.keys())
                 if len(exchange_ids) < 2:
                     continue
+
+                # P1-4: The _hot_candidates filter was added for CPU reduction but creates
+                # a blind spot: symbols whose funding rate JUST crossed the threshold
+                # (emergent spikes) are invisible until the next full scan_all() cycle
+                # (up to 10s away), by which time the entry window may have closed.
+                # The callback path already debounces via _HOT_CALLBACK_COOLDOWN_SEC,
+                # so removing the filter does not flood the controller.
+                # The heavy REST work (fetch_top_of_book) is still gated by the stale-
+                # price refresh logic inside _evaluate_direction.
 
                 cooled_symbols = await self._redis.get_cooled_down_symbols(list(hot_symbols))
 
@@ -397,12 +695,23 @@ class Scanner(_ScannerEvaluatorMixin):
 
                 for symbol in hot_symbols:
                     try:
-                        opps = await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols)
+                        # cheap=True: skip _build_opportunity REST calls (balance+ticker+VWAP).
+                        # The hot path only needs a WS-cache qualification signal;
+                        # suggested_qty=0 is safe because the entry sizer always
+                        # recalculates from order_qty at execution time (P1-1).
+                        opps = await self._scan_symbol(
+                            symbol, adapters, exchange_ids, cooled_symbols, cheap=True,
+                        )
                         for opp in opps:
                             if opp.qualified:
-                                # Per-symbol debounce: skip if fired recently from hot path.
+                                # P1-2: Key debounce by route, not just symbol.
+                                # With 3+ exchanges a symbol can have multiple qualified
+                                # routes (e.g. Binance↔Bybit AND Binance↔OKX). The old
+                                # symbol-only key silenced the second route for 10 s even
+                                # when it had a higher net spread.
+                                _cb_key = f"{opp.symbol}|{opp.long_exchange}|{opp.short_exchange}"
                                 _now = time.monotonic()
-                                _last = self._hot_cb_last_fire.get(opp.symbol, 0.0)
+                                _last = self._hot_cb_last_fire.get(_cb_key, 0.0)
                                 if _now - _last < _HOT_CALLBACK_COOLDOWN_SEC:
                                     if logger.isEnabledFor(logging.DEBUG):
                                         logger.debug(
@@ -410,14 +719,24 @@ class Scanner(_ScannerEvaluatorMixin):
                                             f"({_now - _last:.1f}s since last fire)",
                                         )
                                     continue
-                                self._hot_cb_last_fire[opp.symbol] = _now
+                                self._hot_cb_last_fire[_cb_key] = _now
                                 logger.info(
                                     f"🔥 [hot-scan] {opp.symbol} "
                                     f"{opp.long_exchange}↔{opp.short_exchange} "
                                     f"net={opp.net_edge_pct:.4f}%",
                                     extra={"action": "hot_scan_opportunity", "symbol": opp.symbol},
                                 )
-                                await callback(opp)
+                                # Fire-and-forget with supervision: entry path runs in its
+                                # own task so the discovery loop is never blocked by order
+                                # placement, pre-flight REST, or lock acquisition.
+                                _task_name = (
+                                    f"hot-entry:{opp.symbol}"
+                                    f"|{opp.long_exchange}|{opp.short_exchange}"
+                                )
+                                _t = asyncio.create_task(
+                                    callback(opp), name=_task_name,
+                                )
+                                _t.add_done_callback(_hot_entry_task_done)
                     except asyncio.CancelledError:
                         return
                     except Exception as exc:
@@ -427,6 +746,56 @@ class Scanner(_ScannerEvaluatorMixin):
                 return
             except Exception as exc:
                 logger.warning(f"[hot-scan] Unexpected loop error: {exc}")
+
+    # ── Mini-OB refresh loop ────────────────────────────────────
+
+    async def _ob_refresh_loop(self) -> None:
+        """Continuously fetch order-book L1 for top stale candidates.
+
+        Targets are set by the main scan loop after each cycle: up to
+        ``_OB_REFRESH_MAX_TARGETS`` (exchange, symbol) pairs that lack
+        live ask/bid data.  This loop fetches them every
+        ``_OB_REFRESH_INTERVAL_SEC`` seconds so that price-spread
+        estimates stay reasonably fresh between full scan cycles.
+        """
+        sem = asyncio.Semaphore(_OB_REFRESH_CONCURRENCY)
+
+        async def _fetch_one(adapter: "ExchangeAdapter", symbol: str) -> None:
+            async with sem:
+                try:
+                    await adapter.fetch_top_of_book(symbol)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            f"[ob-refresh] fetch failed {adapter.exchange_id}:{symbol}: {exc}",
+                        )
+
+        while self._running:
+            try:
+                await asyncio.sleep(_OB_REFRESH_INTERVAL_SEC)
+                targets = list(self._ob_refresh_targets)
+                if not targets:
+                    continue
+                adapters = self._exchanges.all()
+                tasks: list[asyncio.Task] = []
+                for eid, sym in targets:
+                    adapter = adapters.get(eid)
+                    if adapter is None:
+                        continue
+                    tasks.append(_fetch_one(adapter, sym))
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        f"[ob-refresh] Refreshed {len(tasks)} OB targets",
+                        extra={"action": "ob_refresh_cycle"},
+                    )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning(f"[ob-refresh] Loop error: {exc}")
 
     # ── Scan logic ───────────────────────────────────────────────
 
@@ -479,16 +848,27 @@ class Scanner(_ScannerEvaluatorMixin):
                 results.extend(symbol_results)
 
         elapsed = time.monotonic() - t0
+        elapsed_for_log = elapsed
+        if elapsed > _SUSPEND_GAP_SECONDS:
+            logger.warning(
+                f"⏸️ Large scan elapsed detected ({elapsed:.1f}s) — likely system sleep/resume; "
+                f"excluding from performance telemetry",
+                extra={
+                    "action": "scan_elapsed_anomaly",
+                    "data": {"elapsed": round(elapsed, 1), "threshold": _SUSPEND_GAP_SECONDS},
+                },
+            )
+            elapsed_for_log = 0.0
         if results:
             results.sort(key=lambda o: o.immediate_net_pct, reverse=True)
             logger.info(
-                f"✅ Scan completed: {len(results)} opportunities from {len(common_symbols)} symbols in {elapsed:.1f}s",
-                extra={"action": "scan_complete", "data": {"count": len(results), "elapsed": round(elapsed, 1)}},
+                f"✅ Scan completed: {len(results)} opportunities from {len(common_symbols)} symbols in {elapsed_for_log:.1f}s",
+                extra={"action": "scan_complete", "data": {"count": len(results), "elapsed": round(elapsed_for_log, 1)}},
             )
         else:
             logger.info(
-                f"✅ Scan completed: 0 opportunities from {len(common_symbols)} symbols in {elapsed:.1f}s",
-                extra={"action": "scan_complete", "data": {"count": 0, "elapsed": round(elapsed, 1)}},
+                f"✅ Scan completed: 0 opportunities from {len(common_symbols)} symbols in {elapsed_for_log:.1f}s",
+                extra={"action": "scan_complete", "data": {"count": 0, "elapsed": round(elapsed_for_log, 1)}},
             )
         # Update hot-candidates shortlist for the event-driven hot-scan path.
         # Include any symbol that has a non-trivial net edge (>= threshold / 4)
@@ -512,6 +892,7 @@ class Scanner(_ScannerEvaluatorMixin):
     async def _scan_symbol(
         self, symbol: str, adapters: Dict[str, "ExchangeAdapter"], exchange_ids: List[str],
         cooled_symbols: set[str] = frozenset(),
+        cheap: bool = False,
     ) -> List[OpportunityCandidate]:
         """Scan a single symbol for opportunities using WebSocket-cached rates."""
         if symbol in cooled_symbols:
@@ -549,6 +930,7 @@ class Scanner(_ScannerEvaluatorMixin):
             for j in range(i + 1, len(eids)):
                 opp = await self._evaluate_pair(
                     symbol, eids[i], eids[j], funding, adapters,
+                    cheap=cheap,
                 )
                 if opp:
                     results.append(opp)

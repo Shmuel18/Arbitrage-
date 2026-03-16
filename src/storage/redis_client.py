@@ -235,8 +235,95 @@ class RedisClient:
     # ── Distributed lock ─────────────────────────────────────────
 
     async def acquire_lock(self, name: str, timeout: int = 10) -> bool:
+        """Legacy lock — no ownership token; kept for backward compatibility."""
         key = self._key("lock", name)
         return bool(await self._c.set(key, "1", nx=True, ex=timeout))
 
     async def release_lock(self, name: str) -> None:
+        """Legacy release — no ownership check; kept for backward compatibility."""
         await self._c.delete(self._key("lock", name))
+
+    async def acquire_lock_with_token(self, name: str, token: str, ttl: int = 60) -> bool:
+        """Acquire a distributed lock with a caller-owned token.
+
+        Uses the token as the Redis value so only the holder can release or
+        renew it.  TTL of 60 s covers the full entry path; the heartbeat task
+        renews it every 15 s to handle slow exchanges and partial fills.
+
+        Returns True if acquired, False if the key already exists (another
+        instance or a leftover from a previous crash holds the lock).
+        """
+        key = self._key("lock", name)
+        return bool(await self._c.set(key, token, nx=True, ex=ttl))
+
+    async def release_lock_if_owner(self, name: str, token: str) -> bool:
+        """Release the lock only if the stored token matches ours.
+
+        Plain DEL would silently release a lock acquired by a different instance
+        after our TTL expired — this atomic Lua compare-and-delete prevents that.
+
+        Returns True if released, False if not the owner (already expired or
+        stolen by another instance).
+        """
+        key = self._key("lock", name)
+        # Atomic: read token, compare, delete if match — all in one round-trip.
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "  return redis.call('del', KEYS[1]) "
+            "else "
+            "  return 0 "
+            "end"
+        )
+        result = await self._c.eval(script, 1, key, token)
+        return bool(result)
+
+    async def extend_lock(self, name: str, token: str, ttl: int = 60) -> bool:
+        """Renew the lock TTL only if we still own it.
+
+        Called by the lock heartbeat task every 15 s.  If the lock was lost
+        (expired or stolen) this returns False and the heartbeat shuts down,
+        giving the caller a chance to log and handle the race condition.
+        """
+        key = self._key("lock", name)
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "  return redis.call('expire', KEYS[1], ARGV[2]) "
+            "else "
+            "  return 0 "
+            "end"
+        )
+        result = await self._c.eval(script, 1, key, token, str(ttl))
+        return bool(result)
+
+    # ── Route-level cooldown ──────────────────────────────────────
+    # Finer-grained than symbol-only cooldown: a failed entry on
+    # exchange_a → exchange_b should not suppress exchange_c → exchange_d
+    # for the same symbol.  Route key: "symbol|long_exchange|short_exchange".
+
+    async def set_route_cooldown(
+        self,
+        symbol: str,
+        long_exchange: str,
+        short_exchange: str,
+        seconds: int,
+        reason: str = "",
+    ) -> None:
+        """Set a per-route (symbol|long|short) cooldown."""
+        route_key = f"{symbol}|{long_exchange}|{short_exchange}"
+        key = self._key("cooldown_route", route_key)
+        await self._c.set(key, reason or "1", ex=seconds)
+        logger.info(
+            f"Route cooldown set: {route_key} for {seconds}s "
+            f"reason={reason or 'unspecified'}",
+            extra={"symbol": symbol, "action": "route_cooldown_set"},
+        )
+
+    async def is_route_cooled_down(
+        self,
+        symbol: str,
+        long_exchange: str,
+        short_exchange: str,
+    ) -> bool:
+        """Check if this specific route (symbol|long|short) is in cooldown."""
+        route_key = f"{symbol}|{long_exchange}|{short_exchange}"
+        return bool(await self._c.exists(self._key("cooldown_route", route_key)))

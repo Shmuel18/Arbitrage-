@@ -13,6 +13,8 @@ from src.core.logging import get_logger
 
 logger = get_logger("exchanges")
 
+_ZERO = Decimal("0")
+
 
 class _MarketDataMixin:
     """Instrument specs, tickers, balances, positions, and funding history."""
@@ -225,6 +227,75 @@ class _MarketDataMixin:
 
         return _ZERO
 
+    async def get_vwap_and_depth(
+        self,
+        symbol: str,
+        qty: Decimal,
+        side: str,  # "buy" (consumes asks) or "sell" (consumes bids)
+        ob_depth: int = 20,
+    ) -> tuple[Decimal, bool]:
+        """Walk the live order book and return (vwap_price, book_sufficient).
+
+        book_sufficient=True  — full *qty* covered by resting orders.
+        book_sufficient=False — book too shallow (or fetch failed); returned
+                               price is the L1 bid/ask fallback or partial VWAP.
+
+        Used for pre-entry liquidity gating: if False, skip entry instead of
+        accepting adverse slippage on a market order.
+        """
+        _ZERO = Decimal("0")
+        try:
+            async with self._rest_semaphore:
+                ob = await self._exchange.fetch_order_book(
+                    self._resolve_symbol(symbol), limit=ob_depth
+                )
+            levels: list[list[float]] = ob["bids"] if side == "sell" else ob["asks"]
+        except Exception as e:
+            logger.debug(
+                f"[{self.exchange_id}] {symbol} order book fetch failed "
+                f"for depth check: {e}"
+            )
+            levels = []
+
+        if levels:
+            remaining = qty
+            total_cost = _ZERO
+            for price_f, size_f in levels:
+                if remaining <= _ZERO:
+                    break
+                level_price = Decimal(str(price_f))
+                level_size = Decimal(str(size_f))
+                fill = min(remaining, level_size)
+                total_cost += fill * level_price
+                remaining -= fill
+
+            if remaining <= _ZERO:
+                # Full qty filled by book — return VWAP
+                return total_cost / qty, True
+
+            # Partial fill — book is shallow
+            filled_qty = qty - remaining
+            if filled_qty > _ZERO and total_cost > _ZERO:
+                partial_vwap = total_cost / filled_qty
+            else:
+                partial_vwap = Decimal(str(levels[0][0]))
+            return partial_vwap, False
+
+        # Book fetch failed — fall back to L1 ticker (sufficient=False)
+        try:
+            async with self._rest_semaphore:
+                ticker = await self._exchange.fetch_ticker(self._resolve_symbol(symbol))
+            key = "bid" if side == "sell" else "ask"
+            price = ticker.get(key) or ticker.get("last") or ticker.get("close")
+            if price:
+                return Decimal(str(price)), False
+        except Exception as e:
+            logger.debug(
+                f"[{self.exchange_id}] {symbol} ticker fallback for depth check failed: {e}"
+            )
+
+        return _ZERO, False
+
     async def get_balance(self) -> Dict[str, Any]:
         async with self._rest_semaphore:
             bal = await self._exchange.fetch_balance()
@@ -232,10 +303,17 @@ class _MarketDataMixin:
         usdt = bal.get("USDT", {})
         if not usdt.get("total"):
             usdt = bal.get("USD", {})
+        free_val = Decimal(str(usdt.get("free", 0) or 0))
+        used_val = Decimal(str(usdt.get("used", 0) or 0))
+        total_val = Decimal(str(usdt.get("total", 0) or 0))
+        if total_val <= _ZERO:
+            recomputed_total = free_val + used_val
+            if recomputed_total > _ZERO:
+                total_val = recomputed_total
         return {
-            "total": Decimal(str(usdt.get("total", 0) or 0)),
-            "free":  Decimal(str(usdt.get("free", 0) or 0)),
-            "used":  Decimal(str(usdt.get("used", 0) or 0)),
+            "total": total_val,
+            "free": free_val,
+            "used": used_val,
         }
 
     # ── Funding history ──────────────────────────────────────────
@@ -337,6 +415,7 @@ class _MarketDataMixin:
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
+                await self._maybe_resync_clock()
                 async with self._rest_semaphore:
                     raw = await self._exchange.fetch_positions(symbols)
                 break

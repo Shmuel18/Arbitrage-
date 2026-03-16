@@ -369,31 +369,82 @@ class _CloseMixin(_CloseFinalizeMixin):
                 _real_funding_long, _real_funding_short,
             )
         else:
-            trade.state = TradeState.ERROR
-            await self._persist_trade(trade)
-            # Free exchange locks so a single failed close doesn't block the whole bot.
-            self._deregister_trade(trade)
-            logger.error(
-                f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED "
-                f"(exchange locks released, cooldown applied)",
-                extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
-            )
-            cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
-            await self._redis.set_cooldown(trade.symbol, cooldown_sec)
-            # Alert operator immediately
-            if self._publisher:
-                try:
-                    await self._publisher.publish_alert(
-                        (
-                            f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
-                            f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
-                        ),
-                        severity="critical",
-                        alert_type="error_state",
-                        symbol=trade.symbol,
+            # P0-4: Before declaring ERROR, do a live position reconcile.
+            # _close_leg retries 3× with a position check on attempt ≥1, but if
+            # ALL attempts timed out the exchange may have executed the orders anyway.
+            # A false ERROR state leaves the bot thinking the trade is unresolved while
+            # the actual positions are flat — causing manual confusion and missed clean-up.
+            _long_still_open = True
+            _short_still_open = True
+            try:
+                if long_adapter:
+                    _live_long_pos = await long_adapter.get_positions(trade.symbol)
+                    _long_still_open = any(
+                        abs(float(getattr(p, "quantity", 0) or 0)) > 1e-9
+                        for p in _live_long_pos
+                        if getattr(p, "side", None) == OrderSide.BUY
                     )
-                except Exception as exc:
-                    logger.debug(f"Error-state alert publish failed: {exc}")
+                if short_adapter:
+                    _live_short_pos = await short_adapter.get_positions(trade.symbol)
+                    _short_still_open = any(
+                        abs(float(getattr(p, "quantity", 0) or 0)) > 1e-9
+                        for p in _live_short_pos
+                        if getattr(p, "side", None) == OrderSide.SELL
+                    )
+            except Exception as _rc_exc:
+                logger.warning(
+                    f"[{trade.trade_id}] Post-close reconcile position check failed: {_rc_exc} "
+                    f"— falling back to ERROR state",
+                    extra={"trade_id": trade.trade_id},
+                )
+
+            if not _long_still_open and not _short_still_open:
+                # Both legs are confirmed flat on the exchange — the close succeeded
+                # despite no API fill confirmation (likely a network timeout after fill).
+                logger.info(
+                    f"[{trade.trade_id}] Post-close reconcile: both positions verified flat "
+                    f"— treating as CLOSED despite missing fill receipts",
+                    extra={"trade_id": trade.trade_id, "action": "reconcile_closed"},
+                )
+                trade.state = TradeState.CLOSED
+                trade.closed_at = datetime.now(timezone.utc)
+                await self._finalize_and_publish_close(
+                    trade,
+                    trade.fees_paid_total or Decimal("0"),
+                    long_adapter,
+                    short_adapter,
+                    0.0, 0.0, "estimate", None, None,
+                )
+            else:
+                trade.state = TradeState.ERROR
+                await self._persist_trade(trade)
+                # Free exchange locks so a single failed close doesn't block the whole bot.
+                self._deregister_trade(trade)
+                logger.error(
+                    f"Trade {trade.trade_id} partially closed — MANUAL INTERVENTION NEEDED "
+                    f"(long_open={_long_still_open} short_open={_short_still_open}, "
+                    f"exchange locks released, cooldown applied)",
+                    extra={"trade_id": trade.trade_id, "action": "close_partial_fail"},
+                )
+                # P1: Apply cooldown and alert only on genuine ERROR — not when
+                # post-close reconcile confirmed both legs are flat (CLOSED path).
+                # Firing these unconditionally created false 'orphan' suppression
+                # and operator noise for successful closes with missing fill receipts.
+                cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
+                await self._redis.set_cooldown(trade.symbol, cooldown_sec)
+                if self._publisher:
+                    try:
+                        await self._publisher.publish_alert(
+                            (
+                                f"🚨 Trade {trade.trade_id} ({trade.symbol}) in ERROR state — "
+                                f"one leg may still be open. MANUAL INTERVENTION REQUIRED."
+                            ),
+                            severity="critical",
+                            alert_type="error_state",
+                            symbol=trade.symbol,
+                        )
+                    except Exception as exc:
+                        logger.debug(f"Error-state alert publish failed: {exc}")
 
     async def close_all_positions(self) -> None:
         """Close every active trade — called during graceful shutdown."""

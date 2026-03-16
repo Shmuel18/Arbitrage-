@@ -114,6 +114,35 @@ async def get_pnl(
                 except Exception as exc:
                     logger.debug("Skipping malformed PnL trade entry: %s", exc)
         
+        # ── Merge running PnL snapshots for chart continuity ────────
+        # status_publisher writes periodic {running, unrealized, realized}
+        # snapshots to trinity:pnl:running.  These fill gaps between
+        # closed trades so the chart always has data to render.
+        try:
+            running_data = await redis_client.zrangebyscore(
+                "trinity:pnl:running", cutoff_time, float('inf'),
+                withscores=True,
+            )
+            if running_data:
+                for member, score in running_data:
+                    try:
+                        point = json.loads(member)
+                        snap_pnl = float(point.get("running", 0))
+                        data_points.append({
+                            "pnl": 0.0,
+                            "cumulative_pnl": snap_pnl,
+                            "unrealized": float(point.get("unrealized", 0)),
+                            "realized": float(point.get("realized", 0)),
+                            "timestamp": float(score),
+                        })
+                    except Exception as exc:
+                        logger.debug("Skipping malformed running PnL point: %s", exc)
+        except Exception as exc:
+            logger.debug("Failed to read running PnL snapshots: %s", exc)
+
+        # Sort all data points chronologically (trades + running snapshots)
+        data_points.sort(key=lambda p: p["timestamp"])
+
         # ── Add unrealized PnL from running snapshots (if bot is active) ──
         latest = await redis_client.get("trinity:pnl:latest")
         unrealized_pnl = 0.0
