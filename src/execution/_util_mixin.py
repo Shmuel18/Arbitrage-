@@ -24,6 +24,19 @@ if TYPE_CHECKING:
 logger = get_logger("execution")
 
 
+def _task_done_handler(t: asyncio.Task) -> None:
+    """Log exceptions from background tasks — never let them vanish silently."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        logger.error(
+            f"Task {t.get_name()} failed: {exc}",
+            exc_info=exc,
+            extra={"action": "task_failed", "task_name": t.get_name()},
+        )
+
+
 _ORPHAN_CLOSE_TIMEOUT_SEC: float = 15.0  # P1-1: prevent HOL blocking during network partition
 
 
