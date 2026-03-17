@@ -139,11 +139,25 @@ class BroadcastService:
         except Exception as alerts_exc:
             logger.debug("Failed to read trinity:alerts: %s", alerts_exc)
 
+        # When the bot key has expired from Redis (TTL=15s), send an explicit
+        # "stopped" status so the frontend badge flips instead of staying stale.
+        _status_payload: dict | None = None
+        if status_data:
+            _status_payload = json.loads(status_data)
+        else:
+            _status_payload = {
+                "bot_running": False,
+                "connected_exchanges": [],
+                "active_positions": 0,
+                "uptime": "—",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+
         update = {
             "type": "full_update",
             "schema_version": 1,
             "data": {
-                "status": json.loads(status_data) if status_data else None,
+                "status": _status_payload,
                 "positions": positions_parsed,
                 "balances": json.loads(balances_data) if balances_data else None,
                 "opportunities": json.loads(opportunities_data) if opportunities_data else None,

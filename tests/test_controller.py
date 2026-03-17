@@ -460,6 +460,71 @@ class TestHoldOrExit:
         # Trade should have been closed — profit target hit
         assert trade.trade_id not in controller._active_trades
 
+    @pytest.mark.asyncio
+    async def test_exits_when_no_funding_received_after_threshold(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Trade where WS cache never populated next_timestamp → payment tracker
+        never set → bot stuck indefinitely. Safety exit fires after
+        max_entry_window_minutes + basis_recovery_timeout_minutes."""
+        config.trading_params.max_entry_window_minutes = 60
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+
+        # Cache has NO next_timestamp for KITE — simulates the KITE/GateIO bug
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            adapter._funding_rate_cache["BTC/USDT"] = None  # cache empty
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        # Trade opened 100 min ago — past the 90-min threshold (60+30)
+        trade = _make_trade(controller, spread_pct="1.0",
+                            opened_minutes_ago=100, funding_paid=False)
+        # Next_funding trackers are never set (cache was always empty)
+        trade.next_funding_long = None
+        trade.next_funding_short = None
+        trade._funding_paid_at = None
+        trade.funding_collected_usd = Decimal("0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+
+        await controller._check_exit(trade)
+
+        # Should have exited — no funding received after threshold
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_does_not_exit_early_when_no_funding_received_below_threshold(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """No-funding safety exit must NOT fire before the threshold. 
+        Trade open 50 min < 90 min (60+30) — should still hold."""
+        config.trading_params.max_entry_window_minutes = 60
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+        config.trading_params.exit_offset_seconds = 0
+
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            adapter._funding_rate_cache["BTC/USDT"] = None
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        # Trade opened only 50 min ago — below the 90-min threshold
+        trade = _make_trade(controller, spread_pct="1.0",
+                            opened_minutes_ago=50, funding_paid=False)
+        trade.next_funding_long = None
+        trade.next_funding_short = None
+        trade._funding_paid_at = None
+        trade.funding_collected_usd = Decimal("0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+
+        await controller._check_exit(trade)
+
+        # Should still be open — threshold not yet reached
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+
 
 class TestUpgrade:
     """Tests for the Upgrade feature — switch to a better opportunity."""

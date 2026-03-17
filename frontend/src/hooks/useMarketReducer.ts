@@ -257,10 +257,18 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         //    funding-rate drift between 8-hour resets
         //  • sensitive to stale_price and qualified flags — real status changes
         //    do trigger an update
+        // Bucket next_funding timestamps to 10-minute windows.
+        // This ensures a funding rollover (e.g. NOW → 8h away) breaks the
+        // fingerprint and triggers a re-render, while sub-10-min drift
+        // (normal countdown noise) does not cause unnecessary updates.
+        const _10MIN = 600_000;
+        const bucket = (ms: number | null | undefined) =>
+          ms != null ? Math.floor(ms / _10MIN) : -1;
         const fingerprint = (ops: Opportunity[]) => {
           const keys = ops.slice(0, 5).map(o =>
             `${o.symbol}|${o.long_exchange}|${o.short_exchange}` +
-            `|${o.stale_price ? 1 : 0}|${o.qualified ? 1 : 0}|${((o.net_pct ?? 0) * 10 | 0)}`
+            `|${o.stale_price ? 1 : 0}|${o.qualified ? 1 : 0}|${((o.net_pct ?? 0) * 10 | 0)}` +
+            `|${bucket(o.long_next_funding_ms)}|${bucket(o.short_next_funding_ms)}`
           );
           return keys.sort().join(',');
         };

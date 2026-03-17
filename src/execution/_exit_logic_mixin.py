@@ -150,6 +150,29 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
             )
 
+        # ── CRITICAL: compute long_paid / short_paid from the CURRENT (pre-advance)
+        # tracker values BEFORE get_funding_rate_cached() has a chance to mutate
+        # the cache timestamp or before the elif branch advances the tracker.
+        #
+        # Race condition (was the KITE/GateIO bug):
+        #   At 16:01 UTC, get_funding_rate_cached() auto-advances cached
+        #   next_timestamp from 16:00 → 24:00 (via its "while past → += interval"
+        #   logic).  The old elif branch then set trade.next_funding_long = 24:00
+        #   in the same cycle.  long_paid was then computed as 16:01 >= 24:01 = False,
+        #   silently skipping the 16:00 payment forever.
+        #
+        # Fix: snapshot long_paid using the EXISTING tracker value first, then
+        # update the tracker.  The elif branch must ONLY advance when already paid.
+        exit_offset = tp.exit_offset_seconds
+        long_paid = False
+        short_paid = False
+        if trade.next_funding_long:
+            long_exit_time = trade.next_funding_long + timedelta(seconds=exit_offset)
+            long_paid = now >= long_exit_time
+        if trade.next_funding_short:
+            short_exit_time = trade.next_funding_short + timedelta(seconds=exit_offset)
+            short_paid = now >= short_exit_time
+
         if long_funding:
             long_next_ts = long_funding.get("next_timestamp")
             if long_next_ts:
@@ -162,10 +185,12 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                     if candidate > now:
                         trade.next_funding_long = candidate
                 elif (
-                    trade.next_funding_long < now and not trade._funding_paid_long
+                    trade.next_funding_long < now and trade._funding_paid_long
                     and candidate > trade.next_funding_long
                 ):
-                    # Advance to a strictly newer timestamp only.
+                    # Advance ONLY after payment has already been processed.
+                    # Never advance while _funding_paid_long is False — that would
+                    # skip the in-progress payment (race condition described above).
                     trade.next_funding_long = candidate
 
         if short_funding:
@@ -177,21 +202,11 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                     if candidate > now:
                         trade.next_funding_short = candidate
                 elif (
-                    trade.next_funding_short < now and not trade._funding_paid_short
+                    trade.next_funding_short < now and trade._funding_paid_short
                     and candidate > trade.next_funding_short
                 ):
-                    # Advance to a strictly newer timestamp only.
+                    # Advance ONLY after payment has already been processed.
                     trade.next_funding_short = candidate
-
-        exit_offset = tp.exit_offset_seconds
-        long_paid = False
-        short_paid = False
-        if trade.next_funding_long:
-            long_exit_time = trade.next_funding_long + timedelta(seconds=exit_offset)
-            long_paid = now >= long_exit_time
-        if trade.next_funding_short:
-            short_exit_time = trade.next_funding_short + timedelta(seconds=exit_offset)
-            short_paid = now >= short_exit_time
 
         long_just_paid = long_paid and not trade._funding_paid_long
         short_just_paid = short_paid and not trade._funding_paid_short
@@ -345,6 +360,7 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 f"PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_exit"},
             )
+            trade._hold_cycles_stayed = 0
             trade._exit_reason = _reason
             self._journal.exit_decision(
                 trade.trade_id, trade.symbol,
@@ -363,12 +379,15 @@ class _ExitLogicMixin(_ExitComputationsMixin):
 
         if time_since_funding_min >= basis_timeout_min:
             next_cycle_ok = await self._next_funding_qualifies(trade, long_adapter, short_adapter)
+            max_cycles = getattr(tp, "max_hold_cycles_without_recovery", 3)
 
-            if next_cycle_ok:
+            if next_cycle_ok and trade._hold_cycles_stayed < max_cycles:
+                trade._hold_cycles_stayed += 1
                 logger.info(
                     f"🔄 Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min reached "
                     f"(basis: entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%), "
-                    f"BUT next funding qualifies — staying (collections={trade.funding_collections})",
+                    f"BUT next funding qualifies — staying "
+                    f"(collections={trade.funding_collections}, hold_cycle={trade._hold_cycles_stayed}/{max_cycles})",
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_next_cycle"},
                 )
                 # Reset flags for next funding cycle
@@ -416,6 +435,25 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                     trade.long_funding_rate = Decimal(str(long_funding["rate"]))
                 if short_funding and "rate" in short_funding:
                     trade.short_funding_rate = Decimal(str(short_funding["rate"]))
+                return
+            elif next_cycle_ok:
+                # next_cycle_ok but _hold_cycles_stayed >= max_cycles — force exit
+                _reason = f"basis_hard_stop_max_cycles_{max_cycles}"
+                logger.warning(
+                    f"⛔ Trade {trade.trade_id}{tier_tag}: BASIS HARD STOP (max hold cycles) — "
+                    f"held {trade._hold_cycles_stayed}/{max_cycles} consecutive cycles without basis recovery "
+                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%) — "
+                    f"force-closing after {hold_min}min despite next funding qualifying",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_hard_stop_max_cycles"},
+                )
+                trade._exit_reason = _reason
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=_reason,
+                    immediate_spread=Decimal(str(total_pnl_pct)),
+                    hold_min=hold_min,
+                )
+                await self._close_trade(trade)
                 return
             else:
                 _reason = f"basis_hard_stop_{basis_timeout_min:.0f}min"

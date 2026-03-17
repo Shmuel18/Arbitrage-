@@ -55,6 +55,7 @@ class TradingParams(BaseModel):
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
+    max_hold_cycles_without_recovery: int = 3  # Max consecutive "stay for next cycle" holds with no basis recovery before force-exit
     min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
     liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
 

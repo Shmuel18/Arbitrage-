@@ -272,3 +272,6 @@ class TradeRecord:
     _funding_history_retry_at: Optional[datetime] = field(default=None, compare=False, repr=False)
     _pending_long_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)
     _pending_short_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)
+    # Counts consecutive "stay for next cycle" decisions without basis recovery.
+    # Prevents infinite hold loops on short-interval exchanges (e.g. Bybit 1h).
+    _hold_cycles_stayed: int = field(default=0, compare=False, repr=False)
