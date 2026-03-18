@@ -49,6 +49,7 @@ class RiskGuard:
         self._redis = redis
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        self._entry_timestamps: Dict[str, float] = {}  # symbol -> timestamp for in-flight entry hedging
         self._grace_timestamps: Dict[str, float] = {}  # symbol -> timestamp
         self._warn_last_logged: Dict[str, float] = {}  # warning key -> last log time (monotonic-s)
 
@@ -80,8 +81,18 @@ class RiskGuard:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         logger.info("Risk guard stopped")
 
+    def mark_entry_started(self, symbol: str) -> None:
+        """Mark a symbol as actively hedging entry orders."""
+        self._entry_timestamps[symbol] = time.time()
+        logger.debug(f"Entry-in-progress grace started for {symbol}")
+
+    def clear_entry_started(self, symbol: str) -> None:
+        """Remove the transient entry-in-progress marker for a symbol."""
+        self._entry_timestamps.pop(symbol, None)
+
     def mark_trade_opened(self, symbol: str) -> None:
         """Mark symbol as having a recent trade — skip delta checks for grace period."""
+        self.clear_entry_started(symbol)
         self._grace_timestamps[symbol] = time.time()
         grace = self._cfg.risk_guard.delta_grace_seconds
         logger.debug(f"Grace period started for {symbol} ({grace}s)")
@@ -156,6 +167,11 @@ class RiskGuard:
         threshold_pct = self._cfg.risk_limits.delta_threshold_pct  # e.g. 5.0 = 5%
 
         for symbol, net in delta_by_symbol.items():
+            if symbol in self._entry_timestamps:
+                if now - self._entry_timestamps[symbol] < self._cfg.risk_guard.delta_grace_seconds:
+                    continue
+                del self._entry_timestamps[symbol]
+
             # Skip symbols in grace period (cfg.risk_guard.delta_grace_seconds)
             if symbol in self._grace_timestamps:
                 if now - self._grace_timestamps[symbol] < self._cfg.risk_guard.delta_grace_seconds:

@@ -145,6 +145,25 @@ class Scanner(_ScannerEvaluatorMixin):
         # re-evaluated every second until they enter (or pass) the window.
         self._near_window_watch: set[str] = set()
 
+    def _opportunity_fingerprint(self, display_top: list[OpportunityCandidate]) -> str:
+        """Return a stable fingerprint for the published display opportunities."""
+
+        def _bucket(ts_ms: Optional[float]) -> str:
+            if ts_ms is None:
+                return "none"
+            return str(int(float(ts_ms) // 60_000))
+
+        parts = sorted(
+            f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+            f"|{1 if o.stale_price else 0}"
+            f"|{round(float(o.net_edge_pct), 1):.1f}"
+            f"|{_bucket(o.next_funding_ms)}"
+            f"|{_bucket(o.long_next_funding_ms)}"
+            f"|{_bucket(o.short_next_funding_ms)}"
+            for o in display_top
+        )
+        return ",".join(parts)
+
     def _should_emit_opportunity_log(
         self,
         symbol: str,
@@ -515,13 +534,7 @@ class Scanner(_ScannerEvaluatorMixin):
                     # — but only when the list has changed meaningfully (hysteresis).
                     # Fingerprint is ORDER-INDEPENDENT (sorted) so that pure rank
                     # reshuffles of the same 5 items do NOT trigger a publish.
-                    _fp_parts = sorted(
-                        f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
-                        f"|{1 if o.stale_price else 0}"
-                        f"|{round(float(o.net_edge_pct), 1):.1f}"
-                        for o in display_top
-                    )
-                    _new_fingerprint = ",".join(_fp_parts)
+                    _new_fingerprint = self._opportunity_fingerprint(display_top)
                     _opp_changed = _new_fingerprint != self._last_opp_fingerprint
                     if _opp_changed:
                         self._last_opp_fingerprint = _new_fingerprint

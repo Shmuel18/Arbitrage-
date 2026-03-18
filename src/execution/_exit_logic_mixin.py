@@ -349,9 +349,30 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             _current_basis = (l_price - s_price) / s_price * Decimal("100")
 
         _tolerance = tp.basis_recovery_tolerance_pct
-        _basis_favorable = _current_basis >= (_entry_basis - _tolerance)
+        _basis_buffer = tp.basis_exit_buffer_pct
+        _basis_target = _entry_basis + _basis_buffer
+        _adjusted_basis_exit_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
+        _min_basis_exit_pnl = tp.min_basis_exit_pnl_pct
+        _basis_favorable = _current_basis >= _basis_target
+        _basis_exit_pnl_ok = _adjusted_basis_exit_pnl >= _min_basis_exit_pnl
 
-        if _basis_favorable:
+        if _current_basis >= (_entry_basis - _tolerance) and not _basis_favorable:
+            logger.info(
+                f"[{trade.symbol}] Basis near recovery but buffer not met: "
+                f"entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}% "
+                f"target={float(_basis_target):+.4f}%",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_buffer_wait"},
+            )
+
+        if _basis_favorable and not _basis_exit_pnl_ok:
+            logger.info(
+                f"[{trade.symbol}] Basis recovered but adjusted PnL still too small: "
+                f"adj_pnl={float(_adjusted_basis_exit_pnl):+.4f}% < "
+                f"min_basis_exit_pnl={float(_min_basis_exit_pnl):.4f}%",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_pnl_wait"},
+            )
+
+        if _basis_favorable and _basis_exit_pnl_ok:
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
             logger.info(
                 f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "

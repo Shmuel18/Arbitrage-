@@ -293,6 +293,8 @@ class _EntryMixin(_EntryOrdersMixin):
         # (lock is held from above — no second acquire needed)
 
         trade_id = str(uuid.uuid4())[:12]
+        if self._risk_guard:
+            self._risk_guard.mark_entry_started(opp.symbol)
         try:
             # ── Execute entry orders (sizing → placement → fills → delta correction) ──
             result = await self._execute_entry_orders(opp, long_adapter, short_adapter)
@@ -609,6 +611,8 @@ class _EntryMixin(_EntryOrdersMixin):
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
+            if self._risk_guard:
+                self._risk_guard.clear_entry_started(opp.symbol)
             _lock_heartbeat_task.cancel()
             await self._redis.release_lock_if_owner(lock_key, lock_token)
 
@@ -648,10 +652,10 @@ class _EntryMixin(_EntryOrdersMixin):
             short_vwap, short_ok = await short_adapter.get_vwap_and_depth(symbol, check_qty, "sell")
         except Exception as exc:
             logger.warning(
-                f"[{symbol}] Pre-entry liquidity check error: {exc} — allowing entry",
+                f"[{symbol}] Pre-entry liquidity check error: {exc} — blocking entry",
                 extra={"symbol": symbol, "action": "depth_check_error"},
             )
-            return True
+            return False
 
         if not long_ok:
             logger.info(
@@ -671,9 +675,9 @@ class _EntryMixin(_EntryOrdersMixin):
 
         if long_vwap <= Decimal("0") or short_vwap <= Decimal("0"):
             logger.warning(
-                f"[{symbol}] Pre-entry depth check returned zero price — allowing entry"
+                f"[{symbol}] Pre-entry depth check returned zero price — blocking entry"
             )
-            return True
+            return False
 
         vwap_spread_pct = (long_vwap - short_vwap) / short_vwap * Decimal("100")
         if vwap_spread_pct > Decimal("0"):

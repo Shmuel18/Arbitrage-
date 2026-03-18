@@ -157,6 +157,24 @@ class TestHandleOpportunity:
         controller._execute_entry_orders.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_blocks_entry_when_pre_entry_liquidity_check_errors(
+        self,
+        controller,
+        sample_opportunity,
+        mock_exchange_mgr,
+    ):
+        """Pre-entry liquidity failures must fail closed, not open a live trade."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        long_adapter.get_vwap_and_depth.side_effect = RuntimeError("depth parser exploded")
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        long_adapter.place_order.assert_not_called()
+        short_adapter.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_rejects_post_entry_adverse_basis_and_emergency_closes(
         self,
         controller,
@@ -387,6 +405,41 @@ class TestHoldOrExit:
         assert trade.trade_id not in controller._active_trades
 
     @pytest.mark.asyncio
+    async def test_holds_when_basis_only_recovers_within_old_tolerance(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Soft basis exit now requires cushion above entry basis, not just tolerance."""
+        config.trading_params.exit_offset_seconds = 0
+        config.trading_params.profit_target_pct = Decimal("9.9")
+        config.trading_params.basis_recovery_tolerance_pct = Decimal("0.10")
+        config.trading_params.basis_exit_buffer_pct = Decimal("0.10")
+        config.trading_params.min_basis_exit_pnl_pct = Decimal("0.01")
+
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50025")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0.10")
+        trade._exit_check_active = True
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        trade.funding_collected_usd = Decimal("0.20")
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id in controller._active_trades
+
+    @pytest.mark.asyncio
     async def test_holds_when_next_funding_within_max_wait(
         self, controller, config, mock_exchange_mgr
     ):
@@ -450,6 +503,8 @@ class TestHoldOrExit:
         # entry: 50000, current long: 50500 → PnL = 500/50000 * 100 = 1.0%
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50500.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50500")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
@@ -929,6 +984,8 @@ class TestBasisGuard:
         # Long price rose enough for 1.1% PnL → adj 0.8% (above 0.7% target)
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50550.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50550")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
