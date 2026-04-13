@@ -60,6 +60,17 @@ const Dashboard: React.FC<DashboardProps> = ({
   const positions = useMemo(() => data.positions ?? [], [data.positions]);
   const trades    = useMemo(() => data.trades    ?? [], [data.trades]);
 
+  // Compute totalBalance: prefer the server-provided total, but fall back to
+  // summing individual exchange balances if the server sends total=0 while
+  // per-exchange values are already populated (e.g. first WS tick race).
+  const totalBalance = useMemo(() => {
+    if (!data.balances) return 0;
+    if (data.balances.total > 0) return data.balances.total;
+    return Object.values(data.balances.balances ?? {}).reduce(
+      (sum, v) => sum + (Number(v) || 0), 0
+    );
+  }, [data.balances]);
+
   // Surface the most recent ERROR-level logs as a top-of-page banner.
   // Only show errors from the last 60 seconds to avoid stale banners.
   const errorLogs = useMemo(() => {
@@ -165,7 +176,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 </div>
               )}
               <StatsCards
-                totalBalance={data.balances?.total ?? 0}
+                totalBalance={totalBalance}
                 dailyPnl={data.dailyPnl}
                 activeTrades={data.status.active_positions}
                 systemRunning={data.status.bot_running}
@@ -203,7 +214,7 @@ const Dashboard: React.FC<DashboardProps> = ({
                 pnl={data.pnl}
                 pnlHours={pnlHours}
                 onPnlHoursChange={onPnlHoursChange}
-                totalBalance={data.balances?.total ?? 0}
+                totalBalance={totalBalance}
               />
             </Suspense>
             </ViewReveal>

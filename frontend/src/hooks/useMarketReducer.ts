@@ -304,9 +304,14 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
 
       const newLogs = (() => {
         if (!Array.isArray(d.logs) || d.logs.length === 0) return prev.logs;
+        // Check both first AND last element — checking only the first missed
+        // cases where new messages were appended with the same array length
+        // (e.g. a sliding window where old entries drop off as new ones arrive).
         if (
           prev.logs.length === d.logs.length &&
-          prev.logs[0]?.timestamp === d.logs[0]?.timestamp
+          prev.logs[0]?.timestamp === d.logs[0]?.timestamp &&
+          prev.logs[prev.logs.length - 1]?.timestamp === d.logs[d.logs.length - 1]?.timestamp &&
+          prev.logs[prev.logs.length - 1]?.message === d.logs[d.logs.length - 1]?.message
         ) {
           return prev.logs;
         }
@@ -326,8 +331,11 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
 
       // Guard: two sources (WS counter vs HTTP zrange scan) can temporarily
       // disagree on total_trades. Trade count only ever goes up — keep the max.
+      // Note: do NOT gate on all_time_pnl being defined — some WS payloads
+      // legitimately omit it, and blocking the entire summary update causes
+      // win_rate / all_time_pnl to stay at 0 forever.
       const newSummary = (() => {
-        if (!d.summary || d.summary.all_time_pnl === undefined) return prev.summary;
+        if (!d.summary || d.summary.total_trades == null) return prev.summary;
         if (
           prev.summary &&
           d.summary.total_trades < prev.summary.total_trades

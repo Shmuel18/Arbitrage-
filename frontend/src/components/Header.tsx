@@ -83,6 +83,13 @@ const Header: React.FC<HeaderProps> = React.memo(({
       ? 'nx-health-pill nx-health-pill--warn'
       : 'nx-health-pill nx-health-pill--down';
 
+  const wsConnectionLabel =
+    wsConnection === 'connected'
+      ? t.wsConnected
+      : wsConnection === 'reconnecting'
+      ? t.wsReconnecting
+      : t.wsDisconnected;
+
   // Stable toggle callbacks — functional updater form avoids capturing
   // stale lang/theme values while keeping the dep array minimal.
   const toggleLang  = useCallback(() => setLang(lang   === 'en'   ? 'he'    : 'en'),    [lang,  setLang]);
@@ -114,7 +121,7 @@ const Header: React.FC<HeaderProps> = React.memo(({
 
         <div className={wsPillClass} title="WebSocket transport health">
           <span className="nx-health-pill__dot" />
-          {t.wsPrefix} {wsConnection}
+          {t.wsPrefix}: {wsConnectionLabel}
           {wsConnection === 'reconnecting' && wsAttempts > 0 && (
             <span style={{ opacity: 0.7, marginInlineStart: 4 }}>
               ({wsAttempts}/20)
@@ -144,8 +151,8 @@ const Header: React.FC<HeaderProps> = React.memo(({
           />
         </svg>
 
-        <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none' }} title="Data may be stale">
-          {t.staleData}
+        <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none', animation: 'nx-stale-pulse 1.4s ease-in-out infinite', fontWeight: 700 }} title="Data may be stale — WebSocket silent for >20s">
+          ⚠ {t.staleData}
         </div>
       </div>
 
