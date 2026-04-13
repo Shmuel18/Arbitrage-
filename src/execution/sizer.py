@@ -106,6 +106,9 @@ class PositionSizer:
         long_lot_base = (Decimal(str(long_spec.lot_size)) * long_cs) if long_spec else _FALLBACK_LOT
         short_lot_base = (Decimal(str(short_spec.lot_size)) * short_cs) if short_spec else _FALLBACK_LOT
         lot = max(long_lot_base, short_lot_base)
+        if lot <= 0:
+            logger.warning(f"{opp.symbol}: lot_size resolved to zero, falling back to {_FALLBACK_LOT}")
+            lot = _FALLBACK_LOT
 
         qty_raw = notional / opp.reference_price
         steps = int(qty_raw / lot)
