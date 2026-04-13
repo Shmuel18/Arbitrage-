@@ -181,10 +181,16 @@ class _EntryMixin:
                         f"funding too close ({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
                     )
                 else:
-                    logger.info(
-                        f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
-                        f"not in {entry_offset}s window. Next funding in {int(seconds_until/60)}min."
-                    )
+                    if seconds_until < 0:
+                        logger.info(
+                            f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
+                            f"funding already fired {int(-seconds_until/60)}min ago, not in window yet."
+                        )
+                    else:
+                        logger.info(
+                            f"⏳ Skipping {opp.symbol}: {tier_emoji} {tier.upper()} tier — "
+                            f"not in {entry_offset}s window. Next funding in {int(seconds_until/60)}min."
+                        )
                 return
             logger.info(
                 f"{tier_emoji} [{opp.symbol}] {tier.upper()} tier — "
@@ -221,10 +227,16 @@ class _EntryMixin:
                         f"funding too close ({int(seconds_until)}s < {_MIN_ENTRY_SECS_BEFORE_FUNDING}s minimum)"
                     )
                 else:
-                    logger.info(
-                        f"⏳ Skipping {opp.symbol}: no tier, not in entry window. "
-                        f"Next funding in {int(seconds_until/60)}min."
-                    )
+                    if seconds_until < 0:
+                        logger.info(
+                            f"⏳ Skipping {opp.symbol}: no tier — "
+                            f"funding already fired {int(-seconds_until/60)}min ago, not in window yet."
+                        )
+                    else:
+                        logger.info(
+                            f"⏳ Skipping {opp.symbol}: no tier, not in entry window. "
+                            f"Next funding in {int(seconds_until/60)}min."
+                        )
                 return
 
         logger.info(f"✅ [{opp.symbol}] Passed all gates — proceeding to entry")
