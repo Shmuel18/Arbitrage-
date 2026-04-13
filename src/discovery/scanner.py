@@ -150,8 +150,16 @@ class Scanner:
                                     reject_reason = " [REJECT: NET<=0]"
                                 elif opp.entry_tier == "adverse":
                                     reject_reason = " [REJECT: ADVERSE]"
+                                elif opp.next_funding_ms is None:
+                                    reject_reason = " [REJECT: NO TIMESTAMP]"
                                 else:
-                                    reject_reason = " [REJECT: RULES]"
+                                    _mins_until = (opp.next_funding_ms - _now_ms) / 60_000
+                                    if _mins_until > 30:
+                                        reject_reason = f" [REJECT: WINDOW IN {int(_mins_until)}min]"
+                                    elif _mins_until < 0:
+                                        reject_reason = f" [REJECT: FUNDING PASSED {int(-_mins_until)}min AGO]"
+                                    else:
+                                        reject_reason = " [REJECT: RULES]"
                             tier_mark = f" [{opp.entry_tier.upper()}]" if opp.entry_tier else ""
                             price_mark = f" P={float(opp.price_spread_pct):+.2f}%" if opp.price_spread_pct else ""
                             logger.info(
