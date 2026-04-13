@@ -38,7 +38,8 @@ interface ColumnDef {
 const OPP_COLUMNS: ColumnDef[] = [
   { tKey: 'pair',               align: 'start' },
   { tKey: 'colBridge',          align: 'start' },
-  { tKey: 'fundingLS',          align: 'end'   },
+  { tKey: 'fundingL',           align: 'end'   },
+  { tKey: 'fundingS',           align: 'end'   },
   { tKey: 'immediateSpreadOpp', align: 'end'   },
   { tKey: 'netPct',             align: 'end'   },
   { tKey: 'colMode',            align: 'end'   },
@@ -268,10 +269,12 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
           </div>
         </td>
 
-        {/* ── Funding rates (long / short stacked) ── */}
-        <td className="text-end nx-cell-rate-ls">
-          <div style={getLongRateStyle(longRate)} className="mono">{formatFunding(longRate)}</div>
-          <div style={getShortRateStyle(shortRate)} className="mono nx-cell-rate-ls__short">{formatFunding(shortRate)}</div>
+        {/* ── Funding rates ── */}
+        <td className="text-end mono nx-cell-rate" style={getLongRateStyle(longRate)}>
+          {formatFunding(longRate)}
+        </td>
+        <td className="text-end mono nx-cell-rate" style={getShortRateStyle(shortRate)}>
+          {formatFunding(shortRate)}
         </td>
 
         {/* ── Funding spread — pill highlight ── */}
@@ -371,7 +374,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 {/* Top spacer */}
                 <tr data-virtual-spacer="top">
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     style={{ height: rowVirtualizer.getVirtualItems()[0]?.start ?? 0, padding: 0, border: 'none' }}
                   />
                 </tr>
@@ -380,7 +383,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                   if (item.type === 'separator') {
                     return (
                       <tr key="virtual-separator" className="nx-separator-row">
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <div className="nx-separator">
                             <span className="nx-separator__line" />
                             <span className="nx-separator__label">
@@ -401,7 +404,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 {/* Bottom spacer */}
                 <tr data-virtual-spacer="bottom">
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     style={{
                       height: rowVirtualizer.getTotalSize() - (rowVirtualizer.getVirtualItems().at(-1)?.end ?? 0),
                       padding: 0,
@@ -416,7 +419,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 {aboveThreshold.map((opp, i) => renderRow(opp, i, false))}
                 {aboveThreshold.length > 0 && belowThreshold.length > 0 && (
                   <tr className="nx-separator-row">
-                    <td colSpan={7}>
+                    <td colSpan={8}>
                       <div className="nx-separator">
                         <span className="nx-separator__line" />
                         <span className="nx-separator__label">

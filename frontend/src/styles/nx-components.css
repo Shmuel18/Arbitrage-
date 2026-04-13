@@ -705,24 +705,6 @@
   50%       { opacity: 0.65; background: rgba(239,68,68,0.22); }
 }
 
-/* Stacked long/short funding rate cell */
-.nx-cell-rate-ls {
-  text-align: end;
-  vertical-align: middle;
-  padding-block: 4px;
-  min-width: 72px;
-}
-
-.nx-cell-rate-ls .mono {
-  font-size: 11px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-}
-
-.nx-cell-rate-ls__short {
-  opacity: 0.72;
-  font-size: 10.5px;
-}
 
 .nx-topbar-btn {
   display: flex;
