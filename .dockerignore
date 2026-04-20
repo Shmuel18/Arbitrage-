@@ -1,0 +1,50 @@
+.git
+.gitignore
+.github
+.claude
+.vscode
+.idea
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.coverage
+htmlcov
+venv
+env
+.venv
+ENV
+
+# Frontend (rebuilt in container)
+frontend/node_modules
+frontend/build
+
+# Local secrets and overrides
+.env
+.env.local
+.env.*.local
+config.local.yaml
+*.key
+*.pem
+
+# Logs and data
+logs
+*.log
+data
+tmp
+temp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker / deployment
+certbot
+nginx/logs
+
+# Dev scripts that don't belong in container
+*.ps1
+diag_output.txt
+timeline_output.txt
