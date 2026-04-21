@@ -56,13 +56,13 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
           </colgroup>
           <thead>
             <tr>
-              <th>{t.symbol}</th>
-              <th>{t.longShort}</th>
-              <th className="text-end">{t.netPnl}</th>
-              <th className="text-end">{t.fundingNet}</th>
-              <th className="text-end">{t.exitReasonLabel}</th>
-              <th className="text-end">{t.duration}</th>
-              <th className="text-end">{t.closed}</th>
+              <th scope="col">{t.symbol}</th>
+              <th scope="col" className="col-hide-sm">{t.longShort}</th>
+              <th scope="col" className="text-end">{t.netPnl}</th>
+              <th scope="col" className="text-end col-hide-sm">{t.fundingNet}</th>
+              <th scope="col" className="text-end">{t.exitReasonLabel}</th>
+              <th scope="col" className="text-end col-hide-md">{t.duration}</th>
+              <th scope="col" className="text-end col-hide-sm">{t.closed}</th>
             </tr>
           </thead>
           <tbody>
@@ -93,13 +93,13 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                       {tierBadge(tr.entry_tier)}
                     </div>
                   </td>
-                  <td style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <td className="col-hide-sm" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     <span className="nx-trades-exchange">
                       {tr.long_exchange?.toUpperCase()} → {tr.short_exchange?.toUpperCase()}
                     </span>
                   </td>
                   <td className="text-end mono">{formatPnl(tr.total_pnl)}</td>
-                  <td className="text-end mono">
+                  <td className="text-end mono col-hide-sm">
                     <span className={`nx-trades-funding ${fundingNet >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>
                       {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
                     </span>
@@ -107,10 +107,10 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   <td className="text-end" style={{ whiteSpace: 'nowrap' }}>
                     <ExitReasonBadge reason={tr.exit_reason} />
                   </td>
-                  <td className="text-end nx-trades-duration" style={{ whiteSpace: 'nowrap' }}>
+                  <td className="text-end nx-trades-duration col-hide-md" style={{ whiteSpace: 'nowrap' }}>
                     {formatDuration(tr.hold_minutes)}
                   </td>
-                  <td className="text-end nx-trades-date" style={{ whiteSpace: 'nowrap' }}>
+                  <td className="text-end nx-trades-date col-hide-sm" style={{ whiteSpace: 'nowrap' }}>
                     {formatDate(tr.closed_at, true)}
                   </td>
                 </tr>

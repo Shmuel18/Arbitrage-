@@ -93,7 +93,10 @@ O usa el script:
 
 - **Frontend**: http://localhost:3000
 - **API Docs**: http://localhost:8000/docs
-- **WebSocket**: ws://localhost:8000/ws
+- **WebSocket**: `ws://localhost:8000/ws` (auth via cookie `trinity_ws_token`)
+
+> Seguridad: el endpoint `/ws` es fail-closed. Si `ADMIN_TOKEN` no está
+> configurado (o el token no coincide), la conexión WebSocket se rechaza.
 
 ## 📊 API Endpoints
 
@@ -165,6 +168,8 @@ Todos los componentes están en `frontend/src/components/`
 **Error: WebSocket connection failed**
 
 - Verifica que la API esté corriendo
+- Verifica que `ADMIN_TOKEN` (backend) y `VITE_WS_TOKEN` (frontend) estén configurados y sean iguales
+- Si usas tokens separados, verifica también `COMMAND_TOKEN`/`CONFIG_TOKEN`/`EMERGENCY_TOKEN`/`TRADE_TOKEN` y sus equivalentes `VITE_*`
 - Revisa firewall/antivirus
 
 **Error: No data showing**

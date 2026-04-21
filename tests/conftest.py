@@ -102,7 +102,18 @@ def mock_adapter(btc_spec):
     adapter.place_order.return_value = {
         "id": "order-123", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
+    adapter.ensure_trading_settings = AsyncMock(return_value=None)
+    adapter.get_vwap_and_depth = AsyncMock(return_value=(Decimal("50000"), True))
+    adapter.fetch_fill_details_from_trades = AsyncMock(
+        return_value={"total_fee": Decimal("0"), "avg_price": Decimal("50000"), "filled_qty": Decimal("0.01")}
+    )
+    adapter.get_executable_price = AsyncMock(return_value=Decimal("50000"))
     adapter.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    adapter.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
+    adapter.get_best_ask = MagicMock(return_value=50001.0)
+    adapter.get_best_bid = MagicMock(return_value=49999.0)
+    adapter.get_best_ask_age_ms = MagicMock(return_value=0.0)
+    adapter.get_best_bid_age_ms = MagicMock(return_value=0.0)
     # Mock public adapter properties used by scanner and main
     adapter.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
@@ -133,7 +144,18 @@ def mock_exchange_mgr(mock_adapter):
     adapter_b.place_order.return_value = {
         "id": "order-456", "filled": 0.01, "average": 50000.0, "status": "closed",
     }
+    adapter_b.ensure_trading_settings = AsyncMock(return_value=None)
+    adapter_b.get_vwap_and_depth = AsyncMock(return_value=(Decimal("50000"), True))
+    adapter_b.fetch_fill_details_from_trades = AsyncMock(
+        return_value={"total_fee": Decimal("0"), "avg_price": Decimal("50000"), "filled_qty": Decimal("0.01")}
+    )
+    adapter_b.get_executable_price = AsyncMock(return_value=Decimal("50000"))
     adapter_b.update_taker_fee_from_fill = MagicMock()  # called sync in controller
+    adapter_b.get_mark_price = MagicMock(return_value=None)  # sync — must not be AsyncMock
+    adapter_b.get_best_ask = MagicMock(return_value=50001.0)
+    adapter_b.get_best_bid = MagicMock(return_value=49999.0)
+    adapter_b.get_best_ask_age_ms = MagicMock(return_value=0.0)
+    adapter_b.get_best_bid_age_ms = MagicMock(return_value=0.0)
     # Mock public adapter properties used by scanner and main
     adapter_b.symbols = ["BTC/USDT", "ETH/USDT"]
     adapter_b.markets = {"BTC/USDT": {}, "ETH/USDT": {}}
@@ -152,11 +174,17 @@ def mock_exchange_mgr(mock_adapter):
 def mock_redis():
     r = AsyncMock()
     r.is_cooled_down.return_value = False
+    r.is_route_cooled_down.return_value = False      # P1-2: per-route cooldown check
     r.acquire_lock.return_value = True
+    r.acquire_lock_with_token.return_value = True    # P0-1: token-owned lock
+    r.release_lock_if_owner.return_value = True      # P0-1: safe release
+    r.extend_lock.return_value = True                # P0-1: heartbeat renewal
     r.get_all_trades.return_value = {}
     r.health_check.return_value = True
     r.set_trade_state = AsyncMock(return_value=True)
     r.set_cooldown = AsyncMock(return_value=True)
+    r.set_route_cooldown = AsyncMock(return_value=True)  # P1-2
+    r.get_cooled_down_symbols.return_value = set()  # sync set — prevents AsyncMock default
     return r
 
 

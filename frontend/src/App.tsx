@@ -1,7 +1,24 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import Dashboard from './components/Dashboard';
+import HolidayBanner from './components/HolidayBanner';
 import { useMarketData } from './hooks/useMarketData';
+import { useSettings } from './context/SettingsContext';
+import { translations, Lang } from './i18n/translations';
 import './App.css';
+import './styles/memorial.css';
+
+/**
+ * ErrorBoundary can't use hooks, so read the language directly from
+ * localStorage (set by SettingsProvider). Default to English if missing.
+ */
+function readLang(): Lang {
+  try {
+    const v = localStorage.getItem('trinity_lang');
+    return v === 'en' ? 'en' : 'he';
+  } catch {
+    return 'he';
+  }
+}
 
 /* ── Error Boundary ──────────────────────────────────────────────── */
 interface ErrorBoundaryState { hasError: boolean; error?: Error }
@@ -19,18 +36,44 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
   render() {
     if (this.state.hasError) {
+      const lang = readLang();
+      const t = translations[lang];
+      const isRtl = lang === 'he';
       return (
-        <div style={{ padding: 40, textAlign: 'center', color: '#ef4444' }}>
-          <h2>Something went wrong</h2>
-          <pre style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>
-            {this.state.error?.message}
-          </pre>
-          <button
-            onClick={() => window.location.reload()}
-            style={{ marginTop: 20, padding: '8px 20px', borderRadius: 8, background: '#3b82f6', color: '#fff', border: 'none', cursor: 'pointer' }}
-          >
-            Reload
-          </button>
+        <div className="nx-error-boundary" role="alert" aria-live="assertive" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="nx-error-boundary__card">
+            <div className="nx-error-boundary__icon" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <h2 className="nx-error-boundary__title">{t.ebTitle}</h2>
+            <p className="nx-error-boundary__desc">{t.ebDesc}</p>
+            {this.state.error?.message && (
+              <details className="nx-error-boundary__details">
+                <summary>{t.ebDetails}</summary>
+                <pre>{this.state.error.message}</pre>
+              </details>
+            )}
+            <div className="nx-error-boundary__actions">
+              <button
+                type="button"
+                className="nx-error-boundary__btn nx-error-boundary__btn--primary"
+                onClick={() => window.location.reload()}
+              >
+                {t.ebReload}
+              </button>
+              <button
+                type="button"
+                className="nx-error-boundary__btn"
+                onClick={() => this.setState({ hasError: false, error: undefined })}
+              >
+                {t.ebRetry}
+              </button>
+            </div>
+          </div>
         </div>
       );
     }
@@ -38,22 +81,35 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
 }
 
-function App() {
+function AppShell() {
   const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt } = useMarketData();
+  const { t } = useSettings();
 
   return (
+    <div className="App min-h-screen bg-slate-900">
+      {/* Skip-to-content link — first tabbable element for keyboard users */}
+      <a href="#main-content" className="nx-skip-link">
+        {t.ksSkipToContent}
+      </a>
+      {/* RateBridge status beam — stretches full width at very top */}
+      <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
+      <Dashboard
+        data={data}
+        pnlHours={pnlHours}
+        onPnlHoursChange={handlePnlHoursChange}
+        wsConnection={wsConnection}
+        lastWsMessageAt={lastWsMessageAt}
+      />
+      {/* Holiday banner (currently Yom Ha'atzmaut) — floats above UI, dismissible */}
+      <HolidayBanner />
+    </div>
+  );
+}
+
+function App() {
+  return (
     <ErrorBoundary>
-      <div className="App min-h-screen bg-slate-900">
-        {/* RateBridge status beam — stretches full width at very top */}
-        <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
-        <Dashboard
-          data={data}
-          pnlHours={pnlHours}
-          onPnlHoursChange={handlePnlHoursChange}
-          wsConnection={wsConnection}
-          lastWsMessageAt={lastWsMessageAt}
-        />
-      </div>
+      <AppShell />
     </ErrorBoundary>
   );
 }

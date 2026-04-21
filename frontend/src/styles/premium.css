@@ -1,0 +1,316 @@
+/* ═══════════════════════════════════════════════════════════════════
+   PREMIUM PRECISION LAYER
+   Linear · Stripe · Apple design language for Trinity Bot
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Global refinements ─────────────────────────────────────────── */
+[data-theme="dark"] {
+  /* Override mono font to Geist Mono for crisper number rendering */
+  --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+}
+
+[data-theme="dark"] code,
+[data-theme="dark"] .mono,
+[data-theme="dark"] .xcard-value,
+[data-theme="dark"] .nx-xcard-value,
+[data-theme="dark"] .corp-table tbody td {
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
+}
+
+/* ── Section dividers — Linear style ───────────────────────────── */
+.px-section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.px-section-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+[data-theme="dark"] .px-section-label {
+  color: rgba(139, 143, 165, 0.7);
+}
+
+.px-section-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--divider), transparent);
+}
+
+/* ── Premium card ── */
+[data-theme="dark"] .px-card {
+  background: rgba(14, 15, 23, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: 10px;
+  backdrop-filter: blur(24px) saturate(180%);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.04) inset,
+    0 4px 20px rgba(0, 0, 0, 0.42);
+  position: relative;
+  overflow: hidden;
+}
+
+[data-theme="dark"] .px-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 10%; right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.09), transparent);
+  pointer-events: none;
+}
+
+/* ── Stat value — enhanced typography ─────────────────────────── */
+[data-theme="dark"] .xcard-value,
+[data-theme="dark"] .nx-xcard .xcard-value {
+  font-size: clamp(20px, 2.2vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+/* ── Stat card label — refined ────────────────────────────────── */
+[data-theme="dark"] .xcard-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  text-transform: none;
+}
+
+/* ── Stat card sub-text ─────────────────────────────────────────── */
+[data-theme="dark"] .xcard-sub {
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  margin-top: 2px;
+}
+
+/* ── Table — Linear inspired ──────────────────────────────────── */
+[data-theme="dark"] .corp-table thead th {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  padding: 10px 16px;
+}
+
+[data-theme="dark"] .corp-table tbody td {
+  padding: 11px 16px;
+  font-size: 12.5px;
+}
+
+[data-theme="dark"] .corp-table tbody tr {
+  transition: background 0.15s ease;
+}
+
+/* ── Premium buttons ──────────────────────────────────────────── */
+[data-theme="dark"] .px-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  border: 1px solid rgba(255,255,255,0.09);
+  background: rgba(255,255,255,0.05);
+  color: #d0d2de;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  outline: none;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .px-btn:hover {
+  background: rgba(255,255,255,0.09);
+  border-color: rgba(255,255,255,0.14);
+  color: #f0f1f5;
+}
+
+[data-theme="dark"] .px-btn:active {
+  transform: scale(0.98);
+}
+
+[data-theme="dark"] .px-btn--primary {
+  background: rgba(79, 112, 232, 0.85);
+  border-color: rgba(79, 112, 232, 0.5);
+  color: #ffffff;
+  box-shadow: 0 0 0 0 rgba(79, 112, 232, 0);
+}
+
+[data-theme="dark"] .px-btn--primary:hover {
+  background: rgba(79, 112, 232, 0.95);
+  border-color: rgba(107, 138, 246, 0.6);
+  box-shadow: 0 0 20px rgba(79, 112, 232, 0.22);
+}
+
+[data-theme="dark"] .px-btn--danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.28);
+  color: #f87171;
+}
+[data-theme="dark"] .px-btn--danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.42);
+  color: #fca5a5;
+}
+
+/* ── Spread/pill component ──────────────────────────────────────── */
+[data-theme="dark"] .nx-spread-pill {
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* ── Exchange value cells ─────────────────────────────────────── */
+[data-theme="dark"] .nx-exch-value {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* ── Skeleton refinements ─────────────────────────────────────── */
+[data-theme="dark"] .skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.03)  25%,
+    rgba(255,255,255,0.07)  50%,
+    rgba(255,255,255,0.03)  75%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+}
+
+/* ── Focus rings — accessible, refined ───────────────────────── */
+[data-theme="dark"] *:focus-visible {
+  outline: 2px solid rgba(127, 167, 248, 0.55) !important;
+  outline-offset: 2px;
+}
+
+/* ── Tooltip / popover glass ──────────────────────────────────── */
+[data-theme="dark"] .nx-tooltip,
+[data-theme="dark"] [data-tooltip] {
+  background: rgba(18, 20, 30, 0.96) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  backdrop-filter: blur(16px) !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important;
+  border-radius: 8px !important;
+}
+
+/* ── Alert bell / notification badge ─────────────────────────── */
+[data-theme="dark"] .alert-badge {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.22), 0 0 10px rgba(239,68,68,0.35);
+}
+
+/* ── Input fields ─────────────────────────────────────────────── */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: var(--input-bg) !important;
+  border-color: var(--input-border) !important;
+  color: var(--text-primary) !important;
+  border-radius: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+[data-theme="dark"] input:focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] textarea:focus {
+  border-color: var(--input-focus-border) !important;
+  box-shadow: 0 0 0 3px rgba(79, 112, 232, 0.15) !important;
+  outline: none !important;
+}
+
+/* ── Tier badges — refined ──────────────────────────────────── */
+[data-theme="dark"] [class*="nx-tier-badge"],
+[data-theme="dark"] [class*="nx-tier"] {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* ── Right panel / sidebar secondary cards ─────────────────── */
+[data-theme="dark"] .nx-panel-card,
+[data-theme="dark"] .nx-right-panel > .card {
+  background: rgba(11, 12, 20, 0.88) !important;
+  border-color: rgba(255,255,255,0.055) !important;
+}
+
+/* ── Analytics tabs ───────────────────────────────────────── */
+[data-theme="dark"] .nx-analytics-tab:not(.nx-analytics-tab--active) {
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  color: var(--text-secondary) !important;
+  transition: all 0.18s ease;
+}
+[data-theme="dark"] .nx-analytics-tab:hover:not(.nx-analytics-tab--active) {
+  background: rgba(255,255,255,0.04) !important;
+  border-color: rgba(255,255,255,0.07) !important;
+  color: var(--text-primary) !important;
+}
+
+/* ── Dividers ─────────────────────────────────────────────── */
+[data-theme="dark"] hr,
+[data-theme="dark"] .divider {
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.055);
+}
+
+/* ── Empty state ──────────────────────────────────────────── */
+[data-theme="dark"] .nx-empty-state {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 32px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+/* ── Loading dots ─────────────────────────────────────────── */
+@keyframes px-dot-bounce {
+  0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+  40%            { transform: scale(1); opacity: 1; }
+}
+
+.px-loading-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.px-loading-dots span {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: px-dot-bounce 1.4s ease-in-out infinite both;
+}
+.px-loading-dots span:nth-child(1) { animation-delay: 0s; }
+.px-loading-dots span:nth-child(2) { animation-delay: 0.16s; }
+.px-loading-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+/* ── Stale-data pulse (header warning) ─────────────────────── */
+@keyframes nx-stale-pulse {
+  0%, 100% { opacity: 0.75; }
+  50%       { opacity: 1; }
+}
+
+/* ── Misc refinements ─────────────────────────────────────── */
+[data-theme="dark"] .nx-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+[data-theme="dark"] .card-header-muted {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}

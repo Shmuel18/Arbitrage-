@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start"],
+      "cwd": "C:\\Users\\shh92\\Documents\\Arbitrage\\frontend",
+      "port": 5173
+    }
+  ]
+}

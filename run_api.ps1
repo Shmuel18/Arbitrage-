@@ -1,10 +1,10 @@
 
-# Trinity Bot - Run API Server
+# Trinity Bot - Start via main.py only (embedded API)
 
-Write-Host "🚀 Starting Trinity Bot API Server..." -ForegroundColor Cyan
-Write-Host ""
-Write-Host "API will be available at: http://localhost:8000" -ForegroundColor Green
-Write-Host "API Docs: http://localhost:8000/docs" -ForegroundColor Green
+Set-Location 'c:\Users\shh92\Documents\Arbitrage'
+
+Write-Host "⚠️ Standalone API mode disabled." -ForegroundColor Yellow
+Write-Host "✅ Use main.py only (it already starts the embedded API on port 8000)." -ForegroundColor Green
 Write-Host ""
 
-python -m uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+& '.\venv\Scripts\python.exe' main.py

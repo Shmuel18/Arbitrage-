@@ -16,6 +16,34 @@
 
 ## הפעלה
 
+### לפני ההפעלה: הגדרת טוקנים (חובה + אופציונלי)
+
+```powershell
+# API/Backend
+$env:ADMIN_TOKEN = "change-me-strong-token"
+
+# אופציונלי (scoped control tokens)
+$env:COMMAND_TOKEN = "change-me-command-token"
+$env:CONFIG_TOKEN = "change-me-config-token"
+$env:EMERGENCY_TOKEN = "change-me-emergency-token"
+$env:TRADE_TOKEN = "change-me-trade-token"
+$env:READ_TOKEN = "change-me-read-token"
+
+# Frontend (אותו טוקן)
+$env:VITE_WS_TOKEN = "change-me-strong-token"
+
+# אופציונלי ל-scoped headers בפרונט
+$env:VITE_ADMIN_TOKEN = "change-me-strong-token"
+$env:VITE_COMMAND_TOKEN = "change-me-command-token"
+$env:VITE_CONFIG_TOKEN = "change-me-config-token"
+$env:VITE_EMERGENCY_TOKEN = "change-me-emergency-token"
+$env:VITE_TRADE_TOKEN = "change-me-trade-token"
+$env:VITE_READ_TOKEN = "change-me-read-token"
+```
+
+> ה-WebSocket עובד ב־fail-closed: בלי `ADMIN_TOKEN` (או עם token לא תואם)
+> החיבור ל־`/ws` ייחסם.
+
 ### שלב 1: וודא ש-Redis רץ
 
 ```powershell

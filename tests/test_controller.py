@@ -1,7 +1,9 @@
 """Tests for execution controller — the critical safety path."""
 
+import asyncio
 import json
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
@@ -10,6 +12,69 @@ import pytest
 
 from src.core.contracts import OrderSide, TradeMode, TradeRecord, TradeState
 from src.execution.controller import ExecutionController
+
+
+# ── MRO structural guards ────────────────────────────────────────────────
+
+class TestExecutionControllerMRO:
+    """Guard against silent method shadowing between ExecutionController mixins."""
+
+    def test_mro_order_is_stable(self):
+        """MRO must list mixins in the expected composition order."""
+        from src.execution._close_finalize_mixin import _CloseFinalizeMixin
+        from src.execution._close_mixin import _CloseMixin
+        from src.execution._entry_mixin import _EntryMixin
+        from src.execution._entry_orders_mixin import _EntryOrdersMixin
+        from src.execution._exit_logic_mixin import _ExitLogicMixin
+        from src.execution._monitor_mixin import _MonitorMixin
+        from src.execution._util_mixin import _UtilMixin
+
+        mro_names = [c.__name__ for c in ExecutionController.__mro__]
+
+        assert mro_names[0] == "ExecutionController"
+        # Parent–child chains must be correctly ordered
+        assert mro_names.index("_EntryMixin") < mro_names.index("_EntryOrdersMixin")
+        assert mro_names.index("_MonitorMixin") < mro_names.index("_ExitLogicMixin")
+        assert mro_names.index("_CloseMixin") < mro_names.index("_CloseFinalizeMixin")
+
+    def test_no_public_method_shadowed_between_sibling_mixins(self):
+        """No two sibling mixins define the same public method."""
+        from src.execution._close_mixin import _CloseMixin
+        from src.execution._entry_mixin import _EntryMixin
+        from src.execution._monitor_mixin import _MonitorMixin
+        from src.execution._util_mixin import _UtilMixin
+
+        siblings = [_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin]
+
+        seen: dict[str, str] = {}
+        conflicts: list[str] = []
+        for mixin in siblings:
+            own_methods = {
+                name for name, val in vars(mixin).items()
+                if callable(val) and not name.startswith("__")
+            }
+            for name in own_methods:
+                if name in seen:
+                    conflicts.append(
+                        f"{name!r} defined in both {seen[name]} and {mixin.__name__}"
+                    )
+                else:
+                    seen[name] = mixin.__name__
+
+        assert not conflicts, (
+            "Silent method shadowing detected between sibling mixins:\n"
+            + "\n".join(f"  • {c}" for c in conflicts)
+        )
+
+    def test_handle_opportunity_owned_by_entry_mixin(self):
+        """handle_opportunity() must resolve to _EntryMixin."""
+        from src.execution._entry_mixin import _EntryMixin
+        assert ExecutionController.handle_opportunity is _EntryMixin.handle_opportunity
+
+    def test_close_trade_owned_by_close_mixin(self):
+        """_close_trade() must resolve to _CloseMixin."""
+        from src.execution._close_mixin import _CloseMixin
+        assert ExecutionController._close_trade is _CloseMixin._close_trade
 
 
 @pytest.fixture
@@ -58,6 +123,47 @@ class TestHandleOpportunity:
         assert len(controller._active_trades) == 1
 
     @pytest.mark.asyncio
+    async def test_blocks_concurrent_entry_on_busy_exchange_during_opening(
+        self, controller, sample_opportunity, mock_redis
+    ):
+        from src.core.contracts import OpportunityCandidate
+
+        first_lock_released = asyncio.Event()
+        acquire_calls = 0
+
+        async def _acquire_lock(*args, **kwargs):
+            nonlocal acquire_calls
+            acquire_calls += 1
+            if acquire_calls == 1:
+                await first_lock_released.wait()
+            return True
+
+        mock_redis.acquire_lock_with_token.side_effect = _acquire_lock
+
+        opp2 = OpportunityCandidate(
+            symbol="ETH/USDT",
+            long_exchange="exchange_a", short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"), short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.2"), fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"), suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("3000"),
+            next_funding_ms=time.time() * 1000 + 300_000,
+        )
+
+        task1 = asyncio.create_task(controller.handle_opportunity(sample_opportunity))
+        await asyncio.sleep(0)
+        await controller.handle_opportunity(opp2)
+        first_lock_released.set()
+        await task1
+
+        assert len(controller._active_trades) == 1
+        assert list(controller._active_trades.values())[0].symbol == "BTC/USDT"
+        assert controller._exchanges_entering == set()
+
+    @pytest.mark.asyncio
     async def test_uses_filled_qty_not_requested(self, controller, sample_opportunity, mock_exchange_mgr):
         """Critical safety: trade record should use actual filled qty."""
         long_adapter = mock_exchange_mgr.get("exchange_a")
@@ -75,6 +181,83 @@ class TestHandleOpportunity:
         trade = list(controller._active_trades.values())[0]
         assert trade.long_qty == Decimal("0.008")
         assert trade.short_qty == Decimal("0.008")  # delta neutral
+
+    @pytest.mark.asyncio
+    async def test_blocks_entry_when_price_spread_is_adverse(
+        self,
+        controller,
+        sample_opportunity,
+    ):
+        """Adverse scanner spread must be hard-blocked before any order execution."""
+        adverse_opp = replace(sample_opportunity, price_spread_pct=Decimal("0.15"))
+
+        controller._execute_entry_orders = AsyncMock(return_value=None)
+
+        await controller.handle_opportunity(adverse_opp)
+
+        assert len(controller._active_trades) == 0
+        controller._execute_entry_orders.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blocks_entry_when_pre_entry_liquidity_check_errors(
+        self,
+        controller,
+        sample_opportunity,
+        mock_exchange_mgr,
+    ):
+        """Pre-entry liquidity failures must fail closed, not open a live trade."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        long_adapter.get_vwap_and_depth.side_effect = RuntimeError("depth parser exploded")
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        long_adapter.place_order.assert_not_called()
+        short_adapter.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_post_entry_adverse_basis_and_emergency_closes(
+        self,
+        controller,
+        sample_opportunity,
+        mock_redis,
+    ):
+        """Adverse realized entry basis must trigger immediate rejection and unwind."""
+        long_spec = AsyncMock()
+        long_spec.taker_fee = Decimal("0.0005")
+        short_spec = AsyncMock()
+        short_spec.taker_fee = Decimal("0.0005")
+
+        controller._execute_entry_orders = AsyncMock(
+            return_value={
+                "order_qty": Decimal("0.01"),
+                "long_filled_qty": Decimal("0.01"),
+                "short_filled_qty": Decimal("0.01"),
+                "entry_price_long": Decimal("50000"),
+                "entry_price_short": Decimal("49900"),
+                "entry_fees": Decimal("0.5"),
+                "long_spec": long_spec,
+                "short_spec": short_spec,
+                "entry_basis_pct": Decimal("1.25"),
+            }
+        )
+
+        close_calls = []
+
+        async def _mock_place_with_timeout(adapter, req):
+            close_calls.append(req)
+            return {"id": "close", "filled": float(req.quantity), "average": 50000.0}
+
+        controller._place_with_timeout = _mock_place_with_timeout
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        assert len(close_calls) == 2
+        assert all(req.reduce_only for req in close_calls)
+        assert {req.side for req in close_calls} == {OrderSide.SELL, OrderSide.BUY}
+        mock_redis.set_trade_state.assert_not_called()
 
 
 class TestCloseOrphan:
@@ -233,10 +416,10 @@ class TestHoldOrExit:
         assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
-    async def test_exits_when_next_funding_too_far(
+    async def test_holds_when_next_funding_too_far(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """After 1.5h timeout + next funding doesn't qualify → EXIT."""
+        """After timeout + next funding doesn't qualify → HOLD for spread recovery (don't exit)."""
         config.trading_params.exit_offset_seconds = 0
 
         # Low funding rates (won't qualify for next cycle)
@@ -251,7 +434,7 @@ class TestHoldOrExit:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding already collected, timeout elapsed (2h > 1.5h)
+        # Pre-set: funding already collected, timeout elapsed (2h > 30min)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -260,8 +443,46 @@ class TestHoldOrExit:
 
         await controller._check_exit(trade)
 
-        # Should have exited — timeout reached, next funding doesn't qualify
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — no qualifying next funding, waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        # Timer was reset (funding_paid_at set to ~now) so the 30min window restarts
+        assert trade._funding_paid_at is not None
+
+    @pytest.mark.asyncio
+    async def test_holds_when_basis_only_recovers_within_old_tolerance(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """Soft basis exit now requires cushion above entry basis, not just tolerance."""
+        config.trading_params.exit_offset_seconds = 0
+        config.trading_params.profit_target_pct = Decimal("9.9")
+        config.trading_params.basis_recovery_tolerance_pct = Decimal("0.10")
+        config.trading_params.basis_exit_buffer_pct = Decimal("0.10")
+        config.trading_params.min_basis_exit_pnl_pct = Decimal("0.01")
+
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50025")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0.10")
+        trade._exit_check_active = True
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        trade.funding_collected_usd = Decimal("0.20")
+
+        await controller._check_exit(trade)
+
+        assert trade.trade_id in controller._active_trades
 
     @pytest.mark.asyncio
     async def test_holds_when_next_funding_within_max_wait(
@@ -327,6 +548,8 @@ class TestHoldOrExit:
         # entry: 50000, current long: 50500 → PnL = 500/50000 * 100 = 1.0%
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50500.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50500")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
@@ -336,6 +559,71 @@ class TestHoldOrExit:
 
         # Trade should have been closed — profit target hit
         assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_exits_when_no_funding_received_after_threshold(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Trade where WS cache never populated next_timestamp → payment tracker
+        never set → bot stuck indefinitely. Safety exit fires after
+        max_entry_window_minutes + basis_recovery_timeout_minutes."""
+        config.trading_params.max_entry_window_minutes = 60
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+
+        # Cache has NO next_timestamp for KITE — simulates the KITE/GateIO bug
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            adapter._funding_rate_cache["BTC/USDT"] = None  # cache empty
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        # Trade opened 100 min ago — past the 90-min threshold (60+30)
+        trade = _make_trade(controller, spread_pct="1.0",
+                            opened_minutes_ago=100, funding_paid=False)
+        # Next_funding trackers are never set (cache was always empty)
+        trade.next_funding_long = None
+        trade.next_funding_short = None
+        trade._funding_paid_at = None
+        trade.funding_collected_usd = Decimal("0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+
+        await controller._check_exit(trade)
+
+        # Should have exited — no funding received after threshold
+        assert trade.trade_id not in controller._active_trades
+
+    @pytest.mark.asyncio
+    async def test_does_not_exit_early_when_no_funding_received_below_threshold(
+        self, controller, config, mock_exchange_mgr
+    ):
+        """No-funding safety exit must NOT fire before the threshold. 
+        Trade open 50 min < 90 min (60+30) — should still hold."""
+        config.trading_params.max_entry_window_minutes = 60
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+        config.trading_params.exit_offset_seconds = 0
+
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            adapter._funding_rate_cache["BTC/USDT"] = None
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        # Trade opened only 50 min ago — below the 90-min threshold
+        trade = _make_trade(controller, spread_pct="1.0",
+                            opened_minutes_ago=50, funding_paid=False)
+        trade.next_funding_long = None
+        trade.next_funding_short = None
+        trade._funding_paid_at = None
+        trade.funding_collected_usd = Decimal("0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+
+        await controller._check_exit(trade)
+
+        # Should still be open — threshold not yet reached
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
 
 
 class TestUpgrade:
@@ -692,10 +980,10 @@ class TestBasisGuard:
         assert trade._funding_paid_at is not None
 
     @pytest.mark.asyncio
-    async def test_exits_on_basis_timeout(
+    async def test_holds_on_basis_timeout_no_qualifying_funding(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """After 1.5h timeout with no qualifying next funding → EXIT."""
+        """After timeout with no qualifying next funding → HOLD for spread recovery (don't exit)."""
         config.trading_params.exit_offset_seconds = 0
 
         past_ms = (time.time() - 1200) * 1000
@@ -711,7 +999,7 @@ class TestBasisGuard:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding collected, 2h have passed (> 1.5h timeout)
+        # Pre-set: funding collected, 2h have passed (> 30min timeout)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -720,8 +1008,46 @@ class TestBasisGuard:
 
         await controller._check_exit(trade)
 
-        # Should have been closed (timeout + no qualifying next funding)
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — holding for spread recovery; _funding_paid_at reset to now
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        assert trade._funding_paid_at is not None
+
+    @pytest.mark.asyncio
+    async def test_holds_on_basis_timeout_after_tracker_advances_to_next_cycle(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Post-funding timeout with far-future trackers → HOLD for spread recovery (don't exit)."""
+        config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+
+        future_ms = (time.time() + 2 * 3600) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": future_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
+        trade.next_funding_long = datetime.now(timezone.utc) + timedelta(hours=2)
+        trade.next_funding_short = datetime.now(timezone.utc) + timedelta(hours=2)
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(minutes=40)
+        trade.funding_collections = 1
+        trade.funding_collected_usd = Decimal("1.0")
+
+        await controller._check_exit(trade)
+
+        # Should HOLD — next payment is 2h away (outside window), waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
     async def test_exits_immediately_when_basis_favorable(
@@ -741,6 +1067,8 @@ class TestBasisGuard:
         # Long price rose enough for 1.1% PnL → adj 0.8% (above 0.7% target)
         mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50550.0}
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50550")
+        mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
@@ -785,10 +1113,10 @@ class TestNonQuickCyclePath:
     """Tests for timeout-based exit and next-cycle hold logic."""
 
     @pytest.mark.asyncio
-    async def test_exits_when_net_below_threshold(
+    async def test_holds_when_net_below_threshold(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """Timeout elapsed + next funding doesn't qualify → EXIT."""
+        """Timeout elapsed + next funding doesn't qualify → HOLD for spread recovery."""
         config.trading_params.exit_offset_seconds = 0
 
         # Low funding rates (won't qualify for next cycle)
@@ -805,7 +1133,7 @@ class TestNonQuickCyclePath:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding collected 2h ago (past 1.5h timeout)
+        # Pre-set: funding collected 2h ago (past 30min timeout)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -814,7 +1142,9 @@ class TestNonQuickCyclePath:
 
         await controller._check_exit(trade)
 
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
     async def test_holds_when_net_above_threshold(

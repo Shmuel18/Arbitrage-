@@ -1,17 +1,34 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { FullData } from '../hooks/useMarketData';
 import { WsConnectionState } from '../services/websocket';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
-import AnalyticsPanel from './AnalyticsPanel';
 import ExchangeBalances from './ExchangeBalances';
-import RecentTradesPanel from './RecentTradesPanel';
 import RightPanel from './RightPanel';
-import SystemLogs from './SystemLogs';
 import SignalTape from './SignalTape';
-import RiskRadar from './RiskRadar';
+import KeyboardShortcuts from './KeyboardShortcuts';
+import { useSettings } from '../context/SettingsContext';
+import { useToast } from '../context/ToastContext';
+import { useTelegram } from '../context/TelegramContext';
+
+// Below-the-fold components — lazy-loaded to shrink initial bundle
+const AnalyticsPanel    = lazy(() => import('./AnalyticsPanel'));
+const RecentTradesPanel = lazy(() => import('./RecentTradesPanel'));
+const SystemLogs        = lazy(() => import('./SystemLogs'));
+
+/** Fallback placeholder while a chunk is loading — preserves layout */
+const LazyFallback: React.FC<{ minHeight?: number }> = ({ minHeight = 200 }) => (
+  <div
+    className="nx-lazy-fallback"
+    style={{ minHeight }}
+    role="status"
+    aria-label="Loading section"
+  >
+    <div className="nx-lazy-fallback__shimmer" />
+  </div>
+);
 
 export const SECTION_IDS = {
   dashboard: 'section-dashboard',
@@ -40,7 +57,38 @@ const Dashboard: React.FC<DashboardProps> = ({
   lastWsMessageAt,
 }) => {
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const { theme, setTheme } = useSettings();
+  const toast = useToast();
+  const toggleTheme = useCallback(
+    () => setTheme(theme === 'dark' ? 'light' : 'dark'),
+    [theme, setTheme]
+  );
+
+  // WS connection lifecycle → user-visible notifications
+  const prevWsRef = useRef<WsConnectionState>(wsConnection);
+  useEffect(() => {
+    const prev = prevWsRef.current;
+    prevWsRef.current = wsConnection;
+    // Only announce state transitions, not the initial mount value
+    if (prev === wsConnection) return;
+    if (prev === 'connected' && wsConnection !== 'connected') {
+      toast.push({
+        intent: 'warning',
+        title: 'Connection lost',
+        message: 'Live data stream disconnected. Attempting to reconnect…',
+        duration: 6000,
+      });
+    } else if (prev !== 'connected' && wsConnection === 'connected') {
+      toast.push({
+        intent: 'success',
+        title: 'Reconnected',
+        message: 'Live data stream restored.',
+        duration: 3000,
+      });
+    }
+  }, [wsConnection, toast]);
 
   const scrollToSection = useCallback((sectionId: SectionId) => {
     const el = document.getElementById(sectionId);
@@ -78,20 +126,34 @@ const Dashboard: React.FC<DashboardProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  // Mini-App context — drop keyboard-only UX inside Telegram (no hardware kbd).
+  const { isTelegramWebApp } = useTelegram();
+
   return (
-    <div className="app-layout">
-      <Sidebar activeSection={activeSection} onNavigate={scrollToSection} />
+    <div className={`app-layout${isTelegramWebApp ? ' app-layout--telegram' : ''}`}>
+      {!isTelegramWebApp && (
+        <KeyboardShortcuts onNavigate={scrollToSection} onToggleTheme={toggleTheme} />
+      )}
+
+      <Sidebar
+        activeSection={activeSection}
+        onNavigate={scrollToSection}
+        mobileOpen={mobileMenuOpen}
+        onMobileClose={() => setMobileMenuOpen(false)}
+      />
 
       <div className="main-content">
         <Header
           botStatus={data.status}
+          alerts={(data as any).alerts ?? []}
           lastFetchedAt={data.lastFetchedAt}
           wsConnection={wsConnection}
           lastWsMessageAt={lastWsMessageAt}
+          onMobileMenuToggle={() => setMobileMenuOpen((o) => !o)}
         />
         <SignalTape logs={data.logs} />
 
-        <div className="content-area" ref={contentRef}>
+        <main className="content-area" ref={contentRef} id="main-content" aria-label="Dashboard main content">
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />
           <div className="space-y-5">
             <div id={SECTION_IDS.dashboard}>
@@ -107,13 +169,6 @@ const Dashboard: React.FC<DashboardProps> = ({
               />
             </div>
 
-            <RiskRadar
-              positions={data.positions || []}
-              totalBalance={data.balances?.total ?? 0}
-              dailyPnl={data.dailyPnl}
-              allTimePnl={data.summary?.all_time_pnl ?? 0}
-            />
-
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
               <div className="lg:col-span-2" id={SECTION_IDS.positions}>
                 <PositionsTable positions={data.positions || []} />
@@ -127,22 +182,28 @@ const Dashboard: React.FC<DashboardProps> = ({
               <RightPanel opportunities={data.opportunities} status={data.status} />
             </div>
 
-            <AnalyticsPanel
-              pnl={data.pnl}
-              pnlHours={pnlHours}
-              onPnlHoursChange={onPnlHoursChange}
-              totalBalance={data.balances?.total ?? 0}
-            />
+            <Suspense fallback={<LazyFallback minHeight={260} />}>
+              <AnalyticsPanel
+                pnl={data.pnl}
+                pnlHours={pnlHours}
+                onPnlHoursChange={onPnlHoursChange}
+                totalBalance={data.balances?.total ?? 0}
+              />
+            </Suspense>
 
             <div id={SECTION_IDS.trades}>
-              <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />
+              <Suspense fallback={<LazyFallback minHeight={320} />}>
+                <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />
+              </Suspense>
             </div>
 
             <div id={SECTION_IDS.logs}>
-              <SystemLogs logs={data.logs} summary={data.summary} />
+              <Suspense fallback={<LazyFallback minHeight={240} />}>
+                <SystemLogs logs={data.logs} summary={data.summary} />
+              </Suspense>
             </div>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

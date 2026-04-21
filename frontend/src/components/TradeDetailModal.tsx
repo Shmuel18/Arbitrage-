@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import {
@@ -56,6 +57,9 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const pricePnl  = trade.price_pnl ?? null;
   const fundingNet = trade.funding_net ?? null;
   const totalPnl  = trade.total_pnl ?? null;
+  const fillBasis    = trade.entry_basis_pct != null ? Number(trade.entry_basis_pct) : null;
+  const scannerSpread = trade.price_spread_pct != null ? Number(trade.price_spread_pct) : null;
+  const basisSlippage = fillBasis != null && scannerSpread != null ? fillBasis - scannerSpread : null;
 
   // ── Section styles ──────────────────────────────────────────────
   const sectionTitle: React.CSSProperties = {
@@ -66,11 +70,13 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
 
   const rowStyle: React.CSSProperties = {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    gap: 8,
     padding: '6px 0', borderBottom: '1px solid var(--card-border)',
   };
 
   const labelStyle: React.CSSProperties = {
     color: 'var(--text-secondary)', fontSize: 12,
+    flexShrink: 0,
   };
 
   const valueStyle: React.CSSProperties = {
@@ -78,6 +84,11 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
     fontFamily: 'var(--font-mono, monospace)',
     fontVariantNumeric: 'tabular-nums',
     color: 'var(--text-primary)',
+    textAlign: 'right',
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   };
 
   const totalRowStyle: React.CSSProperties = {
@@ -95,47 +106,47 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const timelineEvents: TimelineEvent[] = [
     {
       id: 'entry',
-      label: 'Execution Started',
-      detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} pair opened`,
+      label: t.tlExecutionStarted,
+      detail: `${trade.long_exchange?.toUpperCase()} / ${trade.short_exchange?.toUpperCase()} ${t.tlPairOpened}`,
       timeLabel: formatDate(openedAt),
       confidence: confidenceFrom(openedAt ? 92 : 70),
       status: 'done',
     },
     {
       id: 'mark',
-      label: 'Spread Captured',
-      detail: `Entry edge ${formatFundingRateN(trade.entry_spread, 4)} | Basis ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
+      label: t.tlSpreadCaptured,
+      detail: `${t.tlEntrySpreadLabel} ${formatFundingRateN(trade.entry_spread, 4)} | ${t.tlBasisLabel} ${formatFundingRateN(trade.entry_basis_pct, 4)}`,
       confidence: confidenceFrom(55 + Math.min(40, spreadAbs * 2000)),
       status: 'done',
     },
     {
       id: 'funding',
-      label: 'Funding Settlement',
+      label: t.tlFundingSettlement,
       detail:
         fundingCollections > 0
-          ? `${fundingCollections} collection(s), net ${formatUsd(trade.funding_collected_usd)}`
-          : 'No funding settlement recorded',
+          ? `${fundingCollections} ${t.tlCollectionsNet} ${formatUsd(trade.funding_collected_usd)}`
+          : t.tlNoFundingSettlement,
       confidence: confidenceFrom(fundingCollections > 0 ? 88 : trade.status === 'closed' ? 50 : 72),
       status: fundingCollections > 0 ? 'done' : trade.status === 'closed' ? 'pending' : 'live',
     },
     {
       id: 'exit',
-      label: 'Exit & Attribution',
-      detail: trade.exit_reason || 'Awaiting exit trigger',
+      label: t.tlExitAttribution,
+      detail: trade.exit_reason || t.tlAwaitingExit,
       timeLabel: closedAt ? formatDate(closedAt) : undefined,
       confidence: confidenceFrom(closedAt ? 90 : 68),
       status: trade.status === 'closed' ? 'done' : 'live',
     },
     {
       id: 'final',
-      label: 'Net Result',
-      detail: `${formatUsd(totalPnl)} total | hold ${formatDuration(trade.hold_minutes)}`,
+      label: t.tlNetResult,
+      detail: `${formatUsd(totalPnl)} ${t.tlTotalLabel} | ${t.tlHoldLabel} ${formatDuration(trade.hold_minutes)}`,
       confidence: confidenceFrom(trade.status === 'closed' ? 70 + Math.min(25, totalPnlAbs * 2.5) : 55),
       status: trade.status === 'closed' ? 'done' : 'pending',
     },
   ];
 
-  return (
+  return createPortal(
     <>
       <div
         onClick={onClose}
@@ -152,23 +163,28 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         aria-modal="true"
         aria-label={`${t.tradeDetail} — ${trade.symbol}`}
         style={{
-        position: 'fixed', top: '50%', left: '50%',
-        transform: 'translate(-50%, -50%)',
-        zIndex: 1001,
-        width: 'min(600px, 95vw)',
-        maxHeight: '90vh',
-        overflowY: 'auto',
-        background: 'var(--card-bg)',
-        border: '1px solid var(--card-border)',
-        borderRadius: 16,
-        boxShadow: 'var(--shadow-xl)',
-        padding: '24px 28px',
-        overflow: 'hidden',
-      }}>
+          position: 'fixed', top: '50%', left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 1001,
+          width: 'min(620px, 96vw)',
+          maxHeight: '92vh',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--card-bg)',
+          border: '1px solid var(--card-border)',
+          borderRadius: 16,
+          boxShadow: 'var(--shadow-xl)',
+          overflow: 'hidden',
+          boxSizing: 'border-box',
+        }}>
+        {/* Sticky gradient bar — stays at top even when scrolling */}
         <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-          background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899)',
+          flexShrink: 0,
+          height: 3,
+          background: 'linear-gradient(90deg, #2DB8C4, #1B3A6B, #2DB8C4)',
         }} />
+        {/* Scrollable content area */}
+        <div style={{ overflowY: 'auto', overflowX: 'hidden', padding: '24px 28px 28px', flex: 1 }}>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20 }}>
@@ -199,7 +215,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             </span>
             <button
               onClick={onClose}
-              aria-label="Close dialog"
+              aria-label={t.closeDialog}
               style={{
                 background: 'rgba(148,163,184,0.1)', border: 'none', cursor: 'pointer',
                 color: 'var(--text-muted)', fontSize: 18, borderRadius: '50%',
@@ -210,7 +226,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         </div>
 
         {/* ── Times & Prices ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 24 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20, marginBottom: 24 }}>
           {/* LONG SIDE */}
           <div>
             <p style={sectionTitle}>{trade.long_exchange?.toUpperCase()} ({t.long})</p>
@@ -255,10 +271,22 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         </div>
 
         {/* ── Financials ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 24, marginBottom: 12 }}>
+        {/* Net total highlight */}
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          background: totalPnl != null && totalPnl >= 0 ? 'rgba(16,185,129,0.07)' : 'rgba(239,68,68,0.07)',
+          border: `1px solid ${totalPnl != null && totalPnl >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
+          borderRadius: 10, padding: '10px 16px', marginBottom: 12,
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>{t.totalNetPnl}</span>
+          <span style={{ fontSize: 20, fontWeight: 900, color: pnlColor(totalPnl) }}>{formatUsd(totalPnl)}</span>
+        </div>
+
+        {/* Two equal boxes */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 12 }}>
           {/* PNL Breakdown */}
-          <div style={{ background: 'rgba(59,130,246,0.03)', borderRadius: 12, padding: '16px 20px', border: '1px solid var(--card-border)' }}>
-            <p style={{ ...sectionTitle, borderBottom: 'none' }}>{t.tradeDetailPnl}</p>
+          <div style={{ background: 'var(--card-bg)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--card-border)' }}>
+            <p style={sectionTitle}>{t.tradeDetailPnl}</p>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.pricePnl}</span>
               <span style={{ ...valueStyle, color: pnlColor(pricePnl) }}>{formatUsd(pricePnl)}</span>
@@ -267,19 +295,15 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={labelStyle}>{t.fundingNetDetail}</span>
               <span style={{ ...valueStyle, color: pnlColor(fundingNet) }}>{formatUsd(fundingNet)}</span>
             </div>
-            <div style={rowStyle}>
+            <div style={{ ...rowStyle, borderBottom: 'none' }}>
               <span style={labelStyle}>{t.feesDetail}</span>
               <span style={{ ...valueStyle, color: 'var(--red)' }}>{formatUsd(feesNum)}</span>
-            </div>
-            <div style={totalRowStyle}>
-              <span style={{ fontWeight: 800, fontSize: 13, color: 'var(--text-primary)' }}>{t.totalNetPnl}</span>
-              <span style={{ fontSize: 18, fontWeight: 900, color: pnlColor(totalPnl) }}>{formatUsd(totalPnl)}</span>
             </div>
           </div>
 
           {/* Stats */}
-          <div style={{ padding: '4px 0' }}>
-            <p style={{ ...sectionTitle, borderBottom: 'none' }}>{t.tradeDetailFunding}</p>
+          <div style={{ background: 'var(--card-bg)', borderRadius: 10, padding: '12px 16px', border: '1px solid var(--card-border)' }}>
+            <p style={sectionTitle}>{t.tradeDetailFunding}</p>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.collectionsCount}</span>
               <span style={valueStyle}>{trade.funding_collections ?? '--'}</span>
@@ -292,14 +316,29 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={labelStyle}>{t.entryEdge}</span>
               <span style={valueStyle}>{formatFundingRateN(trade.entry_spread, 4)}</span>
             </div>
-            <div style={rowStyle}>
+            <div style={{ ...rowStyle, borderBottom: scannerSpread != null ? undefined : 'none' }}>
               <span style={labelStyle}>{t.entryBasis}</span>
-              <span style={valueStyle}>{formatFundingRateN(trade.entry_basis_pct, 4)}</span>
+              <span style={{ ...valueStyle, color: fillBasis != null && fillBasis < 0 ? 'var(--green)' : 'var(--text-primary)' }}>
+                {formatFundingRateN(fillBasis, 4)}
+              </span>
             </div>
+            {scannerSpread != null && (
+              <div style={{ ...rowStyle, borderBottom: 'none' }}>
+                <span style={labelStyle}>{t.scannerSpread}</span>
+                <span style={{ ...valueStyle, color: 'var(--text-secondary)' }}>
+                  {formatFundingRateN(scannerSpread, 4)}
+                  {basisSlippage != null && Math.abs(basisSlippage) > 0.0005 && (
+                    <span style={{ fontSize: 10, color: basisSlippage < 0 ? 'var(--red)' : 'var(--green)', marginInlineStart: 4 }}>
+                      ({basisSlippage > 0 ? '+' : ''}{(basisSlippage * 100).toFixed(2)}bp)
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
-        <ExecutionTimeline title="Execution Confidence Timeline" events={timelineEvents} />
+        <ExecutionTimeline title={t.executionTimeline} events={timelineEvents} />
 
         {/* ── Exit Reason ── */}
         {trade.exit_reason && (
@@ -315,8 +354,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             </div>
           </div>
         )}
+        </div>{/* end scrollable */}
       </div>
-    </>
+    </>,
+    document.body
   );
 };
 

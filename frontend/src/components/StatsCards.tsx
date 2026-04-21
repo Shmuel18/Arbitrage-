@@ -1,4 +1,4 @@
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { useSettings } from '../context/SettingsContext';
 
 interface StatsCardsProps {
@@ -75,44 +75,63 @@ const ArrowDown = () => (
 // Replace with real per-card timeseries when available.
 
 // ── Single stat card ─────────────────────────────────────────────
+/**
+ * Semantic intent for a stat card.
+ * Drives the accent color via CSS variables, so theme changes
+ * cascade without touching the component.
+ */
+type StatIntent = 'info' | 'profit' | 'loss' | 'neutral' | 'system' | 'warning';
+
+const INTENT_VAR: Record<StatIntent, string> = {
+  info:    'var(--color-info)',
+  profit:  'var(--color-profit)',
+  loss:    'var(--color-loss)',
+  neutral: 'var(--color-neutral)',
+  system:  'var(--color-system)',
+  warning: 'var(--color-warning)',
+};
+
 interface StatCardProps {
   label: string;
   value: string;
   sub?: string;
   subColor?: string;
   icon: React.ReactNode;
-  accentVar: string;
-  accentHex: string;
+  intent: StatIntent;
   trend?: 'up' | 'down' | 'neutral';
   live?: boolean;
   idx?: number;
 }
 
-const StatCard: React.FC<StatCardProps> = memo(({ label, value, sub, subColor, icon, accentHex, trend, live, idx = 0 }) => (
-  <div
-    className="xcard nx-xcard"
-    style={{ '--xcard-accent': accentHex, animationDelay: `${idx * 60}ms` } as React.CSSProperties}
-  >
-    <div className="xcard-top">
-      <div className="xcard-icon" style={{ color: accentHex }}>
-        {icon}
+const StatCard: React.FC<StatCardProps> = memo(({ label, value, sub, subColor, icon, intent, trend, live, idx = 0 }) => {
+  const accent = INTENT_VAR[intent];
+  return (
+    <div
+      className={`xcard nx-xcard nx-xcard--${intent}`}
+      style={{ '--xcard-accent': accent, animationDelay: `${idx * 60}ms` } as React.CSSProperties}
+      data-intent={intent}
+    >
+      <div className="xcard-top">
+        <div className="xcard-icon" style={{ color: accent }}>
+          {icon}
+        </div>
+        {live && <span className="xcard-live"><span className="xcard-live-dot" />LIVE</span>}
+        {!live && trend && (
+          <span className="nx-xcard-trend" style={{ color: trend === 'up' ? 'var(--color-profit)' : trend === 'down' ? 'var(--color-loss)' : 'var(--text-muted)' }}>
+            {trend === 'up' ? <ArrowUp /> : trend === 'down' ? <ArrowDown /> : null}
+          </span>
+        )}
       </div>
-      {live && <span className="xcard-live"><span className="xcard-live-dot" />LIVE</span>}
-      {!live && trend && (
-        <span className="nx-xcard-trend" style={{ color: trend === 'up' ? 'var(--green)' : trend === 'down' ? 'var(--red)' : 'var(--text-muted)' }}>
-          {trend === 'up' ? <ArrowUp /> : trend === 'down' ? <ArrowDown /> : null}
-        </span>
+      <div className="xcard-label">{label}</div>
+      <div className="xcard-value nx-xcard-value">{value}</div>
+      {sub && (
+        <div className="xcard-sub" style={{ color: subColor ?? 'var(--text-muted)' }}>
+          {sub}
+        </div>
       )}
     </div>
-    <div className="xcard-label">{label}</div>
-    <div className="xcard-value nx-xcard-value">{value}</div>
-    {sub && (
-      <div className="xcard-sub" style={{ color: subColor ?? 'var(--text-muted)' }}>
-        {sub}
-      </div>
-    )}
-  </div>
-));
+  );
+});
 
 // ── Main component ───────────────────────────────────────────────
 const StatsCards: React.FC<StatsCardsProps> = ({
@@ -120,6 +139,17 @@ const StatsCards: React.FC<StatsCardsProps> = ({
   winRate = 0, totalTrades = 0, allTimePnl = 0, avgPnl = 0,
 }) => {
   const { t } = useSettings();
+  const [allTimeOpen, setAllTimeOpen] = useState<boolean>(() => {
+    const stored = localStorage.getItem('rb_alltime_open');
+    return stored === null ? true : stored === '1';
+  });
+  const toggleAllTime = () => {
+    setAllTimeOpen((o) => {
+      const next = !o;
+      localStorage.setItem('rb_alltime_open', next ? '1' : '0');
+      return next;
+    });
+  };
 
   const fmt = useMemo(() => {
     const nf = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 });
@@ -142,8 +172,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           value={fmt(totalBalance)}
           sub={t.subTotalAcross}
           icon={<IconWallet />}
-          accentVar="--accent"
-          accentHex="#3b82f6"
+          intent="info"
           trend="neutral"
           live
         />
@@ -155,10 +184,9 @@ const StatsCards: React.FC<StatsCardsProps> = ({
             const label = dailyPnl >= 0 ? t.subProfitableSession : t.subLossSession;
             return pct ? `${pct}  ·  ${label}` : label;
           })()}
-          subColor={dailyPnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          subColor={dailyPnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'}
           icon={<IconTrendUp />}
-          accentVar="--green"
-          accentHex={dailyPnl >= 0 ? '#10b981' : '#ef4444'}
+          intent={dailyPnl >= 0 ? 'profit' : 'loss'}
           trend={dailyPnl >= 0 ? 'up' : 'down'}
         />
         <StatCard
@@ -166,8 +194,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           value={String(activeTrades)}
           sub={activeTrades > 0 ? `${activeTrades} ${t.subPositionsOpen}` : t.subNoPositions}
           icon={<IconActivity />}
-          accentVar="--teal"
-          accentHex="#06b6d4"
+          intent="neutral"
           trend={activeTrades > 0 ? 'up' : 'neutral'}
           live={activeTrades > 0}
         />
@@ -175,17 +202,45 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           label={t.systemStatus}
           value={systemRunning ? t.running : t.stopped}
           sub={systemRunning ? t.subScanningMarkets : t.subBotIdle}
-          subColor={systemRunning ? 'var(--green)' : 'var(--text-muted)'}
+          subColor={systemRunning ? 'var(--color-profit)' : 'var(--text-muted)'}
           icon={<IconShield />}
-          accentVar="--purple"
-          accentHex={systemRunning ? '#8b5cf6' : '#6b7280'}
+          intent={systemRunning ? 'system' : 'neutral'}
           trend={systemRunning ? 'up' : 'neutral'}
           live={systemRunning}
         />
       </div>
 
-      {/* ── Secondary stats row ────────────────── */}
-      <div className="xcards-grid xcards-grid--secondary">
+      {/* ── Secondary stats: collapsible "All-Time" group ────────── */}
+      <div className="nx-section-toggle-wrap">
+        <button
+          type="button"
+          className={`nx-section-toggle${allTimeOpen ? ' nx-section-toggle--open' : ''}`}
+          onClick={toggleAllTime}
+          aria-expanded={allTimeOpen}
+          aria-controls="nx-alltime-stats"
+        >
+          <span className="nx-section-toggle-label">ALL-TIME STATS</span>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ transform: allTimeOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+      </div>
+
+      <div
+        id="nx-alltime-stats"
+        className={`xcards-grid xcards-grid--secondary${allTimeOpen ? '' : ' xcards-grid--collapsed'}`}
+        style={{ display: allTimeOpen ? undefined : 'none' }}
+      >
         <StatCard
           label={t.allTimePnl}
           value={fmt(allTimePnl)}
@@ -193,10 +248,9 @@ const StatsCards: React.FC<StatsCardsProps> = ({
             const pct = balancePct(allTimePnl);
             return pct ? `${pct}  ·  ${t.subCumulativePnl}` : t.subCumulativePnl;
           })()}
-          subColor={allTimePnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          subColor={allTimePnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'}
           icon={<IconBarChart />}
-          accentVar="--accent"
-          accentHex="#3b82f6"
+          intent={allTimePnl >= 0 ? 'profit' : 'loss'}
           trend={allTimePnl >= 0 ? 'up' : 'down'}
           idx={4}
         />
@@ -204,10 +258,9 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           label={t.winRate}
           value={fmtPct(winRate)}
           sub={`${Math.round(winRate * totalTrades)} / ${totalTrades} trades`}
-          subColor={winRate >= 0.6 ? 'var(--green)' : winRate >= 0.4 ? 'var(--yellow)' : 'var(--red)'}
+          subColor={winRate >= 0.6 ? 'var(--color-profit)' : winRate >= 0.4 ? 'var(--color-warning)' : 'var(--color-loss)'}
           icon={<IconTarget />}
-          accentVar="--green"
-          accentHex={winRate >= 0.6 ? '#10b981' : '#f59e0b'}
+          intent={winRate >= 0.6 ? 'profit' : 'warning'}
           trend={winRate >= 0.5 ? 'up' : 'down'}
           idx={5}
         />
@@ -215,10 +268,9 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           label={t.avgPnlStat}
           value={fmt(avgPnl)}
           sub={t.subPerClosedTrade}
-          subColor={avgPnl >= 0 ? 'var(--green)' : 'var(--red)'}
+          subColor={avgPnl >= 0 ? 'var(--color-profit)' : 'var(--color-loss)'}
           icon={<IconZap />}
-          accentVar="--teal"
-          accentHex="#06b6d4"
+          intent="neutral"
           trend={avgPnl >= 0 ? 'up' : 'down'}
           idx={6}
         />
@@ -227,8 +279,7 @@ const StatsCards: React.FC<StatsCardsProps> = ({
           value={String(totalTrades)}
           sub={t.subAllTimeExec}
           icon={<IconLayers />}
-          accentVar="--purple"
-          accentHex="#8b5cf6"
+          intent="system"
           trend={totalTrades > 0 ? 'up' : 'neutral'}
           idx={7}
         />

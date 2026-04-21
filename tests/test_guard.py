@@ -16,6 +16,26 @@ def guard(config, mock_exchange_mgr, mock_redis):
 
 class TestDeltaCheck:
     @pytest.mark.asyncio
+    async def test_entry_in_progress_skips_false_delta_breach(self, guard, config, mock_exchange_mgr):
+        """One-sided exposure during entry hedging must not trigger panic close."""
+        config.risk_limits.delta_threshold_pct = Decimal("1.0")
+
+        adapter_a = mock_exchange_mgr.get("exchange_a")
+        adapter_b = mock_exchange_mgr.get("exchange_b")
+
+        adapter_a.get_positions.return_value = [
+            Position(exchange="a", symbol="BTC/USDT", side=OrderSide.BUY,
+                     quantity=Decimal("10"), entry_price=Decimal("50000")),
+        ]
+        adapter_b.get_positions.return_value = []
+
+        guard.mark_entry_started("BTC/USDT")
+        await guard._check_delta()
+
+        adapter_a.place_order.assert_not_called()
+        adapter_b.place_order.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_no_breach_when_balanced(self, guard, mock_exchange_mgr):
         """Balanced long/short = no panic."""
         adapter_a = mock_exchange_mgr.get("exchange_a")

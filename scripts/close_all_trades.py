@@ -41,7 +41,7 @@ async def main():
         exc_cfg = cfg.exchanges.get(eid)
         if not exc_cfg:
             continue
-        mgr.register(eid, exc_cfg.model_dump())
+        mgr.register(eid, exc_cfg.to_adapter_dict())
     
     await mgr.connect_all()
     verified = await mgr.verify_all()

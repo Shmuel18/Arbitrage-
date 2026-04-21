@@ -37,8 +37,8 @@ class TradeMode(str, Enum):
 class EntryTier(str, Enum):
     """Entry quality tier — determines timing and risk classification."""
     TOP = "top"          # 🏆 Funding + favorable price spread
-    MEDIUM = "medium"    # 📊 Funding + neutral/slight adverse spread (within funding)
-    BAD = "bad"          # ⚠️ Funding + larger adverse spread (up to max cap)
+    MEDIUM = "medium"    # 📊 Funding + neutral spread (adverse within noise)
+    WEAK = "weak"        # ⚡ Funding + adverse spread, but funding exceeds it by 0.5%+
 
 
 class ExitReason(str, Enum):
@@ -132,8 +132,9 @@ class OpportunityCandidate:
     exit_before: Optional[datetime] = None # when to exit (before costly payment)
     n_collections: int = 0                 # how many income payments we'll collect
     # Tier-based entry strategy
-    entry_tier: Optional[str] = None       # TOP / MEDIUM / BAD (see EntryTier)
+    entry_tier: Optional[str] = None       # TOP / MEDIUM / WEAK (see EntryTier)
     price_spread_pct: Decimal = Decimal("0")  # cross-exchange price diff % (positive = favorable)
+    stale_price: bool = False              # True when prices are too old to trust for entry, display-only
 
 
 # ── Trade record ─────────────────────────────────────────────────
@@ -168,12 +169,18 @@ class TradeRecord:
     # Funding collection tracking
     funding_collections: int = 0           # how many payments collected so far
     funding_collected_usd: Decimal = Decimal("0")  # cumulative USD received
+    # Per-side funding tracked by the bot at collection time.
+    # Used by close reconciliation to avoid the bot_net derivation bug:
+    # if the bot missed one side at collection (e.g. rate was null), bot_net
+    # is wrong, and deriving the missing side from it inflates the total.
+    _funding_tracked_long: Decimal = Decimal("0")
+    _funding_tracked_short: Decimal = Decimal("0")
     # Price basis at entry: (entry_long_price − entry_short_price) / entry_short_price × 100
     # Positive = long was more expensive at entry. Used as the exit break-even threshold:
     # we break even on price as long as (exit_long − exit_short) / exit_short × 100 ≥ entry_basis_pct
     entry_basis_pct: Optional[Decimal] = None
     # Tier-based entry classification
-    entry_tier: Optional[str] = None       # TOP / MEDIUM / BAD (see EntryTier)
+    entry_tier: Optional[str] = None       # TOP / MEDIUM / WEAK (see EntryTier)
     price_spread_pct: Optional[Decimal] = None  # cross-exchange price spread at entry
 
     # ── Serialization ────────────────────────────────────────────
@@ -183,6 +190,11 @@ class TradeRecord:
         "long_funding_rate", "short_funding_rate", "long_taker_fee",
         "short_taker_fee", "entry_price_long", "entry_price_short",
         "fees_paid_total", "funding_collected_usd", "price_spread_pct",
+        # Per-side funding tracked by bot at collection time (persisted for reconciliation).
+        "_funding_tracked_long", "_funding_tracked_short",
+        # Running totals from exchange history — must be persisted so crash-recovery
+        # computes the correct DELTA on the next payment (avoids double-counting).
+        "_actual_long_funding_sum", "_actual_short_funding_sum",
     )
     _DATETIME_FIELDS = ("opened_at",)
 
@@ -218,10 +230,17 @@ class TradeRecord:
             "funding_collections": int(data.get("funding_collections", 0)),
             "entry_tier": data.get("entry_tier"),
         }
+        _zero_default_fields = {
+            "funding_collected_usd",
+            "_funding_tracked_long",
+            "_funding_tracked_short",
+            "_actual_long_funding_sum",
+            "_actual_short_funding_sum",
+        }
         for key in cls._DECIMAL_FIELDS:
             raw = data.get(key)
             kwargs[key] = Decimal(raw) if raw else (
-                Decimal("0") if key == "funding_collected_usd" else None
+                Decimal("0") if key in _zero_default_fields else None
             )
         for key in cls._DATETIME_FIELDS:
             raw = data.get(key)
@@ -242,3 +261,17 @@ class TradeRecord:
     _hold_logged_until: Optional[datetime] = field(default=None, compare=False, repr=False)
     _funding_paid_at: Optional[datetime] = field(default=None, compare=False, repr=False)
     _exit_reason: Optional[str] = field(default=None, compare=False, repr=False)
+    # Cumulative exchange-history totals — persisted to Redis so that after a
+    # crash+recovery the next payment delta is computed correctly (no double-count).
+    _actual_long_funding_sum: Decimal = field(default=Decimal("0"), compare=False, repr=False)
+    _actual_short_funding_sum: Decimal = field(default=Decimal("0"), compare=False, repr=False)
+    # P2-1: Deferred funding history retry.
+    # When T+0 history fetch returns estimate-only (exchange not yet settled),
+    # record when to retry (90s later) and what estimate was used per side so
+    # the correction can be computed exactly: real_amount − estimate_used.
+    _funding_history_retry_at: Optional[datetime] = field(default=None, compare=False, repr=False)
+    _pending_long_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)
+    _pending_short_estimate: Optional[Decimal] = field(default=None, compare=False, repr=False)
+    # Counts consecutive "stay for next cycle" decisions without basis recovery.
+    # Prevents infinite hold loops on short-interval exchanges (e.g. Bybit 1h).
+    _hold_cycles_stayed: int = field(default=0, compare=False, repr=False)

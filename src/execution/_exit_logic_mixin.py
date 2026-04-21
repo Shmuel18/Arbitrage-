@@ -6,20 +6,15 @@ Exit rules (in priority order):
   3. CHERRY_PICK HARD:   exit BEFORE costly funding payment
   4. BASIS RECOVERY:     after funding is collected, exit when the cross-exchange
                          price basis (long-short)/short returns to entry level or
-                         better (within tolerance).  If current_basis >= entry_basis
-                         - tolerance, price PnL ≈ 0 → funding profit is preserved.
-                         This ensures we don't give back funding profits to adverse
-                         price movements.
+                         better (within tolerance).
   5. BASIS HARD STOP:    if basis doesn't recover within basis_recovery_timeout_minutes
-                         (default 30min), exit immediately -- don't hold indefinitely.
+                         (default 30min), exit immediately.
   6. TIME-BASED:         if exit_timeout_hours after funding payment and no basis
                          recovery, check if NEXT IMMINENT funding qualifies.
-                         If yes -> stay for next cycle, else -> exit.
 
 IMPORTANT: The bot always evaluates only the NEXT upcoming funding payment.
 Both at entry (scanner) AND while holding (exit logic), the decision is based
-solely on the imminent payment within max_entry_window_minutes.  The bot never
-stays in a trade waiting hours for a distant payment.
+solely on the imminent payment within max_entry_window_minutes.
 
 Do NOT import this module directly; _MonitorMixin inherits from it,
 and ExecutionController inherits from _MonitorMixin.
@@ -34,7 +29,7 @@ from typing import TYPE_CHECKING, Dict, Optional
 
 from src.core.contracts import ExitReason, TradeMode, TradeRecord
 from src.core.logging import get_logger
-from src.discovery.calculator import calculate_fees
+from src.execution._exit_computations_mixin import _ExitComputationsMixin
 
 _ZERO = Decimal("0")
 
@@ -44,18 +39,38 @@ if TYPE_CHECKING:
 logger = get_logger("execution")
 
 
-class _ExitLogicMixin:
+def _funding_ts_to_dt(ts: float) -> "datetime":
+    """Convert an exchange funding timestamp (ms or s) to a UTC-aware datetime.
+
+    P2-3 / P3-1: Some exchanges deliver epoch-seconds (~1.7×10⁹) instead of
+    epoch-milliseconds (~1.7×10¹²).  Normalise to ms before converting so
+    that monitor-cycle comparisons produce correct (future) datetimes.
+    """
+    ms = ts * 1000 if ts < 1e12 else ts
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+class _ExitLogicMixin(_ExitComputationsMixin):
     """Hold-or-exit decision logic — tier-aware profit-target strategy."""
 
     async def _check_exit(self, trade: TradeRecord) -> None:
         """Check if trade should be closed.
 
-        New strategy (funding arb + price arb tiers):
+        Strategy (funding arb + price arb tiers):
           1. Liquidation safety: exit if margin ratio drops too low
           2. Cherry-pick hard stop: exit before costly payment
           3. Profit target: exit at profit_target_pct (0.7%) on notional
-          4. Time-based: if exit_timeout_hours after funding -> check next cycle
+          4. Basis recovery: exit when price spread returns to entry level
+          5. Basis hard stop: exit after timeout if no recovery
+          6. Time-based: if next funding qualifies → stay, else → exit
         """
+        # P0-1: Mark that _check_exit is active (persists until explicitly reset
+        # in the "stay next cycle" branch or until _check_upgrade in the following
+        # cycle reads it). This allows _check_upgrade to distinguish "funding just
+        # fired, not yet processed" (False) from "already recorded this payment
+        # in a prior cycle" (True), preventing upgrades before PnL is accounted.
+        trade._exit_check_active = True
+
         now = datetime.now(timezone.utc)
         tp = self._cfg.trading_params
 
@@ -66,9 +81,26 @@ class _ExitLogicMixin:
             logger.warning(f"Missing adapter for {trade.symbol}, skipping exit check")
             return
 
+        # ── P2-1: Deferred funding history retry ─────────────────
+        # If a prior payment was recorded as estimate-only (exchange history
+        # unavailable at T+0), retry 90 s later for the actual settled amount.
+        # Fires at most once per payment \u2014 _funding_history_retry_at is cleared
+        # immediately by the retry method regardless of outcome.
+        if trade._funding_history_retry_at and now >= trade._funding_history_retry_at:
+            await self._retry_deferred_funding_history(
+                trade, long_adapter, short_adapter, now
+            )
+
         # ── 1. LIQUIDATION CHECK ─────────────────────────────────
         liquidation_exit = await self._check_liquidation_risk(trade, long_adapter, short_adapter)
         if liquidation_exit:
+            return
+
+        # ── MIN HOLD GUARD ───────────────────────────────────────
+        # Prevents immediate exit caused by stale exchange timestamps setting
+        # next_funding_long to a past value → long_paid=True on first cycle.
+        hold_sec = (now - trade.opened_at).total_seconds() if trade.opened_at else 0
+        if hold_sec < tp.min_hold_seconds:
             return
 
         # ── 2. CHERRY_PICK HARD STOP ─────────────────────────────
@@ -99,28 +131,38 @@ class _ExitLogicMixin:
         long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
         short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
 
-        # Update next funding trackers
-        if long_funding:
-            long_next_ts = long_funding.get("next_timestamp")
-            if long_next_ts:
-                candidate = datetime.fromtimestamp(long_next_ts / 1000, tz=timezone.utc)
-                if not trade.next_funding_long or (
-                    trade.next_funding_long < now and not trade._funding_paid_long
-                    and candidate <= now
-                ):
-                    trade.next_funding_long = candidate
+        # Warn when the cache has no funding data for a held trade — this means
+        # the payment tracker (next_funding_long/short) can never be populated and
+        # sections 4-5 (basis recovery/hard stop) will be silently bypassed.
+        # The no-funding-received safety exit (below) acts as the final guard.
+        _hold_sec_for_warn = (now - trade.opened_at).total_seconds() if trade.opened_at else 0
+        if _hold_sec_for_warn > 60 and not long_funding:
+            logger.warning(
+                f"[{trade.symbol}] Funding rate cache EMPTY for {trade.long_exchange} (long) "
+                f"after {int(_hold_sec_for_warn)}s — payment tracker cannot be set, "
+                f"exit logic may not fire on time.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+        if _hold_sec_for_warn > 60 and not short_funding:
+            logger.warning(
+                f"[{trade.symbol}] Funding rate cache EMPTY for {trade.short_exchange} (short) "
+                f"after {int(_hold_sec_for_warn)}s — payment tracker cannot be set.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
 
-        if short_funding:
-            short_next_ts = short_funding.get("next_timestamp")
-            if short_next_ts:
-                candidate = datetime.fromtimestamp(short_next_ts / 1000, tz=timezone.utc)
-                if not trade.next_funding_short or (
-                    trade.next_funding_short < now and not trade._funding_paid_short
-                    and candidate <= now
-                ):
-                    trade.next_funding_short = candidate
-
-        # Check if funding has been paid
+        # ── CRITICAL: compute long_paid / short_paid from the CURRENT (pre-advance)
+        # tracker values BEFORE get_funding_rate_cached() has a chance to mutate
+        # the cache timestamp or before the elif branch advances the tracker.
+        #
+        # Race condition (was the KITE/GateIO bug):
+        #   At 16:01 UTC, get_funding_rate_cached() auto-advances cached
+        #   next_timestamp from 16:00 → 24:00 (via its "while past → += interval"
+        #   logic).  The old elif branch then set trade.next_funding_long = 24:00
+        #   in the same cycle.  long_paid was then computed as 16:01 >= 24:01 = False,
+        #   silently skipping the 16:00 payment forever.
+        #
+        # Fix: snapshot long_paid using the EXISTING tracker value first, then
+        # update the tracker.  The elif branch must ONLY advance when already paid.
         exit_offset = tp.exit_offset_seconds
         long_paid = False
         short_paid = False
@@ -131,278 +173,95 @@ class _ExitLogicMixin:
             short_exit_time = trade.next_funding_short + timedelta(seconds=exit_offset)
             short_paid = now >= short_exit_time
 
-        # Record funding collection — track each side independently
-        # so staggered payments (cost side fires after income side)
-        # are properly detected instead of blocked by _exit_check_active.
+        if long_funding:
+            long_next_ts = long_funding.get("next_timestamp")
+            if long_next_ts:
+                candidate = _funding_ts_to_dt(long_next_ts)
+                if not trade.next_funding_long:
+                    # At initialization: only accept FUTURE timestamps.
+                    # Stale exchanges sometimes return an already-past timestamp
+                    # immediately after a funding event; accepting it would cause
+                    # long_paid=True on the very first monitor cycle → immediate exit.
+                    if candidate > now:
+                        trade.next_funding_long = candidate
+                elif (
+                    trade.next_funding_long < now and trade._funding_paid_long
+                    and candidate > trade.next_funding_long
+                ):
+                    # Advance ONLY after payment has already been processed.
+                    # Never advance while _funding_paid_long is False — that would
+                    # skip the in-progress payment (race condition described above).
+                    trade.next_funding_long = candidate
+
+        if short_funding:
+            short_next_ts = short_funding.get("next_timestamp")
+            if short_next_ts:
+                candidate = _funding_ts_to_dt(short_next_ts)
+                if not trade.next_funding_short:
+                    # At initialization: only accept FUTURE timestamps (same reason as above).
+                    if candidate > now:
+                        trade.next_funding_short = candidate
+                elif (
+                    trade.next_funding_short < now and trade._funding_paid_short
+                    and candidate > trade.next_funding_short
+                ):
+                    # Advance ONLY after payment has already been processed.
+                    trade.next_funding_short = candidate
+
         long_just_paid = long_paid and not trade._funding_paid_long
         short_just_paid = short_paid and not trade._funding_paid_short
 
-        if long_just_paid or short_just_paid:
-            trade._exit_check_active = True
-            if long_just_paid:
-                trade._funding_paid_long = True
-            if short_just_paid:
-                trade._funding_paid_short = True
-
-            # ── Fetch ACTUAL funding settlement from exchange ─────────
-            # Funding fires once per 4-8h — one REST call per side is
-            # acceptable to get the real settlement instead of estimating.
-            _long_usd = _ZERO
-            _short_usd = _ZERO
-            _lr: Optional[Decimal] = None
-            _sr: Optional[Decimal] = None
-            _funding_source = "estimate"
-
-            # Determine the time window for this funding payment
-            _opened_ms = int(trade.opened_at.timestamp() * 1000) if trade.opened_at else None
-            _now_ms = int(now.timestamp() * 1000)
-
-            # Try to fetch real settlement from exchange history
-            _real_long_hist: Optional[Dict] = None
-            _real_short_hist: Optional[Dict] = None
-
-            _funding_fetch_tasks = []
-            _funding_fetch_sides: list[str] = []
-            if long_just_paid and _opened_ms:
-                _funding_fetch_tasks.append(
-                    long_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
-                )
-                _funding_fetch_sides.append("long")
-            if short_just_paid and _opened_ms:
-                _funding_fetch_tasks.append(
-                    short_adapter.fetch_funding_history(trade.symbol, _opened_ms, _now_ms)
-                )
-                _funding_fetch_sides.append("short")
-
-            if _funding_fetch_tasks:
-                _results = await asyncio.gather(
-                    *_funding_fetch_tasks, return_exceptions=True,
-                )
-                for _side, _res in zip(_funding_fetch_sides, _results):
-                    if _side == "long":
-                        _real_long_hist = _res if isinstance(_res, dict) else None
-                    else:
-                        _real_short_hist = _res if isinstance(_res, dict) else None
-
-            # Parse actual long-side settlement
-            _long_actual_used = False
-            if (
-                long_just_paid
-                and isinstance(_real_long_hist, dict)
-                and _real_long_hist.get("source") == "exchange"
-                and _real_long_hist.get("payments")
-            ):
-                # Sum ALL payments in this trade's lifetime (not just this period)
-                # Then subtract previously counted amount to get THIS period's delta
-                _total_long_hist = Decimal(str(_real_long_hist["net_usd"]))
-                # Previously accumulated from long side across all collections
-                _prev_long_sum = getattr(trade, "_actual_long_funding_sum", _ZERO)
-                _long_usd = _total_long_hist - _prev_long_sum
-                trade._actual_long_funding_sum = _total_long_hist  # type: ignore[attr-defined]
-                _long_actual_used = True
-                _funding_source = "exchange"
-                # Populate _lr for logging even though we don't need it for the amount.
-                _cached_long = long_adapter.get_funding_rate_cached(trade.symbol)
-                _lr = (
-                    Decimal(str(_cached_long["rate"]))
-                    if (_cached_long and _cached_long.get("rate") is not None)
-                    else trade.long_funding_rate
-                )
-                logger.info(
-                    f"[{trade.symbol}] Long funding from exchange history: "
-                    f"${float(_long_usd):.4f} (total hist=${float(_total_long_hist):.4f})",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                )
-
-            # Parse actual short-side settlement
-            _short_actual_used = False
-            if (
-                short_just_paid
-                and isinstance(_real_short_hist, dict)
-                and _real_short_hist.get("source") == "exchange"
-                and _real_short_hist.get("payments")
-            ):
-                _total_short_hist = Decimal(str(_real_short_hist["net_usd"]))
-                _prev_short_sum = getattr(trade, "_actual_short_funding_sum", _ZERO)
-                _short_usd = _total_short_hist - _prev_short_sum
-                trade._actual_short_funding_sum = _total_short_hist  # type: ignore[attr-defined]
-                _short_actual_used = True
-                _funding_source = "exchange"
-                # Populate _sr for logging even though we don't need it for the amount.
-                _cached_short = short_adapter.get_funding_rate_cached(trade.symbol)
-                _sr = (
-                    Decimal(str(_cached_short["rate"]))
-                    if (_cached_short and _cached_short.get("rate") is not None)
-                    else trade.short_funding_rate
-                )
-                logger.info(
-                    f"[{trade.symbol}] Short funding from exchange history: "
-                    f"${float(_short_usd):.4f} (total hist=${float(_total_short_hist):.4f})",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                )
-
-            # ── Sign validation ──────────────────────────────────
-            # Some exchanges (e.g. Bybit) return funding amounts with
-            # reversed sign (positive = paid instead of positive = received).
-            # We validate using TWO signals:
-            #   1. Entry rate direction (trade.long/short_funding_rate)
-            #   2. Rate-based estimate as cross-check
-            # If the exchange amount sign disagrees with the rate direction,
-            # flip the sign.  Log a cross-check comparison for debugging.
-            #
-            # Rate direction rules:
-            #   Long:  income when rate < 0 → amount should be positive
-            #   Short: income when rate > 0 → amount should be positive
-            _long_rate_for_sign = float(trade.long_funding_rate or 0)
-            _short_rate_for_sign = float(trade.short_funding_rate or 0)
-
-            if _long_actual_used and _long_usd != _ZERO and abs(_long_rate_for_sign) > 0.00005:
-                _expect_long_positive = _long_rate_for_sign < 0  # negative rate → long receives
-                if (_long_usd > _ZERO) != _expect_long_positive:
-                    logger.warning(
-                        f"[{trade.symbol}] Funding sign correction on "
-                        f"{trade.long_exchange} (long): API=${float(_long_usd):+.4f} "
-                        f"vs entry_rate={_long_rate_for_sign:.6f} — flipping sign",
-                        extra={"trade_id": trade.trade_id},
-                    )
-                    _long_usd = -_long_usd
-                    trade._actual_long_funding_sum = -(trade._actual_long_funding_sum)  # type: ignore[attr-defined]
-
-            if _short_actual_used and _short_usd != _ZERO and abs(_short_rate_for_sign) > 0.00005:
-                _expect_short_positive = _short_rate_for_sign > 0  # positive rate → short receives
-                if (_short_usd > _ZERO) != _expect_short_positive:
-                    logger.warning(
-                        f"[{trade.symbol}] Funding sign correction on "
-                        f"{trade.short_exchange} (short): API=${float(_short_usd):+.4f} "
-                        f"vs entry_rate={_short_rate_for_sign:.6f} — flipping sign",
-                        extra={"trade_id": trade.trade_id},
-                    )
-                    _short_usd = -_short_usd
-                    trade._actual_short_funding_sum = -(trade._actual_short_funding_sum)  # type: ignore[attr-defined]
-
-            # ── Cross-check: compare exchange amount vs rate-based estimate ──
-            # Catches cases where sign correction alone isn't enough (e.g.
-            # rate changed between entry and settlement, or magnitude is off).
-            if _long_actual_used and abs(_long_rate_for_sign) > 0.00005:
-                _l_est = float((trade.entry_price_long or _ZERO) * trade.long_qty) * (-_long_rate_for_sign)
-                if abs(_l_est) > 0.01 and abs(float(_long_usd) - _l_est) / abs(_l_est) > 0.5:
-                    logger.warning(
-                        f"[{trade.symbol}] Long funding cross-check MISMATCH: "
-                        f"exchange=${float(_long_usd):+.4f} vs rate_estimate=${_l_est:+.4f} "
-                        f"(>{50}% deviation) — rate may have changed since entry",
-                        extra={"trade_id": trade.trade_id},
-                    )
-            if _short_actual_used and abs(_short_rate_for_sign) > 0.00005:
-                _s_est = float((trade.entry_price_short or _ZERO) * trade.short_qty) * _short_rate_for_sign
-                if abs(_s_est) > 0.01 and abs(float(_short_usd) - _s_est) / abs(_s_est) > 0.5:
-                    logger.warning(
-                        f"[{trade.symbol}] Short funding cross-check MISMATCH: "
-                        f"exchange=${float(_short_usd):+.4f} vs rate_estimate=${_s_est:+.4f} "
-                        f"(>{50}% deviation) — rate may have changed since entry",
-                        extra={"trade_id": trade.trade_id},
-                    )
-
-            # Fallback to rate-based estimate if exchange history unavailable.
-            # IMPORTANT: Use the ENTRY rate (trade.long/short_funding_rate), NOT
-            # the live cached rate.  After settlement, get_funding_rate_cached()
-            # returns the NEXT period's rate — which can be wildly different from
-            # the rate that was just settled.  The entry rate is the best available
-            # approximation of what actually settled (unless the rate was dynamic
-            # and changed mid-period, but that's rare and unavoidable without
-            # exchange history data).
-            if long_just_paid and not _long_actual_used:
-                _lr = trade.long_funding_rate
-                _long_usd = (
-                    (trade.entry_price_long or _ZERO) * trade.long_qty
-                    * (-(Decimal(str(_lr or 0))))
-                ) if _lr else _ZERO
-                logger.warning(
-                    f"[{trade.symbol}] Long funding estimated from entry rate: "
-                    f"rate={float(_lr or 0):.6f} → ${float(_long_usd):+.4f} "
-                    f"(exchange history unavailable)",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                )
-
-            if short_just_paid and not _short_actual_used:
-                _sr = trade.short_funding_rate
-                _short_usd = (
-                    (trade.entry_price_short or _ZERO) * trade.short_qty
-                    * (Decimal(str(_sr or 0)))
-                ) if _sr else _ZERO
-                logger.warning(
-                    f"[{trade.symbol}] Short funding estimated from entry rate: "
-                    f"rate={float(_sr or 0):.6f} → ${float(_short_usd):+.4f} "
-                    f"(exchange history unavailable)",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-                )
-
-            _net_usd = _long_usd + _short_usd
-
-            trade.funding_collections += 1
-            trade.funding_collected_usd += _net_usd
-            trade._funding_paid_at = now
-
-            # Journal entries
-            if long_just_paid:
-                self._journal.funding_detected(
-                    trade.trade_id, trade.symbol, trade.long_exchange, 'long',
-                    rate=_lr, estimated_payment=_long_usd,
-                )
-            if short_just_paid:
-                self._journal.funding_detected(
-                    trade.trade_id, trade.symbol, trade.short_exchange, 'short',
-                    rate=_sr, estimated_payment=_short_usd,
-                )
-            self._journal.funding_collected(
-                trade.trade_id, trade.symbol,
-                collection_num=trade.funding_collections,
-                long_exchange=trade.long_exchange,
-                short_exchange=trade.short_exchange,
-                long_rate=_lr, short_rate=_sr,
-                long_payment_usd=_long_usd, short_payment_usd=_short_usd,
-                net_payment_usd=_net_usd, cumulative_usd=float(trade.funding_collected_usd),
-                immediate_spread=float(total_pnl_pct),
-            )
-            logger.info(
-                f"💰 [{trade.symbol}] Funding collection #{trade.funding_collections} "
-                f"(source={_funding_source}): "
-                f"${float(_net_usd):.4f} this cycle | cumulative ~${float(trade.funding_collected_usd):.4f}",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "funding_collected"},
-            )
-
-            # ── NEGATIVE FUNDING GUARD ───────────────────────────────
-            # Check CUMULATIVE funding, not just this payment.
-            # For CHERRY picks the cost side may fire AFTER income;
-            # for NUTCRACKERs with staggered payments, cumulative is
-            # positive when net direction is correct.
-            _cumulative = float(trade.funding_collected_usd)
-            if _cumulative < 0:
-                logger.warning(
-                    f"🚨 [{trade.symbol}] NEGATIVE cumulative funding "
-                    f"${_cumulative:.4f} — direction is wrong! "
-                    f"Exiting immediately.",
-                    extra={
-                        "trade_id": trade.trade_id,
-                        "symbol": trade.symbol,
-                        "action": "negative_funding_exit",
-                    },
-                )
-                trade._exit_reason = "negative_funding"
-                _hold_min_neg = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
-                self._journal.exit_decision(
-                    trade.trade_id, trade.symbol,
-                    reason=f"negative_funding_{_cumulative:.4f}",
-                    immediate_spread=Decimal(str(total_pnl_pct)),
-                    hold_min=_hold_min_neg,
-                )
-                await self._close_trade(trade)
-                return
+        # ── Handle funding settlement (delegate to computation mixin) ─
+        closed = await self._process_funding_settlement(
+            trade, long_adapter, short_adapter,
+            long_just_paid, short_just_paid, total_pnl_pct, now,
+        )
+        if closed:
+            return
 
         # ── Display current status ───────────────────────────────
         hold_min = int((now - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
+
+        # ── NO-FUNDING-RECEIVED SAFETY EXIT ─────────────────────
+        # Triggered when the payment tracker (next_funding_long / next_funding_short)
+        # was never populated — likely because the WebSocket cache had no
+        # next_timestamp for this symbol after entry.  This leaves long_paid and
+        # short_paid permanently False, so sections 4-5 (basis recovery / hard stop)
+        # are never reached, causing the trade to hold indefinitely.
+        #
+        # Condition: trade has been open longer than (max_entry_window + basis_timeout)
+        # minutes AND no funding was ever collected AND the payment tracker never fired.
+        # This covers the case where the scanner's next_timestamp was stale or the
+        # exchange never delivered the anticipated funding payment.
+        _no_funding_threshold_min = (
+            float(tp.max_entry_window_minutes) + float(tp.basis_recovery_timeout_minutes)
+        )
+        if (
+            not trade._funding_paid_at
+            and trade.funding_collected_usd == _ZERO
+            and not (long_paid or short_paid)
+            and hold_min >= _no_funding_threshold_min
+        ):
+            _no_fund_reason = f"no_funding_received_{hold_min}min"
+            logger.warning(
+                f"⏰ [{trade.symbol}] NO FUNDING RECEIVED after {hold_min}min "
+                f"(threshold={int(_no_funding_threshold_min)}min). "
+                f"Payment tracker was never set — expected income never arrived. "
+                f"Exiting to avoid indefinite hold.",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "no_funding_received_exit"},
+            )
+            trade._exit_reason = _no_fund_reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_no_fund_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
         tier_tag = f" [{trade.entry_tier.upper()}]" if trade.entry_tier else ""
 
-        # Log status periodically (every 5 min)
         if not trade._hold_logged_until or trade._hold_logged_until < now:
             trade._hold_logged_until = now + timedelta(minutes=5)
             logger.info(
@@ -413,7 +272,6 @@ class _ExitLogicMixin:
                 f"target={float(tp.profit_target_pct)}%",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "pnl_status"},
             )
-            # Position snapshot for journal
             try:
                 _long_pnl_usd = float((l_price - (trade.entry_price_long or l_price)) * trade.long_qty)
                 _short_pnl_usd = float(((trade.entry_price_short or s_price) - s_price) * trade.short_qty)
@@ -435,122 +293,89 @@ class _ExitLogicMixin:
             except Exception as _snap_err:
                 logger.debug(f"Snapshot failed for {trade.symbol}: {_snap_err}")
 
-        # ── 3. PROFIT TARGET CHECK ───────────────────────────────
-        profit_target = tp.profit_target_pct
-        # Deduct exit slippage buffer — ticker prices overestimate
-        # realisable PnL on illiquid coins because actual fills are
-        # worse than top-of-book bid/ask.
-        adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
-        if adjusted_pnl >= profit_target:
-            _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
-            logger.info(
-                f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
-                f"PnL={float(total_pnl_pct):+.4f}% (adj={float(adjusted_pnl):+.4f}%) "
-                f">= {float(profit_target)}% target "
-                f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}% "
-                f"slippage_buf=-{float(tp.exit_slippage_buffer_pct):.4f}%) — "
-                f"exiting after {hold_min}min",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_exit"},
-            )
-            trade._exit_reason = _reason
-            self._journal.exit_decision(
-                trade.trade_id, trade.symbol,
-                reason=_reason,
-                immediate_spread=Decimal(str(total_pnl_pct)),
-                hold_min=hold_min,
-            )
-            await self._close_trade(trade)
-            return
-
-        # ── 4. BASIS RECOVERY EXIT (after funding) ──────────────
-        # After funding is collected, exit when the cross-exchange price
-        # basis returns to entry level or better.  If it doesn't recover
-        # within basis_recovery_timeout_minutes, force exit.
-        if not (long_paid or short_paid):
-            return
-
-        # Calculate current price basis: (long − short) / short × 100
-        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else _ZERO
-        _current_basis = _ZERO
-        if l_price > 0 and s_price > 0:
-            _current_basis = (l_price - s_price) / s_price * Decimal("100")
-
-        # Favorable = current basis ≥ entry basis (spread returned to entry level)
-        # Price PnL ≈ (current_basis − entry_basis) × notional.
-        # When current ≥ entry → price PnL ≥ 0 → safe to exit with funding profit.
-        # Small tolerance avoids waiting forever for exact recovery.
-        _tolerance = getattr(tp, 'basis_recovery_tolerance_pct', Decimal("0.10"))
-        _basis_favorable = _current_basis >= (_entry_basis - _tolerance)
-
-        if _basis_favorable:
-            _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
-            logger.info(
-                f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "
-                f"entry_basis={float(_entry_basis):+.4f}% → current={float(_current_basis):+.4f}% "
-                f"(recovered ✔, tolerance={float(_tolerance):.2f}%) | "
-                f"PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_exit"},
-            )
-            trade._exit_reason = _reason
-            self._journal.exit_decision(
-                trade.trade_id, trade.symbol,
-                reason=_reason,
-                immediate_spread=Decimal(str(total_pnl_pct)),
-                hold_min=hold_min,
-            )
-            await self._close_trade(trade)
-            return
-
-        # ── 5. BASIS HARD STOP (30min timeout) ───────────────────
-        basis_timeout_min = float(getattr(tp, 'basis_recovery_timeout_minutes', 30))
-        time_since_funding_min = 0.0
-        if trade._funding_paid_at:
-            time_since_funding_min = (now - trade._funding_paid_at).total_seconds() / 60
-
-        if time_since_funding_min >= basis_timeout_min:
-            # Check if next funding cycle qualifies before giving up
-            next_cycle_ok = await self._next_funding_qualifies(trade, long_adapter, short_adapter)
-
-            if next_cycle_ok:
-                # Stay for next cycle — reset timer
+        # ── FIX A: PRICE SPIKE TAKE-PROFIT ───────────────────────
+        # If price_pnl alone (ignoring funding) exceeds threshold AND is
+        # sustained across 2+ consecutive checks (≥10s with 5s polling),
+        # exit immediately — bypassing the funding lock.
+        #
+        # Rationale: a sustained +1% price move is rare and usually fades
+        # within minutes. Locking it in now beats risking it evaporate
+        # while we wait for the next funding window. The 2-tick sustain
+        # guard filters out single-tick slippage blips so we don't chase
+        # phantom profits that vanish before fills complete.
+        _PRICE_SPIKE_THRESHOLD_PCT = Decimal("1.0")  # raw price PnL %
+        _PRICE_SPIKE_SUSTAIN_TICKS = 2               # consecutive ticks
+        _spike_ticks = getattr(trade, "_price_spike_tick_count", 0)
+        if price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
+            trade._price_spike_tick_count = _spike_ticks + 1
+            if trade._price_spike_tick_count >= _PRICE_SPIKE_SUSTAIN_TICKS:
+                _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
                 logger.info(
-                    f"🔄 Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min reached "
-                    f"(basis: entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%), "
-                    f"BUT next funding qualifies — staying (collections={trade.funding_collections})",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_next_cycle"},
+                    f"⚡ Trade {trade.trade_id}{tier_tag}: PRICE SPIKE TAKE-PROFIT! "
+                    f"price_pnl={float(price_pnl_pct):+.4f}% ≥ "
+                    f"{float(_PRICE_SPIKE_THRESHOLD_PCT)}% (sustained "
+                    f"{trade._price_spike_tick_count} ticks) — "
+                    f"bypassing funding lock, exiting after {hold_min}min",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "price_spike_exit"},
                 )
-                # Reset flags for next funding cycle
-                trade._exit_check_active = False
-                trade._funding_paid_long = False
-                trade._funding_paid_short = False
-                trade._funding_paid_at = None
-                trade._hold_logged_until = None
-
-                # Advance funding trackers to next cycle
-                if long_funding:
-                    _ln = long_funding.get("next_timestamp")
-                    if _ln:
-                        trade.next_funding_long = datetime.fromtimestamp(_ln / 1000, tz=timezone.utc)
-                if short_funding:
-                    _sn = short_funding.get("next_timestamp")
-                    if _sn:
-                        trade.next_funding_short = datetime.fromtimestamp(_sn / 1000, tz=timezone.utc)
-
-                # Update stored rates for next cycle
-                if long_funding and "rate" in long_funding:
-                    trade.long_funding_rate = Decimal(str(long_funding["rate"]))
-                if short_funding and "rate" in short_funding:
-                    trade.short_funding_rate = Decimal(str(short_funding["rate"]))
+                trade._exit_reason = _reason
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=_reason,
+                    immediate_spread=Decimal(str(total_pnl_pct)),
+                    hold_min=hold_min,
+                )
+                await self._close_trade(trade)
                 return
             else:
-                # Basis didn't recover + no next funding → force exit
-                _reason = f"basis_hard_stop_{basis_timeout_min:.0f}min"
                 logger.info(
-                    f"⏱️ Trade {trade.trade_id}{tier_tag}: BASIS HARD STOP — "
-                    f"{basis_timeout_min:.0f}min since funding, basis NOT recovered "
-                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%) "
-                    f"and next funding doesn't qualify — closing after {hold_min}min",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_hard_stop_exit"},
+                    f"⚡ [{trade.symbol}] Price spike detected: "
+                    f"price_pnl={float(price_pnl_pct):+.4f}% "
+                    f"(tick {trade._price_spike_tick_count}/"
+                    f"{_PRICE_SPIKE_SUSTAIN_TICKS}) — exit if sustained",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "price_spike_pending"},
+                )
+        elif _spike_ticks > 0:
+            # Price dropped back below threshold — reset counter.
+            trade._price_spike_tick_count = 0
+
+        # ── 3. PROFIT TARGET CHECK ───────────────────────────────
+        profit_target = tp.profit_target_pct
+        adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
+        if adjusted_pnl >= profit_target:
+            # P1-1: Block profit-target exit when funding payment is imminent.
+            # A price pump just before funding would cause us to exit and miss
+            # the income payment we opened specifically to capture.
+            _PROFIT_TARGET_FUNDING_LOCK_MIN: float = 3.0
+            _mins_to_next_income: float | None = None
+            if trade.next_funding_long and not long_paid:
+                _mf = (trade.next_funding_long - now).total_seconds() / 60
+                if _mf > 0:
+                    _mins_to_next_income = _mf
+            if trade.next_funding_short and not short_paid:
+                _mf = (trade.next_funding_short - now).total_seconds() / 60
+                if _mf > 0 and (_mins_to_next_income is None or _mf < _mins_to_next_income):
+                    _mins_to_next_income = _mf
+
+            if _mins_to_next_income is not None and _mins_to_next_income < _PROFIT_TARGET_FUNDING_LOCK_MIN:
+                logger.info(
+                    f"[{trade.symbol}] Profit target hit ({float(adjusted_pnl):+.4f}%) "
+                    f"but funding in {_mins_to_next_income:.1f}min < lock={_PROFIT_TARGET_FUNDING_LOCK_MIN}min "
+                    f"— holding to capture income payment",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_funding_lock"},
+                )
+            else:
+                _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
+                logger.info(
+                    f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
+                    f"PnL={float(total_pnl_pct):+.4f}% (adj={float(adjusted_pnl):+.4f}%) "
+                    f">= {float(profit_target)}% target "
+                    f"(price={float(price_pnl_pct):+.4f}% funding={float(funding_pnl_pct):+.4f}% "
+                    f"slippage_buf=-{float(tp.exit_slippage_buffer_pct):.4f}%) — "
+                    f"exiting after {hold_min}min",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_exit"},
                 )
                 trade._exit_reason = _reason
                 self._journal.exit_decision(
@@ -562,8 +387,198 @@ class _ExitLogicMixin:
                 await self._close_trade(trade)
                 return
 
+        # ── 4. BASIS RECOVERY EXIT (after funding) ──────────────
+        if not (trade._funding_paid_at or long_paid or short_paid):
+            return
+
+        _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else _ZERO
+        _current_basis = _ZERO
+        if l_price > 0 and s_price > 0:
+            _current_basis = (l_price - s_price) / s_price * Decimal("100")
+
+        _tolerance = tp.basis_recovery_tolerance_pct
+        _basis_buffer = tp.basis_exit_buffer_pct
+        _basis_target = _entry_basis + _basis_buffer
+        _adjusted_basis_exit_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
+        _min_basis_exit_pnl = tp.min_basis_exit_pnl_pct
+        _basis_favorable = _current_basis >= _basis_target
+        _basis_exit_pnl_ok = _adjusted_basis_exit_pnl >= _min_basis_exit_pnl
+
+        if _current_basis >= (_entry_basis - _tolerance) and not _basis_favorable:
+            logger.info(
+                f"[{trade.symbol}] Basis near recovery but buffer not met: "
+                f"entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}% "
+                f"target={float(_basis_target):+.4f}%",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_buffer_wait"},
+            )
+
+        if _basis_favorable and not _basis_exit_pnl_ok:
+            logger.info(
+                f"[{trade.symbol}] Basis recovered but adjusted PnL still too small: "
+                f"adj_pnl={float(_adjusted_basis_exit_pnl):+.4f}% < "
+                f"min_basis_exit_pnl={float(_min_basis_exit_pnl):.4f}%",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_pnl_wait"},
+            )
+
+        if _basis_favorable and _basis_exit_pnl_ok:
+            _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
+            logger.info(
+                f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "
+                f"entry_basis={float(_entry_basis):+.4f}% → current={float(_current_basis):+.4f}% "
+                f"(recovered ✔, tolerance={float(_tolerance):.2f}%) | "
+                f"PnL={float(total_pnl_pct):+.4f}% — exiting after {hold_min}min",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_exit"},
+            )
+            trade._hold_cycles_stayed = 0
+            trade._exit_reason = _reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
+
+        # ── 5. BASIS HARD STOP (30min timeout) ───────────────────
+
+        # Absolute safety cap — force-close regardless of state after max_hold_hours
+        _max_hold_min = float(getattr(tp, "max_hold_hours", 24)) * 60
+        if hold_min >= _max_hold_min:
+            _reason = f"max_hold_timeout_{hold_min}min"
+            logger.warning(
+                f"⛔ Trade {trade.trade_id}{tier_tag}: MAX HOLD TIMEOUT "
+                f"({_max_hold_min:.0f}min) — force-closing after {hold_min}min",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "max_hold_timeout"},
+            )
+            trade._exit_reason = _reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
+
+        basis_timeout_min = float(tp.basis_recovery_timeout_minutes)  # P2-2: direct field access
+        time_since_funding_min = 0.0
+        if trade._funding_paid_at:
+            time_since_funding_min = (now - trade._funding_paid_at).total_seconds() / 60
+
+        if time_since_funding_min >= basis_timeout_min:
+            next_cycle_ok = await self._next_funding_qualifies(trade, long_adapter, short_adapter)
+
+            if next_cycle_ok:
+                trade._hold_cycles_stayed += 1
+                logger.info(
+                    f"🔄 Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min reached "
+                    f"(basis: entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%), "
+                    f"BUT next funding qualifies — staying "
+                    f"(collections={trade.funding_collections}, hold_cycle={trade._hold_cycles_stayed})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_next_cycle"},
+                )
+                # Reset flags for next funding cycle
+                trade._exit_check_active = False
+                trade._funding_paid_long = False
+                trade._funding_paid_short = False
+                trade._funding_paid_at = None
+                trade._hold_logged_until = None
+
+                # Advance funding trackers to next cycle.
+                # P1-2: Only accept timestamps strictly in the future.
+                # A stale cache returning an already-past timestamp would set
+                # next_funding_long to the past → long_paid=True on the very
+                # next monitor cycle → double-fire of _process_funding_settlement
+                # with Δ=0 (no new exchange payment), inflating collection counter.
+                if long_funding:
+                    _ln = long_funding.get("next_timestamp")
+                    if _ln:
+                        _ln_dt = _funding_ts_to_dt(_ln)
+                        if _ln_dt > now:
+                            trade.next_funding_long = _ln_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale long next_timestamp in cache "
+                                f"({_ln_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+                if short_funding:
+                    _sn = short_funding.get("next_timestamp")
+                    if _sn:
+                        _sn_dt = _funding_ts_to_dt(_sn)
+                        if _sn_dt > now:
+                            trade.next_funding_short = _sn_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale short next_timestamp in cache "
+                                f"({_sn_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+
+                # Update stored rates for next cycle
+                if long_funding and "rate" in long_funding:
+                    trade.long_funding_rate = Decimal(str(long_funding["rate"]))
+                if short_funding and "rate" in short_funding:
+                    trade.short_funding_rate = Decimal(str(short_funding["rate"]))
+                return
+            else:
+                # Next funding doesn't qualify — hold for spread recovery.
+                # Don't exit: wait until basis recovers (section 4) or funding
+                # turns negative (negative_funding guard), or max_hold_hours fires.
+                trade._hold_cycles_stayed += 1
+                logger.info(
+                    f"⏳ Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min, "
+                    f"next funding doesn't qualify — holding for spread recovery "
+                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%, "
+                    f"collections={trade.funding_collections}, held={hold_min}min, cycle={trade._hold_cycles_stayed})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "hold_for_spread_recovery"},
+                )
+                # Reset payment flags so future funding payments are detected correctly.
+                # _funding_paid_at = now (NOT None) keeps the section-4 basis recovery
+                # gate open: that gate returns early if _funding_paid_at is falsy.
+                trade._exit_check_active = False
+                trade._funding_paid_long = False
+                trade._funding_paid_short = False
+                trade._funding_paid_at = now
+                trade._hold_logged_until = None
+
+                # Advance trackers to next cycle if timestamps are available.
+                if long_funding:
+                    _ln = long_funding.get("next_timestamp")
+                    if _ln:
+                        _ln_dt = _funding_ts_to_dt(_ln)
+                        if _ln_dt > now:
+                            trade.next_funding_long = _ln_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale long next_timestamp in cache "
+                                f"({_ln_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+                if short_funding:
+                    _sn = short_funding.get("next_timestamp")
+                    if _sn:
+                        _sn_dt = _funding_ts_to_dt(_sn)
+                        if _sn_dt > now:
+                            trade.next_funding_short = _sn_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale short next_timestamp in cache "
+                                f"({_sn_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+                if long_funding and "rate" in long_funding:
+                    trade.long_funding_rate = Decimal(str(long_funding["rate"]))
+                if short_funding and "rate" in short_funding:
+                    trade.short_funding_rate = Decimal(str(short_funding["rate"]))
+                return
+
         # ── Not yet at basis timeout — keep holding ──────────────
-        # Log that we're waiting for basis recovery
         if trade._funding_paid_at and not trade._hold_logged_until:
             logger.info(
                 f"⏳ Trade {trade.trade_id}{tier_tag}: waiting for basis recovery "
@@ -572,239 +587,3 @@ class _ExitLogicMixin:
                 f"{time_since_funding_min:.0f}/{basis_timeout_min:.0f}min elapsed",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "waiting_basis_recovery"},
             )
-
-    # ── P&L Calculation ──────────────────────────────────────────
-
-    async def _calculate_current_pnl(self, trade: TradeRecord, long_adapter, short_adapter) -> Optional[dict]:
-        """Calculate current total P&L as percentage of one-side notional.
-
-        Returns dict with:
-          total_pnl_pct:   funding + price - fees (% of notional)
-          price_pnl_pct:   unrealized price P&L (%)
-          funding_pnl_pct: funding collected (%)
-          fees_pct:        total fees (%)
-          long_price:      current long price
-          short_price:     current short price
-        """
-        try:
-            l_ticker = await long_adapter.get_ticker(trade.symbol)
-            s_ticker = await short_adapter.get_ticker(trade.symbol)
-            # Long exit = sell at BID; short exit = buy at ASK.
-            # Using last/close would overestimate PnL vs actual market impact.
-            l_price = Decimal(str(
-                l_ticker.get("bid") or l_ticker.get("last") or l_ticker.get("close") or 0
-            ))
-            s_price = Decimal(str(
-                s_ticker.get("ask") or s_ticker.get("last") or s_ticker.get("close") or 0
-            ))
-        except Exception as e:
-            logger.debug(f"Price fetch failed for {trade.symbol}: {e}")
-            return None
-
-        if l_price <= 0 or s_price <= 0:
-            return None
-
-        entry_long = trade.entry_price_long or l_price
-        entry_short = trade.entry_price_short or s_price
-
-        # One-side notional at entry (for % calculation)
-        notional = entry_long * trade.long_qty
-        if notional <= 0:
-            return None
-
-        # Price P&L: long gains when price rises, short gains when price drops
-        long_price_pnl = (l_price - entry_long) * trade.long_qty
-        short_price_pnl = (entry_short - s_price) * trade.short_qty
-        total_price_pnl = long_price_pnl + short_price_pnl
-        price_pnl_pct = total_price_pnl / notional * Decimal("100")
-
-        # Funding P&L (accumulated)
-        funding_pnl_pct = trade.funding_collected_usd / notional * Decimal("100") if trade.funding_collected_usd else Decimal("0")
-
-        # Fees (entry fees already paid)
-        total_fees = trade.fees_paid_total or Decimal("0")
-        fees_pct = total_fees / notional * Decimal("100") if total_fees else Decimal("0")
-
-        # Estimate exit fees (not yet incurred, but will be paid when closing).
-        # Without this, the profit target fires ~0.2% too early, causing
-        # trades that look profitable to close at a loss after the real
-        # exit fees are charged.
-        exit_fees_est = Decimal("0")
-        if trade.long_taker_fee:
-            exit_fees_est += l_price * trade.long_qty * trade.long_taker_fee
-        if trade.short_taker_fee:
-            exit_fees_est += s_price * trade.short_qty * trade.short_taker_fee
-        exit_fees_pct = exit_fees_est / notional * Decimal("100") if exit_fees_est else Decimal("0")
-
-        # Total P&L = price + funding - entry_fees - estimated_exit_fees
-        total_pnl_pct = price_pnl_pct + funding_pnl_pct - fees_pct - exit_fees_pct
-
-        return {
-            "total_pnl_pct": total_pnl_pct,
-            "price_pnl_pct": price_pnl_pct,
-            "funding_pnl_pct": funding_pnl_pct,
-            "fees_pct": fees_pct,
-            "long_price": l_price,
-            "short_price": s_price,
-        }
-
-    # ── Next Funding Check ───────────────────────────────────────
-
-    async def _next_funding_qualifies(self, trade: TradeRecord, long_adapter, short_adapter) -> bool:
-        """Check if the NEXT IMMINENT funding payment justifies staying.
-
-        Applies the SAME entry-window rules as the scanner:
-          1. Classify each side as income or cost
-          2. Check if any INCOME side fires within max_entry_window_minutes
-          3. Compute imminent net spread (income minus cost that also fires)
-          4. Net must exceed min_funding_spread after fees
-
-        This ensures the bot never waits hours for a distant payment.
-        """
-        tp = self._cfg.trading_params
-
-        long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
-        short_funding = short_adapter.get_funding_rate_cached(trade.symbol)
-        if not long_funding or not short_funding:
-            return False
-
-        long_rate = Decimal(str(long_funding["rate"]))
-        short_rate = Decimal(str(short_funding["rate"]))
-
-        # ── Entry window (same as scanner) ───────────────────────
-        entry_window_min = float(tp.max_entry_window_minutes)
-        now_ms = _time.time() * 1000
-
-        long_next_ts = long_funding.get("next_timestamp")
-        short_next_ts = short_funding.get("next_timestamp")
-
-        # Classify each side: income or cost?
-        long_is_income = long_rate < 0   # long on negative → we get paid
-        short_is_income = short_rate > 0  # short on positive → we get paid
-
-        # Minutes until each side's next funding
-        long_mins = (long_next_ts - now_ms) / 60_000 if (long_next_ts and long_next_ts > now_ms) else None
-        short_mins = (short_next_ts - now_ms) / 60_000 if (short_next_ts and short_next_ts > now_ms) else None
-
-        # Is each income side within the entry window?
-        long_imminent = long_is_income and long_mins is not None and long_mins <= entry_window_min
-        short_imminent = short_is_income and short_mins is not None and short_mins <= entry_window_min
-
-        # ── Gate: at least one INCOME side must be imminent ──────
-        if not (long_imminent or short_imminent):
-            _next_income_mins = None
-            if long_is_income and long_mins is not None:
-                _next_income_mins = long_mins
-            if short_is_income and short_mins is not None:
-                if _next_income_mins is None or short_mins < _next_income_mins:
-                    _next_income_mins = short_mins
-            logger.info(
-                f"🔍 [{trade.symbol}] Next income payment too far: "
-                f"{int(_next_income_mins)}min" if _next_income_mins is not None else "unknown"
-                f" > entry_window={int(entry_window_min)}min — EXIT",
-                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-            )
-            return False
-
-        # ── Compute imminent spread (income minus cost within window) ──
-        _HUNDRED = Decimal("100")
-        imminent_income_pct = Decimal("0")
-        imminent_cost_pct = Decimal("0")
-        if long_imminent:
-            imminent_income_pct += abs(long_rate) * _HUNDRED
-        if short_imminent:
-            imminent_income_pct += abs(short_rate) * _HUNDRED
-        # Cost sides that also fire within the window
-        if not long_is_income and long_mins is not None and long_mins <= entry_window_min:
-            imminent_cost_pct += abs(long_rate) * _HUNDRED
-        if not short_is_income and short_mins is not None and short_mins <= entry_window_min:
-            imminent_cost_pct += abs(short_rate) * _HUNDRED
-        imminent_spread_pct = imminent_income_pct - imminent_cost_pct
-
-        # ── Fees ─────────────────────────────────────────────────
-        long_spec = long_adapter.get_cached_instrument_spec(trade.symbol)
-        short_spec = short_adapter.get_cached_instrument_spec(trade.symbol)
-        if not long_spec or not short_spec:
-            return False
-
-        fees_pct = calculate_fees(long_spec.taker_fee, short_spec.taker_fee)
-        # We're already in the trade so entry fees are sunk.
-        # Only exit fees matter, but for consistency with the scanner's
-        # qualification gate we compare imminent spread vs min_funding_spread.
-        net_spread = imminent_spread_pct - fees_pct
-
-        qualifies = net_spread >= tp.min_funding_spread
-
-        _result = "✅ STAY" if qualifies else "❌ EXIT"
-        _income_detail = []
-        if long_imminent:
-            _income_detail.append(f"L({trade.long_exchange})={float(long_rate)*100:+.4f}% in {int(long_mins)}min")
-        if short_imminent:
-            _income_detail.append(f"S({trade.short_exchange})={float(short_rate)*100:+.4f}% in {int(short_mins)}min")
-        logger.info(
-            f"🔍 [{trade.symbol}] Next funding check (entry_window={int(entry_window_min)}min): "
-            f"{' | '.join(_income_detail)} "
-            f"→ imminent_spread={float(imminent_spread_pct):.4f}% net={float(net_spread):.4f}% "
-            f"(need {float(tp.min_funding_spread)}%) → {_result}",
-            extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
-        )
-        return qualifies
-
-    # ── Liquidation Risk Check ───────────────────────────────────
-
-    async def _check_liquidation_risk(self, trade: TradeRecord, long_adapter, short_adapter) -> bool:
-        """Check if either side is approaching liquidation.
-
-        Uses unrealized PnL / position margin as a rough margin ratio.
-        Returns True if trade was closed due to liquidation risk.
-        """
-        safety_pct = float(self._cfg.trading_params.liquidation_safety_pct)
-
-        try:
-            # Fetch positions from both exchanges
-            long_positions = await long_adapter.get_positions(trade.symbol)
-            short_positions = await short_adapter.get_positions(trade.symbol)
-
-            for positions, exchange, side in [
-                (long_positions, trade.long_exchange, "LONG"),
-                (short_positions, trade.short_exchange, "SHORT"),
-            ]:
-                for pos in positions:
-                    if pos.symbol != trade.symbol:
-                        continue
-                    # Estimate margin ratio: (equity / margin) * 100
-                    # equity = margin + unrealized_pnl
-                    # margin = entry_price * qty / leverage
-                    leverage = pos.leverage or 5
-                    margin = float(pos.entry_price * pos.quantity) / leverage if pos.entry_price > 0 else 0
-                    if margin <= 0:
-                        continue
-                    equity = margin + float(pos.unrealized_pnl)
-                    margin_ratio = (equity / margin) * 100
-
-                    if margin_ratio < safety_pct:
-                        logger.warning(
-                            f"🚨 LIQUIDATION RISK: {trade.symbol} {side} on {exchange} — "
-                            f"margin_ratio={margin_ratio:.1f}% < safety={safety_pct}% "
-                            f"(equity=${equity:.2f}, margin=${margin:.2f}, uPnL=${float(pos.unrealized_pnl):.2f})",
-                            extra={
-                                "trade_id": trade.trade_id,
-                                "symbol": trade.symbol,
-                                "action": "liquidation_risk_exit",
-                            },
-                        )
-                        trade._exit_reason = ExitReason.LIQUIDATION_RISK.value
-                        hold_min = int((datetime.now(timezone.utc) - trade.opened_at).total_seconds() / 60) if trade.opened_at else 0
-                        self._journal.exit_decision(
-                            trade.trade_id, trade.symbol,
-                            reason=f"liquidation_risk_{side.lower()}_{exchange}_ratio_{margin_ratio:.1f}pct",
-                            immediate_spread=Decimal("0"),
-                            hold_min=hold_min,
-                        )
-                        await self._close_trade(trade)
-                        return True
-        except Exception as e:
-            logger.debug(f"Liquidation check failed for {trade.symbol}: {e}")
-
-        return False
-

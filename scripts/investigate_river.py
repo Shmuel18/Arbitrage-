@@ -33,5 +33,6 @@ for logfile in ['logs/execution.log']:
                 print(f"  {time_str} [{lvl:7s}] {msg}")
                 if act:
                     print(f"           act={act} tid={tid[:12] if tid else ''}")
-            except Exception:
-                pass
+            except (json.JSONDecodeError, ValueError, TypeError):
+                # Skip malformed lines while continuing investigation output.
+                continue

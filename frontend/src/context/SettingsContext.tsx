@@ -12,13 +12,13 @@ interface SettingsContextType {
   isRtl: boolean;
 }
 
-const SettingsContext = createContext<SettingsContextType>({
-  lang: 'en',
+export const SettingsContext = createContext<SettingsContextType>({
+  lang: 'he',
   setLang: () => {},
   theme: 'dark',
   setTheme: () => {},
-  t: translations.en,
-  isRtl: false,
+  t: translations.he,
+  isRtl: true,
 });
 
 export const useSettings = () => useContext(SettingsContext);
@@ -29,7 +29,7 @@ interface SettingsProviderProps {
 
 export const SettingsProvider: React.FC<SettingsProviderProps> = ({ children }) => {
   const [lang, setLang] = useState<Lang>(() => {
-    return (localStorage.getItem('trinity_lang') as Lang) || 'en';
+    return (localStorage.getItem('trinity_lang') as Lang) || 'he';
   });
   const [theme, setTheme] = useState<Theme>(() => {
     return (localStorage.getItem('trinity_theme') as Theme) || 'dark';

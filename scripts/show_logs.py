@@ -43,10 +43,12 @@ for logfile in log_files:
                     if any(p in msg for p in skip_phrases):
                         continue
                     lines.append(rec)
-                except Exception:
-                    pass
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    # Skip malformed records while preserving the rest of output.
+                    continue
     except FileNotFoundError:
-        pass
+        print(f"--- {logfile} (missing file) ---\n")
+        continue
 
     if lines:
         print(f"--- {logfile} ({len(lines)} events) ---")

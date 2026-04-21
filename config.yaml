@@ -11,9 +11,10 @@ risk_limits:
   position_size_pct: 0.70
 
 trading_params:
-  min_funding_spread: 0.5 # minimum spread of the next imminent payment (%) — no 8h normalization
+  min_funding_spread: 0.3 # minimum spread of the next imminent payment (%) — no 8h normalization
   slippage_buffer_pct: 0.015
   safety_buffer_pct: 0.02
+  max_market_data_age_ms: 15000 # Require bid/ask data fresher than 15s before allowing entry
   cooldown_after_orphan_hours: 2
   cooldown_after_close_seconds: 120 # Block re-entry into same symbol after any close
   max_sane_funding_rate: 0.10 # max absolute funding rate before filtering (10%)
@@ -25,17 +26,25 @@ trading_params:
   upgrade_funding_lock_secs: 900 # Lock upgrades when funding is within N seconds (15 min)
   execute_only_best_opportunity: true
   # Tier-based entry strategy
-  tier_bad_max_adverse_spread: 2.0 # BAD tier: max adverse price spread (%) to still enter
+  weak_min_funding_excess: 0.5 # WEAK tier: funding must exceed adverse price spread by this % to enter
+  # Post-entry validation (last-resort safety net — pre-entry book check fires first)
+  max_entry_basis_spread_pct: 0.15 # Reject if actual fill spread > this (0.15% tolerance for altcoin slippage)
   # Exit strategy
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional
   exit_slippage_buffer_pct: 0.3 # Extra margin deducted from PnL before profit target check
   basis_recovery_timeout_minutes: 30 # After funding, wait up to 30min for price basis to recover
+  max_hold_hours: 24 # Absolute safety cap — force-close if held longer than this regardless of state
   basis_recovery_tolerance_pct: 0.10 # Allow basis to be 0.10% below entry and still exit (avoid waiting forever)
-  liquidation_safety_pct: 5.0 # Exit if margin ratio drops below this % (100 = safe, 0 = liquidated)
+  min_hold_seconds: 120 # Minimum seconds before any exit fires (except liquidation) — prevents immediate exit on stale timestamps
+  liquidation_safety_pct:
+    5.0 # Exit when equity/margin < this % (i.e. when unrealized loss > 95% of margin).
+    # Example: 80.0 → exit at 20% loss; 5.0 → only exit at 95% loss (near liquidation!)
 
 execution:
   concurrent_opportunities: 3
-  order_timeout_ms: 10000
+  order_timeout_ms: 7000 # 7s — bybit/gateio can take 3-5s under load; 3s caused timeout orphans
+  entry_refetch_attempts: 1
+  entry_refetch_interval_ms: 250
   scan_parallelism: 20
 
 risk_guard:
@@ -142,3 +151,4 @@ logging:
 redis:
   key_prefix: "trinity:"
   lock_timeout_sec: 10
+  tls: false # Set to true for cloud Redis (Redis Cloud, Upstash, Azure Cache, etc.)

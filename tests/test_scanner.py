@@ -1,6 +1,7 @@
 """Tests for scanner — opportunity detection."""
 
 import time
+from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,37 @@ def _future_ms(hours: float) -> float:
 
 
 class TestScanAll:
+    def test_opportunity_fingerprint_changes_when_funding_cycle_rolls(self, scanner):
+        """A rolled funding timestamp must trigger a fresh publish fingerprint."""
+        from src.core.contracts import OpportunityCandidate
+
+        current = OpportunityCandidate(
+            symbol="ETH/USDT",
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"),
+            short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.2"),
+            fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"),
+            suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("50000"),
+            next_funding_ms=1_000_000,
+            long_next_funding_ms=1_000_000,
+            short_next_funding_ms=1_000_000,
+        )
+        rolled = replace(
+            current,
+            next_funding_ms=1_360_000,
+            long_next_funding_ms=1_360_000,
+            short_next_funding_ms=1_360_000,
+        )
+
+        assert scanner._opportunity_fingerprint([current]) != scanner._opportunity_fingerprint([rolled])
+
     @pytest.mark.asyncio
     async def test_finds_opportunity_when_funding_spread_exists(self, scanner, config, mock_exchange_mgr):
         """High funding spread → should produce an opportunity."""

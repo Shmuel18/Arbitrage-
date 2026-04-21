@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from src.core.contracts import OrderRequest, OrderSide
 from src.core.logging import get_logger
@@ -22,6 +22,19 @@ if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
 logger = get_logger("risk")
+
+
+def _task_done_handler(t: asyncio.Task) -> None:
+    """Log exceptions from background tasks — never let them vanish silently."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        logger.error(
+            f"Task {t.get_name()} failed: {exc}",
+            exc_info=exc,
+            extra={"action": "task_failed", "task_name": t.get_name()},
+        )
 
 
 class RiskGuard:
@@ -36,7 +49,18 @@ class RiskGuard:
         self._redis = redis
         self._running = False
         self._tasks: list[asyncio.Task] = []
+        self._entry_timestamps: Dict[str, float] = {}  # symbol -> timestamp for in-flight entry hedging
         self._grace_timestamps: Dict[str, float] = {}  # symbol -> timestamp
+        self._warn_last_logged: Dict[str, float] = {}  # warning key -> last log time (monotonic-s)
+
+    def _should_log_warning(self, key: str, interval_seconds: float) -> bool:
+        """Rate-limit repetitive warning logs during transient exchange outages."""
+        now = time.monotonic()
+        last = self._warn_last_logged.get(key, 0.0)
+        if now - last < interval_seconds:
+            return False
+        self._warn_last_logged[key] = now
+        return True
 
     # ── Lifecycle ────────────────────────────────────────────────
 
@@ -46,6 +70,8 @@ class RiskGuard:
             asyncio.create_task(self._fast_loop(), name="risk-fast"),
             asyncio.create_task(self._deep_loop(), name="risk-deep"),
         ]
+        for task in self._tasks:
+            task.add_done_callback(_task_done_handler)
         logger.info("Risk guard started")
 
     async def stop(self) -> None:
@@ -55,10 +81,21 @@ class RiskGuard:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         logger.info("Risk guard stopped")
 
+    def mark_entry_started(self, symbol: str) -> None:
+        """Mark a symbol as actively hedging entry orders."""
+        self._entry_timestamps[symbol] = time.time()
+        logger.debug(f"Entry-in-progress grace started for {symbol}")
+
+    def clear_entry_started(self, symbol: str) -> None:
+        """Remove the transient entry-in-progress marker for a symbol."""
+        self._entry_timestamps.pop(symbol, None)
+
     def mark_trade_opened(self, symbol: str) -> None:
-        """Mark symbol as having a recent trade - skip delta checks for 60s."""
+        """Mark symbol as having a recent trade — skip delta checks for grace period."""
+        self.clear_entry_started(symbol)
         self._grace_timestamps[symbol] = time.time()
-        logger.debug(f"Grace period started for {symbol} (60s)")
+        grace = self._cfg.risk_guard.delta_grace_seconds
+        logger.debug(f"Grace period started for {symbol} ({grace}s)")
 
     # ── Fast loop (delta check) ──────────────────────────────────
 
@@ -87,16 +124,22 @@ class RiskGuard:
         positions_by_symbol: Dict[str, list] = {}  # For detailed logging
         failed_exchanges: list[str] = []
 
-        for eid, adapter in self._exchanges.all().items():
-            try:
-                positions = await adapter.get_positions()
-            except Exception as e:
-                logger.warning(f"Cannot fetch positions from {eid}: {e}",
-                               extra={"exchange": eid})
+        # ── Fetch all exchanges in parallel to reduce latency ────
+        adapters = list(self._exchanges.all().items())
+        position_results = await asyncio.gather(
+            *[adapter.get_positions() for _, adapter in adapters],
+            return_exceptions=True,
+        )
+
+        for (eid, _), result in zip(adapters, position_results):
+            if isinstance(result, Exception):
+                if self._should_log_warning(f"positions_fetch:{eid}", 30.0):
+                    logger.warning(f"Cannot fetch positions from {eid}: {result}",
+                                   extra={"exchange": eid})
                 failed_exchanges.append(eid)
                 continue
 
-            for pos in positions:
+            for pos in result:
                 signed = pos.quantity if pos.side == OrderSide.BUY else -pos.quantity
                 delta_by_symbol[pos.symbol] = delta_by_symbol.get(pos.symbol, Decimal(0)) + signed
                 total_abs_by_symbol[pos.symbol] = total_abs_by_symbol.get(pos.symbol, Decimal(0)) + abs(pos.quantity)
@@ -107,12 +150,14 @@ class RiskGuard:
 
         # ── SAFETY: abort if any exchange failed ─────────────────
         if failed_exchanges:
-            logger.warning(
-                f"Delta check SKIPPED — {len(failed_exchanges)} exchange(s) "
-                f"failed to return positions: {', '.join(failed_exchanges)}. "
-                f"Cannot safely evaluate delta with incomplete data.",
-                extra={"action": "delta_skip"},
-            )
+            failed_key = ",".join(sorted(failed_exchanges))
+            if self._should_log_warning(f"delta_skip:{failed_key}", 30.0):
+                logger.warning(
+                    f"Delta check SKIPPED — {len(failed_exchanges)} exchange(s) "
+                    f"failed to return positions: {', '.join(failed_exchanges)}. "
+                    f"Cannot safely evaluate delta with incomplete data.",
+                    extra={"action": "delta_skip"},
+                )
             return
 
         # delta_threshold_pct is now compared as a PERCENTAGE of average
@@ -122,9 +167,14 @@ class RiskGuard:
         threshold_pct = self._cfg.risk_limits.delta_threshold_pct  # e.g. 5.0 = 5%
 
         for symbol, net in delta_by_symbol.items():
-            # Skip symbols in grace period (60 seconds after trade opened)
+            if symbol in self._entry_timestamps:
+                if now - self._entry_timestamps[symbol] < self._cfg.risk_guard.delta_grace_seconds:
+                    continue
+                del self._entry_timestamps[symbol]
+
+            # Skip symbols in grace period (cfg.risk_guard.delta_grace_seconds)
             if symbol in self._grace_timestamps:
-                if now - self._grace_timestamps[symbol] < 60:
+                if now - self._grace_timestamps[symbol] < self._cfg.risk_guard.delta_grace_seconds:
                     continue
                 else:
                     del self._grace_timestamps[symbol]
@@ -159,11 +209,18 @@ class RiskGuard:
 
     async def _panic_close(self, symbol: str, target_exchanges: set[str] | None = None) -> None:
         """Close all positions for a symbol.
-        
+
+        P1-1: Dispatches close orders to all target exchanges IN PARALLEL with
+        bounded timeout per order — was sequential and unbounded, which meant a
+        single stuck TCP connection could burn seconds while the exchange's own
+        liquidation engine was already running.
+
         If target_exchanges is provided, only close on those exchanges
         (avoids noisy errors on exchanges that don't list the symbol).
         Otherwise falls back to trying all exchanges.
         """
+        _PANIC_ORDER_TIMEOUT: float = 6.0  # hard wall per order — liquidation races are time-critical
+
         logger.warning(f"PANIC CLOSE triggered for {symbol}",
                        extra={"symbol": symbol, "action": "panic_close"})
 
@@ -174,32 +231,59 @@ class RiskGuard:
             else self._exchanges.all()
         )
 
-        for eid, adapter in exchanges_to_check.items():
-            try:
-                positions = await adapter.get_positions(symbol)
-                if not positions:
-                    continue
-                for pos in positions:
-                    close_side = OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY
-                    req = OrderRequest(
-                        exchange=eid,
-                        symbol=symbol,
-                        side=close_side,
-                        quantity=pos.quantity,
-                        reduce_only=True,
+        # ── Fetch positions in parallel ──────────────────────────
+        eid_list = list(exchanges_to_check.keys())
+        pos_results = await asyncio.gather(
+            *[exchanges_to_check[eid].get_positions(symbol) for eid in eid_list],
+            return_exceptions=True,
+        )
+
+        # Build close tasks for all open positions
+        close_tasks: list = []
+        close_meta: list[tuple[str, str, float]] = []  # (eid, side, qty)
+        for eid, result in zip(eid_list, pos_results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    f"Panic close: position fetch failed on {eid}/{symbol}: {result}",
+                    extra={"exchange": eid, "symbol": symbol},
+                )
+                continue
+            adapter = exchanges_to_check[eid]
+            for pos in result:
+                close_side = OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY
+                req = OrderRequest(
+                    exchange=eid,
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=pos.quantity,
+                    reduce_only=True,
+                )
+                close_tasks.append(
+                    asyncio.wait_for(adapter.place_order(req), timeout=_PANIC_ORDER_TIMEOUT)
+                )
+                close_meta.append((eid, close_side.value, float(pos.quantity)))
+
+        if not close_tasks:
+            logger.info(f"Panic close: no open positions found for {symbol}",
+                        extra={"symbol": symbol})
+        else:
+            # ── Dispatch ALL orders simultaneously ───────────────
+            close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
+            for (eid, side, qty), res in zip(close_meta, close_results):
+                if isinstance(res, Exception):
+                    logger.error(
+                        f"Panic close failed on {eid}/{symbol} ({side} {qty}): {res}",
+                        extra={"exchange": eid, "symbol": symbol},
                     )
-                    await adapter.place_order(req)
+                else:
                     logger.info(
-                        f"Panic-closed {pos.quantity} {symbol} on {eid}",
+                        f"Panic-closed {qty} {symbol} ({side}) on {eid}",
                         extra={"exchange": eid, "symbol": symbol, "action": "panic_closed"},
                     )
-            except Exception as e:
-                logger.error(f"Panic close failed on {eid}/{symbol}: {e}",
-                             extra={"exchange": eid, "symbol": symbol})
 
         # ── Verify positions are actually gone ───────────────────
         await asyncio.sleep(2)  # brief settle time for exchange state
-        still_open = []
+        still_open: list[tuple[str, str, float]] = []
         for eid, adapter in exchanges_to_check.items():
             try:
                 remaining = await adapter.get_positions(symbol)
@@ -214,12 +298,100 @@ class RiskGuard:
 
         if still_open:
             breakdown = "; ".join(f"{eid}({side}): {qty}" for eid, side, qty in still_open)
-            logger.error(
-                f"⚠️ PANIC CLOSE INCOMPLETE — positions still open for {symbol}: {breakdown}. "
-                f"Manual intervention required!",
-                extra={"symbol": symbol, "action": "panic_close_incomplete",
-                        "data": {"remaining": still_open}},
+            logger.warning(
+                f"⚠️ PANIC CLOSE INCOMPLETE after first pass — positions still open for {symbol}: {breakdown}. "
+                f"Attempting second-pass flatten...",
+                extra={"symbol": symbol, "action": "panic_close_second_pass"},
             )
+            # P2: Second-pass flatten for any position that survived the first pass.
+            # The first-pass order may have timed out or been rejected while the
+            # exchange's own deleverage engine was running.  One immediate retry
+            # (still parallel + bounded) catches most of these transient failures.
+            _retry_tasks: list = []
+            _retry_meta: list[tuple[str, str, float]] = []
+            for eid, side_val, qty in still_open:
+                _adapter = exchanges_to_check.get(eid)
+                if not _adapter:
+                    continue
+                _close_side = OrderSide.SELL if side_val == OrderSide.BUY.value else OrderSide.BUY
+                _req = OrderRequest(
+                    exchange=eid,
+                    symbol=symbol,
+                    side=_close_side,
+                    quantity=Decimal(str(qty)),
+                    reduce_only=True,
+                )
+                _retry_tasks.append(
+                    asyncio.wait_for(_adapter.place_order(_req), timeout=_PANIC_ORDER_TIMEOUT)
+                )
+                _retry_meta.append((eid, side_val, qty))
+
+            if _retry_tasks:
+                _retry_results = await asyncio.gather(*_retry_tasks, return_exceptions=True)
+                for (eid, side_val, qty), res in zip(_retry_meta, _retry_results):
+                    if isinstance(res, Exception):
+                        logger.error(
+                            f"Panic close RETRY failed on {eid}/{symbol} ({side_val} {qty}): {res}. "
+                            f"Manual intervention required!",
+                            extra={"exchange": eid, "symbol": symbol, "action": "panic_close_retry_failed"},
+                        )
+                    else:
+                        logger.info(
+                            f"Panic close retry succeeded: {qty} {symbol} ({side_val}) on {eid}",
+                            extra={"exchange": eid, "symbol": symbol, "action": "panic_close_retry_ok"},
+                        )
+
+                # P2-2: Final verify after second-pass — confirm flat state.
+                # Without this, a successful retry log is only order-placement
+                # confirmation, not position-flat confirmation.  The final check
+                # provides audit closure and catches edge cases where the retry
+                # order itself partially filled or was rejected silently.
+                await asyncio.sleep(2)
+                _final_open: list[tuple[str, str, float]] = []
+                _retry_eids = {m[0] for m in _retry_meta}
+                _final_pos_results = await asyncio.gather(
+                    *[exchanges_to_check[eid].get_positions(symbol) for eid in _retry_eids
+                      if eid in exchanges_to_check],
+                    return_exceptions=True,
+                )
+                for eid, fp_result in zip(
+                    [eid for eid in _retry_eids if eid in exchanges_to_check],
+                    _final_pos_results,
+                ):
+                    if isinstance(fp_result, Exception):
+                        logger.warning(
+                            f"Panic final verify: position check failed on {eid}/{symbol}: {fp_result}",
+                            extra={"exchange": eid, "symbol": symbol},
+                        )
+                        continue
+                    for pos in fp_result:
+                        if abs(pos.quantity) > 0:
+                            _final_open.append((eid, pos.side.value, float(pos.quantity)))
+
+                if _final_open:
+                    _final_breakdown = "; ".join(
+                        f"{eid}({side}): {qty}" for eid, side, qty in _final_open
+                    )
+                    logger.critical(
+                        f"🚨 PANIC CLOSE FINAL VERIFY FAILED — {symbol} still open after 2 passes: "
+                        f"{_final_breakdown}. MANUAL INTERVENTION REQUIRED.",
+                        extra={"symbol": symbol, "action": "panic_close_final_failed",
+                               "data": {"remaining": _final_open}},
+                    )
+                    # Persist to Redis so operator sees it even after process restart
+                    try:
+                        _err_key = "trinity:panic_open"
+                        await self._redis.sadd(
+                            _err_key, f"{symbol}:{','.join(e for e, _, _ in _final_open)}"
+                        )
+                        await self._redis.expire(_err_key, 7 * 24 * 3600)
+                    except Exception as _re:
+                        logger.debug(f"Failed to persist panic_open to Redis: {_re}")
+                else:
+                    logger.info(
+                        f"✅ Panic close final verify — {symbol} confirmed flat after retry pass.",
+                        extra={"symbol": symbol, "action": "panic_close_final_verified"},
+                    )
         else:
             logger.info(
                 f"✅ Panic close verified — all {symbol} positions confirmed closed.",
@@ -244,7 +416,7 @@ class RiskGuard:
             await asyncio.sleep(interval)
 
     async def _snapshot_positions(self) -> None:
-        for eid, adapter in self._exchanges.all().items():
+        async def _snapshot_one(eid: str, adapter: Any) -> None:
             try:
                 positions = await adapter.get_positions()
                 data = [
@@ -259,5 +431,10 @@ class RiskGuard:
                 ]
                 await self._redis.set_position_snapshot(eid, data)
             except Exception as e:
-                logger.warning(f"Snapshot failed for {eid}: {e}",
-                               extra={"exchange": eid})
+                if self._should_log_warning(f"snapshot:{eid}", 60.0):
+                    logger.warning(f"Snapshot failed for {eid}: {e}",
+                                   extra={"exchange": eid})
+
+        await asyncio.gather(
+            *[_snapshot_one(eid, adapter) for eid, adapter in self._exchanges.all().items()],
+        )

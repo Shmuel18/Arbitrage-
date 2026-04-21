@@ -98,19 +98,27 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
       <div className="card" style={{ position: 'relative' }}>
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-          background: 'linear-gradient(90deg, transparent, rgba(6,182,212,0.5), transparent)',
+          background: 'linear-gradient(90deg, transparent, rgba(45,184,196,0.5), transparent)',
           borderRadius: '14px 14px 0 0', zIndex: 1, pointerEvents: 'none',
         }} />
         <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <div className="nx-section-header__icon" style={{ background: 'rgba(45,184,196,0.08)', borderColor: 'rgba(45,184,196,0.12)' }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2DB8C4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
             </svg>
           </div>
           {t.activePositions}
         </div>
-        <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-          {t.noOpenPositions}
+        <div className="nx-empty-state">
+          <div className="nx-empty-state__icon" aria-hidden="true">
+            <span className="nx-empty-state__pulse" />
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </div>
+          <div className="nx-empty-state__title">{t.subScanningMarkets}</div>
+          <div className="nx-empty-state__hint">{t.noOpenPositions}</div>
         </div>
       </div>
     );
@@ -121,12 +129,12 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     <div className="card" style={{ position: 'relative' }}>
       <div style={{
         position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-        background: 'linear-gradient(90deg, transparent, rgba(6,182,212,0.5), transparent)',
+        background: 'linear-gradient(90deg, transparent, rgba(45,184,196,0.5), transparent)',
         borderRadius: '14px 14px 0 0', zIndex: 1, pointerEvents: 'none',
       }} />
       <div className="card-header px-5 py-3 border-b" style={{ borderColor: 'var(--card-border)', display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <div className="nx-section-header__icon" style={{ background: 'rgba(45,184,196,0.08)', borderColor: 'rgba(45,184,196,0.12)' }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2DB8C4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
           </svg>
         </div>

@@ -6,7 +6,7 @@ const MAX_RECONNECT_DELAY = 30000; // 30s cap
 const BASE_RECONNECT_DELAY = 1000; // 1s base
 const WS_SCHEMA_VERSION = 1;
 /** Circuit breaker: stop reconnecting after this many consecutive failures. */
-const MAX_RECONNECT_ATTEMPTS = 20;
+export const MAX_RECONNECT_ATTEMPTS = 20;
 
 export type WsConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 
@@ -29,7 +29,7 @@ function isValidWsMessage(v: unknown): v is Record<string, unknown> {
 
 export const connectWebSocket = (
   onMessage: (data: Record<string, unknown>) => void,
-  onConnectionChange?: (state: WsConnectionState) => void,
+  onConnectionChange?: (state: WsConnectionState, attempt?: number) => void,
 ) => {
   // Prevent duplicate connections
   if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
@@ -46,6 +46,10 @@ export const connectWebSocket = (
 
   // Dynamic WebSocket URL — works on localhost AND via ngrok/any host
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsToken = (import.meta.env.VITE_WS_TOKEN as string | undefined)?.trim();
+  if (wsToken) {
+    document.cookie = `trinity_ws_token=${encodeURIComponent(wsToken)}; path=/; SameSite=Lax`;
+  }
   const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
   ws = new WebSocket(wsUrl);
 
@@ -79,7 +83,7 @@ export const connectWebSocket = (
       onConnectionChange?.('disconnected');
       return;
     }
-    onConnectionChange?.('reconnecting');
+    onConnectionChange?.('reconnecting', reconnectAttempts + 1);
     // Circuit breaker — stop after MAX_RECONNECT_ATTEMPTS consecutive failures.
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       console.warn(`WebSocket: circuit breaker open after ${reconnectAttempts} attempts — giving up`);

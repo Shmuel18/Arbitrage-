@@ -39,5 +39,6 @@ for logfile in ['logs/execution.log', 'logs/risk.log', 'logs/exchanges.log']:
                     print(f"           sym={sym} ex={exch} act={act} tid={tid}")
                 if data:
                     print(f"           data={data}")
-            except Exception:
-                pass
+            except (json.JSONDecodeError, ValueError, TypeError):
+                # Skip malformed lines while continuing investigation output.
+                continue

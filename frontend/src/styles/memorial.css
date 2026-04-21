@@ -1,0 +1,136 @@
+/*
+ * Yom HaZikaron banner — solemn, respectful, non-intrusive.
+ * Dark, centered, gentle fade-in; soft candle-gold border accent.
+ */
+
+.memorial-banner {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 6vh;
+  pointer-events: none;
+  animation: memorial-fadein 900ms ease-out;
+}
+
+.memorial-banner-backdrop {
+  position: absolute;
+  inset: 0;
+  /* Invisible — only captures click-outside to dismiss.
+     Dashboard underneath stays fully visible. */
+  background: transparent;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.memorial-banner-frame {
+  position: relative;
+  max-width: min(560px, 92vw);
+  width: 100%;
+  pointer-events: auto;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(212, 164, 77, 0.35),
+    0 20px 60px rgba(0, 0, 0, 0.7),
+    0 0 90px rgba(212, 164, 77, 0.15);
+  /* No solid background — image fills the frame. */
+  animation: memorial-rise 1100ms cubic-bezier(0.22, 1, 0.36, 1);
+  line-height: 0; /* removes any sub-pixel gap under the img */
+}
+
+.memorial-banner-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Caption kept for future holidays if needed, but blended into image. */
+.memorial-banner-caption {
+  padding: 14px 20px 18px;
+  text-align: center;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  color: #d4a44d;
+  letter-spacing: 0.04em;
+  background: transparent;
+  direction: rtl;
+  line-height: 1.4;
+}
+
+.memorial-banner-close {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease,
+    transform 200ms ease;
+  z-index: 2;
+  font-family: system-ui, sans-serif;
+}
+
+.memorial-banner-close:hover,
+.memorial-banner-close:focus-visible {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  outline: none;
+  transform: scale(1.05);
+}
+
+/* Entrance animations */
+@keyframes memorial-fadein {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes memorial-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .memorial-banner,
+  .memorial-banner-frame {
+    animation: none;
+  }
+}
+
+/* Mobile tuning */
+@media (max-width: 520px) {
+  .memorial-banner {
+    padding-top: 4vh;
+    align-items: center;
+  }
+  .memorial-banner-frame {
+    max-width: 94vw;
+  }
+  .memorial-banner-caption {
+    font-size: 14px;
+    padding: 12px 16px 16px;
+  }
+}

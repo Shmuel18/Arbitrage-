@@ -188,3 +188,33 @@ class TestConnect:
             await client.connect()
             await client.disconnect()
             # After close, ping should raise — verify no double-close error
+
+
+class TestConnectionGuard:
+    """Verify that operations on an unconnected client raise ConnectionError,
+    not a cryptic AttributeError: 'NoneType' object has no attribute 'set'."""
+
+    def test_c_property_raises_when_not_connected(self):
+        """_c property raises ConnectionError if connect() was never called."""
+        client = RedisClient()
+        assert client._client is None
+        with pytest.raises(ConnectionError, match="not connected"):
+            _ = client._c
+
+    async def test_set_raises_connection_error_when_not_connected(self):
+        """set() surfaces ConnectionError instead of AttributeError."""
+        client = RedisClient()
+        with pytest.raises(ConnectionError):
+            await client.set("some:key", "value")
+
+    async def test_get_raises_connection_error_when_not_connected(self):
+        """get() surfaces ConnectionError instead of AttributeError."""
+        client = RedisClient()
+        with pytest.raises(ConnectionError):
+            await client.get("some:key")
+
+    async def test_is_cooled_down_raises_connection_error_when_not_connected(self):
+        """is_cooled_down() surfaces ConnectionError instead of AttributeError."""
+        client = RedisClient()
+        with pytest.raises(ConnectionError):
+            await client.is_cooled_down("BTC/USDT:USDT")

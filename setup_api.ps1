@@ -16,4 +16,4 @@ if ($LASTEXITCODE -eq 0) {
 
 Write-Host ""
 Write-Host "🎉 Setup complete!" -ForegroundColor Green
-Write-Host "Run './run_api.ps1' to start the API server" -ForegroundColor Cyan
+Write-Host "Run './run.ps1' to start the bot + embedded API server" -ForegroundColor Cyan

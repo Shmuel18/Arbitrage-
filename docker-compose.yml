@@ -5,6 +5,10 @@ services:
     image: redis:7-alpine
     container_name: trinity-redis
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      # Bind only to localhost — do NOT expose Redis externally.
+      # Docker normally bypasses UFW; this 127.0.0.1 binding is the fix.
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:

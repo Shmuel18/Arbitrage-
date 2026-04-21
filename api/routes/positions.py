@@ -6,31 +6,29 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from datetime import datetime, timezone
 import json
+import logging
 
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
-# Will be set by main.py during startup
-redis_client: RedisClient | None = None
+from ..auth import require_trade_token
+from ..deps import require_redis_client
 
-def set_redis_client(client: RedisClient) -> None:
-    global redis_client
-    redis_client = client
+logger = logging.getLogger("trinity.api.positions")
 
 router = APIRouter(redirect_slashes=False)
 
 
 @router.get("/")
 @router.get("")
-async def get_positions():
+async def get_positions(
+    redis_client: RedisClient = Depends(require_redis_client),
+):
     """Get all active positions"""
     try:
-        if not redis_client:
-            return {"positions": [], "count": 0}
-        
         # Get positions from Redis
         positions_key = "trinity:positions"
         positions_data = await redis_client.get(positions_key)
@@ -50,16 +48,17 @@ async def get_positions():
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in get_positions")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{position_id}")
-async def get_position(position_id: str):
+async def get_position(
+    position_id: str,
+    redis_client: RedisClient = Depends(require_redis_client),
+):
     """Get specific position details"""
     try:
-        if not redis_client:
-            raise HTTPException(status_code=503, detail="Redis not connected")
-        
         position_key = f"trinity:position:{position_id}"
         position_data = await redis_client.get(position_key)
         
@@ -70,16 +69,18 @@ async def get_position(position_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in get_position")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/{position_id}")
-async def close_position(position_id: str):
-    """Close a specific position"""
+async def close_position(
+    position_id: str,
+    redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_trade_token),
+):
+    """Close a specific position (requires X-Trade-Token header)."""
     try:
-        if not redis_client:
-            raise HTTPException(status_code=503, detail="Redis not connected")
-        
         # Send close command to bot via Redis
         command = {
             "action": "close_position",
@@ -96,4 +97,5 @@ async def close_position(position_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Unexpected error in close_position")
+        raise HTTPException(status_code=500, detail="Internal server error")

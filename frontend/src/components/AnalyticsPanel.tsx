@@ -133,9 +133,13 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
   const chartW = WIDTH - PADDING_LEFT - PADDING_RIGHT;
   const chartH = HEIGHT - PADDING_TOP - PADDING_BOTTOM;
 
-  const posColor = '#2dd4a0';
-  const negColor = '#ef4444';
-  const neutralColor = '#64748b';
+  // Semantic colors — resolved to CSS custom properties at runtime.
+  // Using real hex values inside SVG gradients/filters because SVG defs
+  // need actual color values, not var() references.
+  const posColor = '#10b981';     // --color-profit
+  const negColor = '#ef4444';     // --color-loss
+  const infoColor = '#2DB8C4';    // --color-info
+  const neutralColor = '#94a3b8'; // --text-secondary
 
   // Prepend zero-baseline point
   const chartPoints: PnlPoint[] = useMemo(() =>
@@ -242,66 +246,83 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
   const prevValue = hover && hover.idx > 0 ? values[hover.idx - 1] : null;
   const hoverDelta = hover && prevValue != null ? values[hover.idx] - prevValue : null;
 
+  const timePills = [
+    { label: '24h', value: 24 },
+    { label: '7d',  value: 168 },
+    { label: '30d', value: 720 },
+    { label: '90d', value: 2160 },
+    { label: 'All', value: 4320 },
+  ];
+  const activePill = timePills.find((p) => p.value === pnlHours);
+
   return (
     <div className="wh-chart-card">
-      {/* ── Header: WARHUNTER-style ────────────────────────────── */}
+      {/* ── Header: title + timeline pills + total ─────────────── */}
       <div className="wh-chart-header">
         <div className="wh-chart-header__left">
           <div className="wh-chart-header__icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
               <polyline points="16 7 22 7 22 13" />
             </svg>
           </div>
-          <div>
-            <div className="wh-chart-header__title">RATEBRIDGE</div>
-            <div className="wh-chart-header__subtitle">All-time P&L</div>
+          <div className="wh-chart-header__titles">
+            <div className="wh-chart-header__title">{t.pnlChart ?? 'Profit curve'}</div>
+            <div className="wh-chart-header__subtitle">
+              {activePill ? activePill.label : 'All'} · {formatCurrency(total)}
+            </div>
           </div>
         </div>
+
         <div className="wh-chart-header__right">
-          <div className={`wh-chart-total ${total >= 0 ? 'wh-chart-total--pos' : 'wh-chart-total--neg'}`}>
-            {formatCurrency(total)}
+          {/* Time pills — moved into header for compact layout */}
+          <div
+            className="wh-chart-pills"
+            role="tablist"
+            aria-label="Time range"
+          >
+            {timePills.map((btn) => (
+              <button
+                key={btn.value}
+                type="button"
+                role="tab"
+                aria-selected={pnlHours === btn.value}
+                className={`wh-pill ${pnlHours === btn.value ? 'wh-pill--active' : ''}`}
+                onClick={() => onPnlHoursChange(btn.value)}
+                aria-label={`Show ${btn.label} history`}
+                aria-pressed={pnlHours === btn.value}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
-          {totalBalance && totalBalance > 0 ? (
-            <span className={`wh-chart-pct ${total >= 0 ? 'wh-chart-pct--pos' : 'wh-chart-pct--neg'}`}>
-              {total >= 0 ? '+' : ''}{((total / totalBalance) * 100).toFixed(2)}%
-            </span>
-          ) : null}
+
+          <div className="wh-chart-total-wrap">
+            <div className={`wh-chart-total ${total >= 0 ? 'wh-chart-total--pos' : 'wh-chart-total--neg'}`}>
+              {formatCurrency(total)}
+            </div>
+            {totalBalance && totalBalance > 0 ? (
+              <span className={`wh-chart-pct ${total >= 0 ? 'wh-chart-pct--pos' : 'wh-chart-pct--neg'}`}>
+                {total >= 0 ? '+' : ''}{((total / totalBalance) * 100).toFixed(2)}%
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 
-      {/* ── Breakdown: Realized / Unrealized ───────────────────── */}
+      {/* ── Breakdown: Realized / Unrealized — as cards ────────── */}
       {(unrealized !== 0 || realized !== 0) && (
         <div className="wh-chart-breakdown">
-          <span className="wh-chart-breakdown__item">
-            <span className="wh-chart-breakdown__dot" style={{ background: posColor }} />
-            Realized {formatCurrency(realized)}
-          </span>
-          <span className="wh-chart-breakdown__item">
-            <span className="wh-chart-breakdown__dot" style={{ background: unrealized >= 0 ? '#60a5fa' : negColor }} />
-            Unrealized {formatCurrency(unrealized)}
-          </span>
+          <div className={`wh-chart-breakdown__card wh-chart-breakdown__card--${realized >= 0 ? 'profit' : 'loss'}`}>
+            <div className="wh-chart-breakdown__label">{t.realized ?? 'Realized'}</div>
+            <div className="wh-chart-breakdown__value">{formatCurrency(realized)}</div>
+          </div>
+          <div className={`wh-chart-breakdown__card wh-chart-breakdown__card--${unrealized >= 0 ? 'info' : 'loss'}`}>
+            <div className="wh-chart-breakdown__label">{t.unrealized ?? 'Unrealized'}</div>
+            <div className="wh-chart-breakdown__value">{formatCurrency(unrealized)}</div>
+          </div>
         </div>
       )}
-
-      {/* ── Time pills ─────────────────────────────────────────── */}
-      <div className="wh-chart-pills">
-        {[
-          { label: '24h', value: 24 },
-          { label: '7d', value: 168 },
-          { label: '30d', value: 720 },
-          { label: '90d', value: 2160 },
-          { label: 'All', value: 4320 },
-        ].map((btn) => (
-          <button
-            key={btn.value}
-            className={`wh-pill ${pnlHours === btn.value ? 'wh-pill--active' : ''}`}
-            onClick={() => onPnlHoursChange(btn.value)}
-          >
-            {btn.label}
-          </button>
-        ))}
-      </div>
 
       {/* ── Chart area ─────────────────────────────────────────── */}
       <div className="wh-chart-canvas">

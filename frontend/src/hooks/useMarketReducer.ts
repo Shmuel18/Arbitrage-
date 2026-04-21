@@ -5,7 +5,7 @@
  * isolated from I/O concerns (WebSocket, REST polling).
  */
 import { useReducer, useCallback } from 'react';
-import { BotStatus, Trade } from '../types';
+import { Alert, BotStatus, Trade } from '../types';
 
 /* ---------- Shared sub-types ---------- */
 
@@ -24,6 +24,12 @@ export interface PositionRow {
   short_qty: string;
   entry_edge_pct: string;
   state: string;
+  next_funding_ms?: number | null;
+  min_interval_hours?: number;
+  long_next_funding_ms?: number | null;
+  short_next_funding_ms?: number | null;
+  long_interval_hours?: number;
+  short_interval_hours?: number;
   [k: string]: unknown;
 }
 
@@ -51,6 +57,7 @@ export interface Opportunity {
   immediate_net_pct?: number;
   entry_tier?: string | null;
   price_spread_pct?: number | null;
+  stale_price?: boolean;
   [k: string]: unknown;
 }
 
@@ -89,10 +96,12 @@ export interface FullData {
   pnl: PnlData | null;
   dailyPnl: number;
   logs: LogEntry[];
+  alerts: Alert[];
   positions: PositionRow[];
   trades: Trade[];
   tradesLoaded: boolean;
   lastFetchedAt: number;
+  fetchError: string | null;
 }
 
 /* ---------- WebSocket payload shape ---------- */
@@ -104,6 +113,7 @@ export interface WsFullUpdateData {
   positions?: PositionRow[];
   trades?: Trade[];
   logs?: LogEntry[];
+  alerts?: Alert[];
   summary?: SummaryData;
   pnl?: PnlData;
 }
@@ -140,11 +150,17 @@ interface PnlUpdateAction {
   payload: PnlData;
 }
 
+interface FetchErrorAction {
+  type: 'FETCH_ERROR';
+  payload: string;
+}
+
 export type MarketAction =
   | WsFullUpdateAction
   | WsStatusUpdateAction
   | HttpFetchResultAction
-  | PnlUpdateAction;
+  | PnlUpdateAction
+  | FetchErrorAction;
 
 /* ---------- Comparison helpers ---------- */
 
@@ -196,10 +212,12 @@ export const INITIAL_FULL_DATA: FullData = {
   pnl: null,
   dailyPnl: 0,
   logs: [],
+  alerts: [],
   positions: [],
   trades: [],
   tradesLoaded: false,
   lastFetchedAt: Date.now(),
+  fetchError: null,
 };
 
 /* ---------- Reducer ---------- */
@@ -235,19 +253,32 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         if (!d.opportunities) return prev.opportunities;
         const prevOps = prev.opportunities?.opportunities || [];
         const newOps = d.opportunities.opportunities || [];
-        if (prevOps.length !== newOps.length) return d.opportunities;
-        if (prevOps.length === 0) return prev.opportunities;
-        const pFirst = prevOps[0];
-        const nFirst = newOps[0];
-        const pLast = prevOps[prevOps.length - 1];
-        const nLast = newOps[newOps.length - 1];
-        if (
-          pFirst?.symbol === nFirst?.symbol &&
-          pFirst?.long_exchange === nFirst?.long_exchange &&
-          pLast?.symbol === nLast?.symbol &&
-          pLast?.long_exchange === nLast?.long_exchange &&
-          prev.opportunities?.count === d.opportunities.count
-        ) {
+        if (prevOps.length === 0 && newOps.length === 0) return prev.opportunities;
+        // Compare the displayed list (top 5) by fingerprint — ignore the total count
+        // which fluctuates every scan cycle by ±10 and causes constant re-renders.
+        // Build a stable fingerprint that is:
+        //  • order-independent (sort keys before joining) — rank shuffles from
+        //    price_spread_pct tiebreaking don't count as a change
+        //  • coarse on net_pct (0.1 % resolution) — avoids flicker from tiny
+        //    funding-rate drift between 8-hour resets
+        //  • sensitive to stale_price and qualified flags — real status changes
+        //    do trigger an update
+        // Bucket next_funding timestamps to 10-minute windows.
+        // This ensures a funding rollover (e.g. NOW → 8h away) breaks the
+        // fingerprint and triggers a re-render, while sub-10-min drift
+        // (normal countdown noise) does not cause unnecessary updates.
+        const _10MIN = 600_000;
+        const bucket = (ms: number | null | undefined) =>
+          ms != null ? Math.floor(ms / _10MIN) : -1;
+        const fingerprint = (ops: Opportunity[]) => {
+          const keys = ops.slice(0, 5).map(o =>
+            `${o.symbol}|${o.long_exchange}|${o.short_exchange}` +
+            `|${o.stale_price ? 1 : 0}|${o.qualified ? 1 : 0}|${((o.net_pct ?? 0) * 10 | 0)}` +
+            `|${bucket(o.long_next_funding_ms)}|${bucket(o.short_next_funding_ms)}`
+          );
+          return keys.sort().join(',');
+        };
+        if (fingerprint(prevOps) === fingerprint(newOps)) {
           return prev.opportunities;
         }
         return d.opportunities;
@@ -279,21 +310,51 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
 
       const newLogs = (() => {
         if (!Array.isArray(d.logs) || d.logs.length === 0) return prev.logs;
+        // Check both first AND last element — checking only the first missed
+        // cases where new messages were appended with the same array length
+        // (e.g. a sliding window where old entries drop off as new ones arrive).
         if (
           prev.logs.length === d.logs.length &&
-          prev.logs[0]?.timestamp === d.logs[0]?.timestamp
+          prev.logs[0]?.timestamp === d.logs[0]?.timestamp &&
+          prev.logs[prev.logs.length - 1]?.timestamp === d.logs[d.logs.length - 1]?.timestamp &&
+          prev.logs[prev.logs.length - 1]?.message === d.logs[d.logs.length - 1]?.message
         ) {
           return prev.logs;
         }
         return d.logs;
       })();
 
-      const newSummary =
-        d.summary && d.summary.all_time_pnl !== undefined ? d.summary : prev.summary;
-      const newPnl =
-        d.pnl && Array.isArray(d.pnl.data_points) && d.pnl.data_points.length > 0
-          ? d.pnl
-          : prev.pnl;
+      const newAlerts = (() => {
+        if (!Array.isArray(d.alerts) || d.alerts.length === 0) return prev.alerts;
+        if (
+          prev.alerts.length === d.alerts.length &&
+          prev.alerts[0]?.id === d.alerts[0]?.id
+        ) {
+          return prev.alerts;
+        }
+        return d.alerts;
+      })();
+
+      // Guard: two sources (WS counter vs HTTP zrange scan) can temporarily
+      // disagree on total_trades. Trade count only ever goes up — keep the max.
+      // Note: do NOT gate on all_time_pnl being defined — some WS payloads
+      // legitimately omit it, and blocking the entire summary update causes
+      // win_rate / all_time_pnl to stay at 0 forever.
+      const newSummary = (() => {
+        if (!d.summary || d.summary.total_trades == null) return prev.summary;
+        if (
+          prev.summary &&
+          d.summary.total_trades < prev.summary.total_trades
+        ) {
+          return { ...d.summary, total_trades: prev.summary.total_trades };
+        }
+        return d.summary;
+      })();
+      // PnL is NOT taken from WebSocket — the WS broadcast always sends 24h
+      // data, which would overwrite the user's selected time range (7d/30d/All)
+      // causing constant flickering.  PnL is only updated via REST polling
+      // (HTTP_FETCH_RESULT) and explicit PNL_UPDATE actions.
+      const newPnl = prev.pnl;
 
       if (
         newStatus === prev.status &&
@@ -302,6 +363,7 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         newSummary === prev.summary &&
         newPnl === prev.pnl &&
         newLogs === prev.logs &&
+        newAlerts === prev.alerts &&
         newPositions === prev.positions &&
         newTrades === prev.trades &&
         wsTradesLoaded === prev.tradesLoaded
@@ -317,6 +379,7 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         summary: newSummary,
         pnl: newPnl,
         logs: newLogs,
+        alerts: newAlerts,
         positions: newPositions,
         trades: newTrades,
         tradesLoaded: wsTradesLoaded,
@@ -366,11 +429,19 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         opportunities:
           oppRes.status === 'fulfilled' ? (oppRes.value as OpportunitySet) : prev.opportunities,
         logs: logsRes.status === 'fulfilled' ? logsRes.value.logs || [] : prev.logs,
-        summary:
-          summRes.status === 'fulfilled' && summRes.value?.total_trades != null
-            ? summRes.value
-            : prev.summary,
+        summary: (() => {
+          if (summRes.status !== 'fulfilled' || summRes.value?.total_trades == null) return prev.summary;
+          const incoming = summRes.value as SummaryData;
+          // Never let an HTTP poll overwrite a higher count already known from WS.
+          if (prev.summary && incoming.total_trades < prev.summary.total_trades) {
+            return { ...incoming, total_trades: prev.summary.total_trades };
+          }
+          return incoming;
+        })(),
         positions: posRes.status === 'fulfilled' ? httpPositions : prev.positions,
+        // Guard against stale PnL responses from a poll that was fired before
+        // the user clicked a new timeline pill. If the request was for a
+        // different `hours` than the user's current selection, drop it.
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         dailyPnl:
           dailyPnlRes.status === 'fulfilled'
@@ -382,11 +453,20 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
           if (httpTrades.length === 0) return prev.trades;
           return sameTradeIds(prev.trades, httpTrades) ? prev.trades : httpTrades;
         })(),
+        // Clear any outstanding fetch error — reaching here means the API
+        // responded (at least partially), so the connection is healthy.
+        fetchError: null,
       };
     }
 
     case 'PNL_UPDATE':
+      // Fence-based staleness guard lives in useMarketData — by the time the
+      // action reaches us, we trust it's for the user's current range.
       return { ...prev, pnl: action.payload };
+
+    case 'FETCH_ERROR':
+      // Only set the error if it differs from the current one (avoid re-renders).
+      return prev.fetchError === action.payload ? prev : { ...prev, fetchError: action.payload };
 
     default:
       return prev;

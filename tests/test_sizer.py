@@ -48,7 +48,11 @@ def _make_opp(reference_price: str = "50000") -> OpportunityCandidate:
     )
 
 
-def _mock_adapter(free: float = 1000.0, spec: InstrumentSpec | None = None) -> AsyncMock:
+def _mock_adapter(
+    free: float = 1000.0,
+    spec: InstrumentSpec | None = None,
+    ticker_last: float = 50000.0,
+) -> AsyncMock:
     adapter = AsyncMock()
     adapter.get_balance.return_value = {
         "total": Decimal(str(free * 1.2)),
@@ -56,6 +60,9 @@ def _mock_adapter(free: float = 1000.0, spec: InstrumentSpec | None = None) -> A
         "used": Decimal(str(free * 0.2)),
     }
     adapter.get_instrument_spec.return_value = spec or _make_spec()
+    # P1-3: sizer now fetches a live ticker price in the same gather as balances.
+    # Return a realistic ticker dict so Decimal conversion in sizer.compute succeeds.
+    adapter.get_ticker.return_value = {"last": ticker_last}
     return adapter
 
 
@@ -67,6 +74,7 @@ def _make_config(
     cfg = MagicMock()
     cfg.risk_limits.position_size_pct = Decimal(str(position_size_pct))
     cfg.risk_limits.max_position_size_usd = Decimal(str(max_position_size_usd))
+    cfg.risk_limits.max_margin_usage = Decimal("0.70")
 
     def _exc_cfg(eid: str) -> MagicMock:
         exc = MagicMock()
@@ -154,12 +162,11 @@ class TestPositionSizer:
         assert notional == Decimal("500")
 
     async def test_qty_minimum_is_one_lot(self):
-        # Even if calculated qty is below one lot, result should be at least 1 lot
-        # Balance must be above $8 minimum guard
+        # If calculated qty is below one lot the sizer must return None (skip trade)
+        # rather than forcing a 1-lot order that exceeds available margin.
+        # Example: notional=$0.001 / price=$50,000 = 0.00000002 tokens < lot=0.001
         sizer = PositionSizer(_make_config(position_size_pct=0.0001, leverage=1))
         long_a = _mock_adapter(free=10.0, spec=_make_spec(lot_size="0.001"))
         short_a = _mock_adapter(free=10.0, spec=_make_spec(lot_size="0.001"))
         result = await sizer.compute(_make_opp("50000"), long_a, short_a)
-        assert result is not None
-        qty, _, _, _ = result
-        assert qty >= Decimal("0.001")
+        assert result is None  # must skip — cannot afford even 1 lot

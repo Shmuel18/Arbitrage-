@@ -24,9 +24,31 @@ if TYPE_CHECKING:
 logger = get_logger("execution")
 
 
+def _task_done_handler(t: asyncio.Task) -> None:
+    """Log exceptions from background tasks — never let them vanish silently."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        logger.error(
+            f"Task {t.get_name()} failed: {exc}",
+            exc_info=exc,
+            extra={"action": "task_failed", "task_name": t.get_name()},
+        )
+
+
+_ORPHAN_CLOSE_TIMEOUT_SEC: float = 15.0  # P1-1: prevent HOL blocking during network partition
+
+
 class _UtilMixin:
     async def _place_with_timeout(self, adapter, req: OrderRequest) -> Optional[dict]:
-        """Place order with timeout. Returns fill dict or None."""
+        """Place order with timeout. Returns fill dict or None.
+
+        On TimeoutError the order may have already executed on the exchange side
+        (market orders cannot be cancelled once submitted). This method detects
+        that scenario via a post-timeout position check and immediately triggers
+        an orphan-close if a naked position is found.
+        """
         timeout = self._cfg.execution.order_timeout_ms / 1000
         streak_key = f"{req.symbol}:{req.exchange}"
         try:
@@ -42,6 +64,69 @@ class _UtilMixin:
                 f"(streak {count}/{self._TIMEOUT_BLACKLIST_THRESHOLD})",
                 extra={"exchange": req.exchange, "symbol": req.symbol, "action": "order_timeout"},
             )
+
+            # ── Post-timeout orphan check ─────────────────────────────────
+            # Market orders are fire-and-forget on the exchange side — the
+            # order may have filled while we were waiting for the response.
+            # Only ENTRY orders can create a naked position; a timed-out close
+            # simply means the position is still open (no new orphan created).
+            if not req.reduce_only and hasattr(adapter, "check_timed_out_fill"):
+                await asyncio.sleep(2)  # brief settle — give exchange time to process
+                try:
+                    filled_base = await adapter.check_timed_out_fill(req)
+                    if filled_base > 0:
+                        close_side = (
+                            OrderSide.SELL if req.side == OrderSide.BUY else OrderSide.BUY
+                        )
+                        alert = (
+                            f"🚨 TIMEOUT ORPHAN on {req.exchange}/{req.symbol}: "
+                            f"order filled {filled_base:.6f} base despite timeout — "
+                            f"emergency closing now."
+                        )
+                        logger.critical(
+                            alert,
+                            extra={
+                                "exchange": req.exchange,
+                                "symbol": req.symbol,
+                                "action": "timeout_orphan_detected",
+                                "filled_base": float(filled_base),
+                            },
+                        )
+                        if self._publisher:
+                            try:
+                                await self._publisher.publish_alert(
+                                    alert,
+                                    severity="critical",
+                                    alert_type="timeout",
+                                    symbol=req.symbol,
+                                    exchange=req.exchange,
+                                )
+                            except Exception as pub_exc:
+                                logger.debug(f"Alert publish failed: {pub_exc}")
+                        await self._close_orphan(
+                            adapter, req.exchange, req.symbol,
+                            close_side, {"filled": float(filled_base)},
+                        )
+                        # Journal the timeout orphan so it appears in history
+                        self._journal.event(
+                            "ghost_trade",
+                            symbol=req.symbol,
+                            exchange=req.exchange,
+                            reason="timeout_orphan",
+                            qty=float(filled_base),
+                        )
+                except Exception as check_exc:
+                    logger.error(
+                        f"Post-timeout orphan check failed for {req.exchange}/{req.symbol}: {check_exc}",
+                        exc_info=check_exc,
+                        extra={
+                            "exchange": req.exchange,
+                            "symbol": req.symbol,
+                            "action": "orphan_check_failed",
+                        },
+                    )
+
+            # ── Streak / blacklist / cooldown management ──────────────────
             if count >= self._TIMEOUT_BLACKLIST_THRESHOLD:
                 self._blacklist.add(req.symbol, req.exchange)
                 logger.warning(
@@ -81,12 +166,15 @@ class _UtilMixin:
     async def _close_orphan(
         self, adapter, exchange: str, symbol: str,
         side: OrderSide, fill: dict, fallback_qty: Optional[Decimal] = None,
-    ) -> None:
+    ) -> bool:
         """Emergency close of a single orphaned leg.
 
         Retries up to 3 times with 2-second back-off. If all attempts fail,
         publishes a critical alert so the operator is notified immediately
         rather than silently leaving an unhedged position.
+
+        Returns True if the position was successfully closed (or was already
+        gone), False if all retries failed and manual intervention is required.
         """
         filled_qty = Decimal(str(fill.get("filled", 0)))
         if filled_qty <= 0:
@@ -97,7 +185,33 @@ class _UtilMixin:
                 )
                 filled_qty = fallback_qty
             else:
-                return
+                return True  # nothing to close — treat as success
+
+        # P1-4: Quantize to exchange lot_size before placing the close order.
+        # GateIO, Bitget and OKX reject orders whose quantity is not an exact
+        # multiple of lot_size (e.g. 0.1234567 BTC when step=0.001).  Without
+        # quantization all three retry attempts fail with a validation error —
+        # not a network failure — triggering a false CRITICAL alert and blacklist.
+        _spec = (
+            adapter.get_cached_instrument_spec(symbol)
+            if hasattr(adapter, "get_cached_instrument_spec")
+            else None
+        )
+        if _spec and _spec.lot_size > 0:
+            _steps = int(filled_qty / _spec.lot_size)
+            _q_qty = _spec.lot_size * Decimal(str(_steps))
+            if _q_qty <= 0:
+                logger.warning(
+                    f"[{symbol}] _close_orphan: qty {filled_qty} < lot_size {_spec.lot_size} "
+                    f"on {exchange} — sub-minimal dust, treating as success",
+                )
+                return True  # sub-minimal residual — no order needed
+            if _q_qty != filled_qty:
+                logger.debug(
+                    f"[{symbol}] _close_orphan: qty quantized "
+                    f"{filled_qty} → {_q_qty} (lot_size={_spec.lot_size}) on {exchange}",
+                )
+            filled_qty = _q_qty
 
         req = OrderRequest(
             exchange=exchange,
@@ -108,13 +222,21 @@ class _UtilMixin:
         )
 
         _MAX_RETRIES = 3
+        _succeeded = False
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                await adapter.place_order(req)
+                # P1-1: Wrap in wait_for to prevent event-loop HOL blocking.
+                # Without a timeout, a TCP-connected-but-non-responding exchange hangs
+                # the entire asyncio loop for 2-4 min per attempt (OS TCP timeout),
+                # during which the exit monitor and risk guard loops are frozen.
+                await asyncio.wait_for(
+                    adapter.place_order(req), timeout=_ORPHAN_CLOSE_TIMEOUT_SEC
+                )
                 logger.info(
                     f"Orphan closed (attempt {attempt}): {filled_qty} {symbol} on {exchange}",
                     extra={"exchange": exchange, "symbol": symbol, "action": "orphan_closed"},
                 )
+                _succeeded = True
                 break
             except Exception as e:
                 logger.error(
@@ -124,22 +246,30 @@ class _UtilMixin:
                 )
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(2 * attempt)  # 2s, 4s back-off
-                else:
-                    # All retries exhausted — alert operator
-                    alert_msg = (
-                        f"🚨 ORPHAN CLOSE FAILED after {_MAX_RETRIES} attempts: "
-                        f"{filled_qty} {symbol} on {exchange}. MANUAL INTERVENTION REQUIRED."
+
+        if not _succeeded:
+            # All retries exhausted — alert operator
+            alert_msg = (
+                f"🚨 ORPHAN CLOSE FAILED after {_MAX_RETRIES} attempts: "
+                f"{filled_qty} {symbol} on {exchange}. MANUAL INTERVENTION REQUIRED."
+            )
+            logger.critical(alert_msg, extra={"exchange": exchange, "symbol": symbol})
+            if self._publisher:
+                try:
+                    await self._publisher.publish_alert(
+                        alert_msg,
+                        severity="critical",
+                        alert_type="orphan",
+                        symbol=symbol,
+                        exchange=exchange,
                     )
-                    logger.critical(alert_msg, extra={"exchange": exchange, "symbol": symbol})
-                    if self._publisher:
-                        try:
-                            await self._publisher.push_alert(alert_msg)
-                        except Exception as exc:
-                            logger.debug(f"Alert publish failed: {exc}")
-                    self._blacklist.add(symbol, exchange)
+                except Exception as exc:
+                    logger.debug(f"Alert publish failed: {exc}")
+            self._blacklist.add(symbol, exchange)
 
         cooldown_sec = self._cfg.trading_params.cooldown_after_orphan_hours * 3600
         await self._redis.set_cooldown(symbol, cooldown_sec)
+        return _succeeded
     # ── Trade registration ────────────────────────────────────────
 
     def _register_trade(self, trade: TradeRecord) -> None:
@@ -148,24 +278,32 @@ class _UtilMixin:
         self._active_symbols.add(trade.symbol)
         self._busy_exchanges.add(trade.long_exchange)
         self._busy_exchanges.add(trade.short_exchange)
+        # Increment refcounts so deregistration stays O(1)
+        self._symbol_refcount[trade.symbol] = self._symbol_refcount.get(trade.symbol, 0) + 1
+        self._exchange_refcount[trade.long_exchange] = self._exchange_refcount.get(trade.long_exchange, 0) + 1
+        self._exchange_refcount[trade.short_exchange] = self._exchange_refcount.get(trade.short_exchange, 0) + 1
 
     def _deregister_trade(self, trade: TradeRecord) -> None:
-        """Remove trade and update derived sets; safe to call multiple times."""
+        """Remove trade and update derived sets; safe to call multiple times.
+
+        O(1) — uses refcount maps rather than scanning _active_trades.
+        """
         self._active_trades.pop(trade.trade_id, None)
-        # Only release the symbol/exchange slots if no other trade holds them.
-        remaining = self._active_trades.values()
-        if not any(t.symbol == trade.symbol for t in remaining):
+        # Decrement symbol refcount; release slot when no trade holds it
+        sym_rc = self._symbol_refcount.get(trade.symbol, 0) - 1
+        if sym_rc <= 0:
+            self._symbol_refcount.pop(trade.symbol, None)
             self._active_symbols.discard(trade.symbol)
-        if not any(
-            t.long_exchange == trade.long_exchange or t.short_exchange == trade.long_exchange
-            for t in remaining
-        ):
-            self._busy_exchanges.discard(trade.long_exchange)
-        if not any(
-            t.long_exchange == trade.short_exchange or t.short_exchange == trade.short_exchange
-            for t in remaining
-        ):
-            self._busy_exchanges.discard(trade.short_exchange)
+        else:
+            self._symbol_refcount[trade.symbol] = sym_rc
+        # Decrement exchange refcounts; release slot when no trade holds it
+        for ex in (trade.long_exchange, trade.short_exchange):
+            ex_rc = self._exchange_refcount.get(ex, 0) - 1
+            if ex_rc <= 0:
+                self._exchange_refcount.pop(ex, None)
+                self._busy_exchanges.discard(ex)
+            else:
+                self._exchange_refcount[ex] = ex_rc
     # ── Persistence ──────────────────────────────────────────────
 
     async def _persist_trade(self, trade: TradeRecord) -> None:
@@ -193,7 +331,11 @@ class _UtilMixin:
                     f"Trade {trade_id} was mid-close — retrying",
                     extra={"trade_id": trade_id},
                 )
-                asyncio.create_task(self._close_trade(trade))
+                task = asyncio.create_task(
+                    self._close_trade(trade),
+                    name=f"retry-close-{trade_id}",
+                )
+                task.add_done_callback(_task_done_handler)
 
         if stored:
             logger.info(f"Recovered {len(self._active_trades)} active trades")
@@ -204,25 +346,32 @@ class _UtilMixin:
         """Log current USDT balances for all exchanges."""
         try:
             logger.info("💰 EXCHANGE BALANCES", extra={"action": "balance_log"})
-            
+
+            adapters: list[tuple[str, object]] = []
             for exchange_id in self._cfg.enabled_exchanges:
                 adapter = self._exchanges.get(exchange_id)
-                if not adapter:
+                if adapter:
+                    adapters.append((exchange_id, adapter))
+
+            results = await asyncio.gather(
+                *[adapter.get_balance() for _, adapter in adapters],
+                return_exceptions=True,
+            )
+
+            for (exchange_id, _), result in zip(adapters, results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Failed to fetch balance for {exchange_id}: {result}")
                     continue
-                
-                try:
-                    balance = await adapter.get_balance()
-                    usdt_balance = balance.get("free", 0)
-                    logger.info(
-                        f"  {exchange_id.upper()}: ${usdt_balance:,.2f}",
-                        extra={
-                            "action": "exchange_balance",
-                            "exchange": exchange_id,
-                            "balance_usdt": usdt_balance
-                        }
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to fetch balance for {exchange_id}: {e}")
+
+                usdt_balance = result.get("free", 0)
+                logger.info(
+                    f"  {exchange_id.upper()}: ${usdt_balance:,.2f}",
+                    extra={
+                        "action": "exchange_balance",
+                        "exchange": exchange_id,
+                        "balance_usdt": usdt_balance
+                    }
+                )
         except Exception as e:
             logger.error(f"Balance logging error: {e}")
 
@@ -231,18 +380,41 @@ class _UtilMixin:
         try:
             balances = {}
             total = 0.0
+
+            adapters: list[tuple[str, object]] = []
             for exchange_id in self._cfg.enabled_exchanges:
                 adapter = self._exchanges.get(exchange_id)
-                if not adapter:
-                    continue
-                try:
-                    bal = await adapter.get_balance()
-                    usdt = float(bal.get("free", 0))
-                    balances[exchange_id] = usdt
-                    total += usdt
-                except Exception as exc:
-                    logger.debug(f"Balance fetch failed for {exchange_id}: {exc}")
+                if adapter:
+                    adapters.append((exchange_id, adapter))
+
+            results = await asyncio.gather(
+                *[adapter.get_balance() for _, adapter in adapters],
+                return_exceptions=True,
+            )
+
+            for (exchange_id, _), result in zip(adapters, results):
+                if isinstance(result, Exception):
+                    logger.debug(f"Balance fetch failed for {exchange_id}: {result}")
                     balances[exchange_id] = None
+                    continue
+
+                total_val = result.get("total")
+                free_val = result.get("free", 0)
+                used_val = result.get("used", 0)
+
+                if total_val is None:
+                    total_val = free_val
+
+                equity = float(total_val or 0)
+                if equity <= 0:
+                    try:
+                        equity = float(free_val or 0) + float(used_val or 0)
+                    except (TypeError, ValueError):
+                        equity = 0.0
+
+                balances[exchange_id] = equity
+                total += equity
+
             self._journal.balance_snapshot(balances, total=total)
         except Exception as e:
             logger.debug(f"Balance snapshot error: {e}")

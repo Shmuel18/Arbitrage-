@@ -106,9 +106,27 @@ class StatusPublisher:
                 total_val = bal.get("total")
                 if isinstance(total_val, dict):
                     total_val = total_val.get("USDT")
+                free_val = bal.get("free", 0)
+                used_val = bal.get("used", 0)
+
                 if total_val is None:
-                    total_val = bal.get("free", 0)
+                    total_val = free_val
+
                 value = float(total_val or 0)
+                if value <= 0:
+                    try:
+                        recomputed = float(free_val or 0) + float(used_val or 0)
+                    except (TypeError, ValueError):
+                        recomputed = 0.0
+                    if recomputed > 0:
+                        value = recomputed
+
+                if value <= 0:
+                    cached = self._last_good_balances.get(eid, 0.0)
+                    if cached > 0:
+                        logger.debug(f"Using cached balance for {eid}: {cached:.2f} (zero/invalid payload)")
+                        return eid, cached
+
                 if value > 0:
                     self._last_good_balances[eid] = value
                 return eid, value
@@ -208,6 +226,11 @@ class StatusPublisher:
             "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
             "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
             "next_funding_ms": None,
+            "min_interval_hours": None,
+            "long_next_funding_ms": None,
+            "short_next_funding_ms": None,
+            "long_interval_hours": None,
+            "short_interval_hours": None,
             "entry_tier": trade.entry_tier,
         }
 
@@ -248,6 +271,13 @@ class StatusPublisher:
             pos_entry["current_short_rate"] = str(live_short["rate"])
             if live_long.get("next_timestamp"):
                 pos_entry["next_funding_ms"] = live_long["next_timestamp"]
+            pos_entry["long_next_funding_ms"] = live_long.get("next_timestamp")
+            pos_entry["short_next_funding_ms"] = live_short.get("next_timestamp")
+            _long_ih = live_long.get("interval_hours", 8)
+            _short_ih = live_short.get("interval_hours", 8)
+            pos_entry["long_interval_hours"] = _long_ih
+            pos_entry["short_interval_hours"] = _short_ih
+            pos_entry["min_interval_hours"] = min(_long_ih, _short_ih)
             # Pending funding estimate
             try:
                 _lr = float(live_long["rate"])
@@ -264,6 +294,9 @@ class StatusPublisher:
                 logger.debug(f"Pending funding calc failed for {trade.symbol}: {exc}")
         except Exception as exc:
             logger.debug(f"Live spread fetch failed for {trade.symbol}: {exc}")
+
+    # Cache last known PnL per trade_id to survive transient ticker failures
+    _last_pnl_cache: Dict[str, Dict[str, str]] = {}
 
     def _enrich_price_pnl(
         self,
@@ -287,16 +320,30 @@ class StatusPublisher:
                     _fund_pnl = float(trade.funding_collected_usd or 0)
                     _fees = float(trade.fees_paid_total or 0)
                     _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
-                    pos_entry["unrealized_pnl_pct"] = str(round(_total_pnl_pct, 4))
-                    pos_entry["price_pnl_pct"] = str(round(_price_pnl / _notional * 100, 4))
-                    pos_entry["funding_pnl_pct"] = str(round(_fund_pnl / _notional * 100, 4))
-                    pos_entry["fees_pct"] = str(round(_fees / _notional * 100, 4))
+                    pnl_data = {
+                        "unrealized_pnl_pct": str(round(_total_pnl_pct, 4)),
+                        "price_pnl_pct": str(round(_price_pnl / _notional * 100, 4)),
+                        "funding_pnl_pct": str(round(_fund_pnl / _notional * 100, 4)),
+                        "fees_pct": str(round(_fees / _notional * 100, 4)),
+                    }
+                    pos_entry.update(pnl_data)
+                    # Cache this good result
+                    self._last_pnl_cache[trade.trade_id] = pnl_data
             pos_entry["live_price_long"] = str(_lp) if _lp > 0 else None
             pos_entry["live_price_short"] = str(_sp) if _sp > 0 else None
             if _lp > 0 and _sp > 0:
                 pos_entry["current_basis_pct"] = str(round((_lp - _sp) / _sp * 100, 4))
         except Exception as exc:
             logger.debug(f"Price PnL calc failed for {trade.symbol}: {exc}")
+
+        # Fallback: if PnL fields still unset, use last known good values
+        if pos_entry.get("unrealized_pnl_pct") is None:
+            cached = self._last_pnl_cache.get(trade.trade_id)
+            if cached:
+                for k, v in cached.items():
+                    if pos_entry.get(k) is None:
+                        pos_entry[k] = v
+                logger.debug(f"Using cached PnL for {trade.symbol} (ticker unavailable)")
 
     # ── PnL aggregation & publish ────────────────────────────────
 

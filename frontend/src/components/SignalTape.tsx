@@ -13,7 +13,7 @@ interface SignalTapeProps {
 const LEVEL_COLOR: Record<string, string> = {
   ERROR:   '#ef4444',
   WARNING: '#f59e0b',
-  INFO:    '#06b6d4',
+  INFO:    '#2DB8C4',
   DEBUG:   '#475569',
 };
 
@@ -27,9 +27,35 @@ function computeTapeDuration(itemCount: number): string {
   return `${secs}s`;
 }
 
+/**
+ * Merge consecutive duplicate messages into a single item with a ×N counter.
+ * Example: ["Top 5 updated", "Top 5 updated", "Top 5 updated", "Error X"]
+ *       => [{ message: "Top 5 updated", count: 3 }, { message: "Error X", count: 1 }]
+ * After merge we cap to `maxItems` to keep the tape readable.
+ */
+interface DedupedItem {
+  message: string;
+  level: string;
+  count: number;
+}
+
+function dedupeConsecutive(logs: LogEntry[], maxItems = 12): DedupedItem[] {
+  const result: DedupedItem[] = [];
+  for (const log of logs) {
+    const last = result[result.length - 1];
+    if (last && last.message === log.message && last.level === log.level) {
+      last.count += 1;
+    } else {
+      result.push({ message: log.message, level: log.level, count: 1 });
+    }
+    if (result.length >= maxItems) break;
+  }
+  return result;
+}
+
 const SignalTape: React.FC<SignalTapeProps> = memo(({ logs }) => {
-  // Take the 30 most recent entries; filter out noise.
-  const items = (logs ?? []).slice(0, 30);
+  // Dedupe before slicing: collapse repeats so ticker is informative, not noisy.
+  const items = useMemo(() => dedupeConsecutive(logs ?? [], 12), [logs]);
 
   const tapeDuration = useMemo(() => computeTapeDuration(items.length), [items.length]);
 
@@ -44,6 +70,9 @@ const SignalTape: React.FC<SignalTapeProps> = memo(({ logs }) => {
         <span key={`${keyPrefix}-${i}`} className="signal-tape__item" style={{ color }}>
           <span className="signal-tape__dot" style={{ background: color }} />
           {log.message}
+          {log.count > 1 && (
+            <span className="signal-tape__count" style={{ color }}>×{log.count}</span>
+          )}
           <span className="signal-tape__sep">·</span>
         </span>
       );

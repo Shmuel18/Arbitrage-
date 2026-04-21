@@ -30,9 +30,9 @@ class ConnectionManager:
         if close_socket and websocket.client_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close()
-            except Exception:
+            except Exception as exc:
                 # Best-effort close; connection is already removed from manager.
-                pass
+                logger.debug("Error while closing WebSocket (already gone?): %s", exc)
     
     async def broadcast(self, message: str) -> None:
         """Broadcast message to all connected clients"""

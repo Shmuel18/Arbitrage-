@@ -106,7 +106,14 @@ class TestBatchPollResilience:
 
     @pytest.mark.asyncio
     async def test_logs_warning_on_consecutive_failures(self):
-        """Batch poll loop should log warnings (not just debug) on failures."""
+        """Batch poll loop should log at least 1 warning on failures.
+
+        The loop uses _should_log_transient_error(window=30s) to suppress
+        duplicate warnings when failures happen back-to-back within the same
+        window.  In tests (where asyncio.sleep is mocked and cycles run
+        instantly) only the *first* failure fires a warning — subsequent ones
+        are rate-limited.  We assert >= 1, not a fixed count.
+        """
         adapter = _make_adapter()
 
         call_count = 0
@@ -121,13 +128,13 @@ class TestBatchPollResilience:
         adapter._exchange.fetch_funding_rates = AsyncMock(side_effect=_fake_fetch_rates)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            with patch("src.exchanges.adapter.logger") as mock_logger:
+            with patch("src.exchanges._funding_mixin.logger") as mock_logger:
                 await adapter._batch_funding_poll_loop(["BTC/USDT:USDT"])
 
-        # Should have logged 3 warnings (consecutive_failures 1,2,3)
+        # Rate-limited to 1 warning per 30s window — at least 1 must appear
         warning_calls = [c for c in mock_logger.warning.call_args_list
                          if "Batch funding poll error" in str(c)]
-        assert len(warning_calls) == 3
+        assert len(warning_calls) >= 1
 
 
 class TestSequentialPollResilience:
@@ -152,7 +159,7 @@ class TestSequentialPollResilience:
         adapter._exchange.fetch_funding_rate = AsyncMock(side_effect=_fake_fetch_rate)
 
         with patch("asyncio.sleep", side_effect=_fake_sleep):
-            with patch("src.exchanges.adapter.logger") as mock_logger:
+            with patch("src.exchanges._funding_mixin.logger") as mock_logger:
                 # CancelledError from sleep propagates (sleep is outside try)
                 with pytest.raises(asyncio.CancelledError):
                     await adapter._sequential_funding_poll_loop(["BTC/USDT:USDT"])

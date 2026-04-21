@@ -30,16 +30,36 @@ if TYPE_CHECKING:
 
 logger = get_logger("execution")
 
+_HUNDRED: Decimal = Decimal("100")
+_TWO: Decimal = Decimal("2")
+_DEFAULT_TAKER_FEE: Decimal = Decimal("0.00075")  # conservative fallback when fee not yet loaded
+
 
 class _MonitorMixin(_ExitLogicMixin):
     async def _exit_monitor_loop(self) -> None:
+        # P1-2: Spawn a dedicated fast-path liquidation loop (3s cadence)
+        # so margin breaches are detected and closed well before the 10s
+        # main exit loop cycle. Supervised with a done-callback.
+        _liq_task = asyncio.create_task(
+            self._liquidation_fast_loop(), name="liquidation-fast-loop"
+        )
+        _liq_task.add_done_callback(
+            lambda t: (
+                logger.error(f"liquidation-fast-loop exited unexpectedly: {t.exception()}")
+                if not t.cancelled() and t.exception()
+                else None
+            )
+        )
         reconcile_counter = 0
         balance_snapshot_counter = 0  # snapshot every 180 cycles (30min)
         while self._running:
             try:
-                # ── Position reconciliation every ~2 min (12 × 10s) ──
+                # ── Position reconciliation every ~30s (3 × 10s) ──
+                # P1-3: Was 120s (12×). Reduced to 30s so an exchange-side
+                # liquidation on one leg is detected and the orphan is closed
+                # within half a minute rather than up to 2 min of naked exposure.
                 reconcile_counter += 1
-                if reconcile_counter >= 12:
+                if reconcile_counter >= 3:
                     reconcile_counter = 0
                     await self._reconcile_positions()
 
@@ -49,19 +69,88 @@ class _MonitorMixin(_ExitLogicMixin):
                     balance_snapshot_counter = 0
                     await self._journal_balance_snapshot()
 
-                for trade_id, trade in list(self._active_trades.items()):
-                    if not trade or trade.state != TradeState.OPEN:
-                        continue
-                    # Check for upgrade BEFORE normal exit check
-                    upgraded = await self._check_upgrade(trade)
-                    if upgraded:
-                        continue  # trade was closed, skip exit check
-                    await self._check_exit(trade)
+                # P2: run upgrade+exit checks for all open trades concurrently.
+                # Sequential was fine for 1 trade but with N trades on slow
+                # exchanges, one stuck REST call delayed every other trade's
+                # exit logic by up to N × timeout seconds (HOL blocking).
+                open_trades = [
+                    t for t in list(self._active_trades.values())
+                    if t and t.state == TradeState.OPEN
+                ]
+                if open_trades:
+                    await asyncio.gather(
+                        *[self._check_trade(t) for t in open_trades],
+                        return_exceptions=True,
+                    )
             except asyncio.CancelledError:
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
-            await asyncio.sleep(10)
+            # FIX C: reduced from 10s → 5s for faster response to transient
+            # price peaks. Pairs with FIX A's 2-tick sustain guard so
+            # spikes are caught within ~10s of appearing.
+            await asyncio.sleep(5)
+        # Cleanup fast-path task when monitor loop exits
+        _liq_task.cancel()
+        try:
+            await _liq_task
+        except asyncio.CancelledError:
+            pass
+
+    async def _liquidation_fast_loop(self) -> None:
+        """Dedicated 3-second fast-path for liquidation risk checks.
+
+        P1-2: Runs independently of the 10s main monitor loop so a margin breach
+        is detected and acted on within 3s rather than potentially 10+s.  Uses
+        asyncio.gather for all active trades in parallel with the same bounded
+        REST timeout as the main loop (8s via _MONITOR_REST_TIMEOUT).
+        """
+        while self._running:
+            try:
+                # Build validated list so gather tasks and results zip correctly.
+                valid: list[tuple] = []
+                for t in list(self._active_trades.values()):
+                    if not t or t.state != TradeState.OPEN:
+                        continue
+                    la = self._exchanges.get(t.long_exchange)
+                    sa = self._exchanges.get(t.short_exchange)
+                    if la and sa:
+                        valid.append((t, la, sa))
+
+                if valid:
+                    results = await asyncio.gather(
+                        *[self._check_liquidation_risk(t, la, sa) for t, la, sa in valid],
+                        return_exceptions=True,
+                    )
+                    for (t, _, _), result in zip(valid, results):
+                        if isinstance(result, Exception):
+                            logger.debug(
+                                f"[fast-liq] {t.symbol} check error: {result}"
+                            )
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.error(f"Liquidation fast loop error: {exc}")
+            await asyncio.sleep(3)
+
+
+    async def _check_trade(self, trade: TradeRecord) -> None:
+        """Run upgrade-then-exit check for a single trade.
+
+        Extracted so _exit_monitor_loop can dispatch all trades in parallel
+        via asyncio.gather rather than sequentially (P2 HOL fix).
+        """
+        try:
+            upgraded = await self._check_upgrade(trade)
+            if not upgraded:
+                await self._check_exit(trade)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                f"[{trade.trade_id}] _check_trade error: {exc}",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
 
     async def _check_upgrade(self, trade: TradeRecord) -> bool:
         """Check if a significantly better opportunity exists.
@@ -80,7 +169,7 @@ class _MonitorMixin(_ExitLogicMixin):
         # ── Minimum hold time: never upgrade within first 3 minutes ──────────
         # Prevents rapid churn where trades are opened and immediately closed
         # for "better" opportunities before any value is captured.
-        _MIN_UPGRADE_HOLD_SECONDS = 180
+        _MIN_UPGRADE_HOLD_SECONDS = self._cfg.trading_params.min_upgrade_hold_seconds
         if trade.opened_at:
             held_secs = (datetime.now(timezone.utc) - trade.opened_at).total_seconds()
             if held_secs < _MIN_UPGRADE_HOLD_SECONDS:
@@ -114,9 +203,14 @@ class _MonitorMixin(_ExitLogicMixin):
         # Outside 3min, the net_pct comparison + basis guard handle the decision.
         if upgrade_funding_lock_secs > 0:
             now_ms = _time.time() * 1000
-            # Prefer live cache timestamps; fall back to TradeRecord fields
-            long_next_ts = long_funding.get("next_timestamp")
-            short_next_ts = short_funding.get("next_timestamp")
+            # Prefer live cache timestamps; fall back to TradeRecord fields.
+            # P3-2: Normalise to ms — some exchanges deliver epoch-seconds.
+            def _to_ms(ts: Optional[float]) -> Optional[float]:
+                if ts is None:
+                    return None
+                return ts * 1000 if ts < 1e12 else ts
+            long_next_ts = _to_ms(long_funding.get("next_timestamp"))
+            short_next_ts = _to_ms(short_funding.get("next_timestamp"))
             current_next_ts: Optional[float] = None
             if long_next_ts is not None and short_next_ts is not None:
                 current_next_ts = min(long_next_ts, short_next_ts)
@@ -177,12 +271,12 @@ class _MonitorMixin(_ExitLogicMixin):
 
         # Projected net for current trade: income spread minus round-trip fees.
         # This mirrors the scanner's net_pct formula so comparisons are apples-to-apples.
-        current_immediate = (-long_funding["rate"] + short_funding["rate"]) * Decimal("100")
+        current_immediate = (-long_funding["rate"] + short_funding["rate"]) * _HUNDRED
         fee_per_side = (
-            (trade.long_taker_fee or Decimal("0.00075"))
-            + (trade.short_taker_fee or Decimal("0.00075"))
+            (trade.long_taker_fee or _DEFAULT_TAKER_FEE)
+            + (trade.short_taker_fee or _DEFAULT_TAKER_FEE)
         )
-        fee_roundtrip_pct = fee_per_side * Decimal("2") * Decimal("100")  # open + close
+        fee_roundtrip_pct = fee_per_side * _TWO * _HUNDRED  # open + close
         current_projected_net = current_immediate - fee_roundtrip_pct
 
         # Read latest opportunities from Redis
@@ -191,6 +285,26 @@ class _MonitorMixin(_ExitLogicMixin):
             if not raw:
                 return False
             data = json.loads(raw)
+            # P2-1: Guard against stale snapshot — if the scanner paused/crashed,
+            # opportunities may be minutes old; upgrading on that data risks
+            # closing a profitable trade for an opportunity that no longer exists.
+            _updated_at_str = data.get("updated_at")
+            if _updated_at_str:
+                try:
+                    _updated_at = datetime.fromisoformat(
+                        _updated_at_str.replace("Z", "+00:00")
+                    )
+                    _snapshot_age_s = (
+                        datetime.now(timezone.utc) - _updated_at
+                    ).total_seconds()
+                    if _snapshot_age_s > 60:
+                        logger.debug(
+                            f"Upgrade check: skipping — opportunities snapshot is "
+                            f"{int(_snapshot_age_s)}s old (threshold=60s)",
+                        )
+                        return False
+                except (ValueError, TypeError):
+                    pass  # malformed timestamp — proceed; age guard is best-effort
             candidates = data.get("opportunities", [])
         except Exception as e:
             logger.debug(f"Upgrade check: cannot read opportunities: {e}")
@@ -327,27 +441,43 @@ class _MonitorMixin(_ExitLogicMixin):
         if not exchanges_needed:
             return
 
-        # One REST call per exchange to get all positions
+        # P1-3: Fetch all exchanges in parallel with per-exchange failure isolation.
+        # Old code: sequential + fail-fast (any single exchange error aborted ALL
+        # reconciliation, meaning an OKX orphan went undetected because Bybit timed out).
+        # New code: parallel gather — only trades on the failed exchange are skipped;
+        # trades on exchanges with successful responses are still reconciled.
+        eid_list = [eid for eid in exchanges_needed if self._exchanges.get(eid)]
+        pos_results = await asyncio.gather(
+            *[self._exchanges.get(eid).get_positions() for eid in eid_list],
+            return_exceptions=True,
+        )
         exchange_positions: Dict[str, List[Position]] = {}
-        for exch_id in exchanges_needed:
-            adapter = self._exchanges.get(exch_id)
-            if not adapter:
-                continue
-            try:
-                positions = await adapter.get_positions()
-                exchange_positions[exch_id] = positions
-            except Exception as e:
+        failed_exchanges: set[str] = set()
+        for eid, result in zip(eid_list, pos_results):
+            if isinstance(result, Exception):
                 logger.warning(
-                    f"Reconcile: failed to fetch positions from {exch_id}: {e}",
-                    extra={"exchange": exch_id, "action": "reconcile_error"},
+                    f"Reconcile: failed to fetch positions from {eid}: {result}",
+                    extra={"exchange": eid, "action": "reconcile_error"},
                 )
-                # Don't act on incomplete data — skip this cycle entirely
-                return
+                failed_exchanges.add(eid)
+            else:
+                exchange_positions[eid] = result
 
         # Check each active trade against real positions
         for trade_id in list(self._active_trades):
             trade = self._active_trades.get(trade_id)
             if not trade or trade.state != TradeState.OPEN:
+                continue
+
+            # P1-3: If either exchange for this trade failed to respond, we cannot
+            # safely determine whether a leg is missing — skip to avoid false orphan
+            # detection on incomplete data.  The next reconcile cycle (30s) retries.
+            if trade.long_exchange in failed_exchanges or trade.short_exchange in failed_exchanges:
+                logger.debug(
+                    f"Reconcile: skipping {trade.trade_id} ({trade.symbol}) — "
+                    f"position data incomplete for "
+                    f"{trade.long_exchange if trade.long_exchange in failed_exchanges else trade.short_exchange}",
+                )
                 continue
 
             long_positions = exchange_positions.get(trade.long_exchange, [])
@@ -396,11 +526,21 @@ class _MonitorMixin(_ExitLogicMixin):
                     },
                 )
                 short_adapter = self._exchanges.get(trade.short_exchange)
+                orphan_ok = True
                 if short_adapter:
-                    await self._close_orphan(
+                    orphan_ok = await self._close_orphan(
                         short_adapter, trade.short_exchange, trade.symbol,
                         OrderSide.BUY, {"filled": float(trade.short_qty)},
                     )
+                # P0-1: Only mark CLOSED if orphan close actually succeeded.
+                # If it failed, leave trade OPEN so reconcile retries next cycle.
+                if not orphan_ok:
+                    logger.error(
+                        f"[{trade.trade_id}] Orphan close FAILED for remaining short — "
+                        f"trade stays OPEN for next reconcile cycle",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_close_failed_keep_open"},
+                    )
+                    continue
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
                 await self._record_manual_close(trade)
@@ -420,11 +560,20 @@ class _MonitorMixin(_ExitLogicMixin):
                     },
                 )
                 long_adapter = self._exchanges.get(trade.long_exchange)
+                orphan_ok = True
                 if long_adapter:
-                    await self._close_orphan(
+                    orphan_ok = await self._close_orphan(
                         long_adapter, trade.long_exchange, trade.symbol,
                         OrderSide.SELL, {"filled": float(trade.long_qty)},
                     )
+                # P0-1: Only mark CLOSED if orphan close actually succeeded.
+                if not orphan_ok:
+                    logger.error(
+                        f"[{trade.trade_id}] Orphan close FAILED for remaining long — "
+                        f"trade stays OPEN for next reconcile cycle",
+                        extra={"trade_id": trade.trade_id, "action": "orphan_close_failed_keep_open"},
+                    )
+                    continue
                 trade.state = TradeState.CLOSED
                 trade.closed_at = datetime.now(timezone.utc)
                 await self._record_manual_close(trade)

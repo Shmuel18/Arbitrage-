@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -26,34 +26,48 @@ class RiskLimits(BaseModel):
 
 
 class TradingParams(BaseModel):
-    min_funding_spread: Decimal = Decimal("0.5")  # min spread of next imminent payment (%) — no 8h normalization
+    min_funding_spread: Decimal = Decimal("0.3")  # min spread of next imminent payment (%) — no 8h normalization
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
+    max_market_data_age_ms: int = 2000  # Require bid/ask data newer than this before qualifying an entry
     cooldown_after_orphan_hours: int = 2
     cooldown_after_close_seconds: int = 120  # Block re-entry into same symbol after any close
     max_sane_funding_rate: Decimal = Decimal("0.10")  # max abs funding rate before filtering
     entry_offset_seconds: int = 900
     exit_offset_seconds: int = 900
+    min_entry_secs_before_funding: int = 120  # Reject entry if next funding is ≤ N seconds away (too close to hedge properly)
     max_entry_window_minutes: int = 60  # Only enter if closest funding is within N minutes
     narrow_entry_window_minutes: int = 15  # For MEDIUM/BAD tiers, only enter if funding is within N minutes
     upgrade_spread_delta: Decimal = Decimal("0.5")  # Switch to new opp if spread is +N% better
     upgrade_cooldown_seconds: int = 300  # Block re-entry of upgraded symbol for N seconds
+    min_upgrade_hold_seconds: int = 180  # Minimum hold time (s) before a trade is eligible for upgrade (prevents rapid churn)
     upgrade_funding_lock_secs: int = 180  # Lock upgrades when funding is within N seconds
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy
-    tier_bad_max_adverse_spread: Decimal = Decimal("2.0")  # BAD tier: max adverse price spread %
+    weak_min_funding_excess: Decimal = Decimal("0.5")  # WEAK tier: funding must exceed adverse spread by this %
+    # Post-entry validation — tolerance for price basis widening between scan and fill.
+    # At 0 (default): any adverse fill basis triggers emergency close (too strict for market orders).
+    # Pydantic v2 BaseModel silently drops unknown YAML fields, so this MUST be declared here
+    # (using hasattr() as a fallback produces Decimal("0") and triggers false rejections).
+    max_entry_basis_spread_pct: Decimal = Decimal("0.15")  # 0.15% tolerance for altcoin slippage
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check
     basis_recovery_timeout_minutes: Decimal = Decimal("30")  # After funding, wait up to 30min for basis recovery
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
-    liquidation_safety_pct: Decimal = Decimal("80.0")  # Exit if margin ratio < this %
+    basis_exit_buffer_pct: Decimal = Decimal("0.10")  # Basis-recovery exit requires cushion above entry basis
+    min_basis_exit_pnl_pct: Decimal = Decimal("0.08")  # Soft basis exit requires minimum adjusted PnL after slippage buffer
+    max_hold_hours: int = 24  # Absolute safety cap — force-close if held longer than this regardless of state
+    min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
+    liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
 
 
 class ExecutionConfig(BaseModel):
     concurrent_opportunities: int = 3
     order_timeout_ms: int = 10000
     scan_parallelism: int = 10
+    entry_refetch_attempts: int = 1
+    entry_refetch_interval_ms: int = 250
 
 
 class RiskGuardConfig(BaseModel):
@@ -61,6 +75,9 @@ class RiskGuardConfig(BaseModel):
     deep_loop_interval_sec: int = 60
     enable_panic_close: bool = True
     scanner_interval_sec: int = 10
+    # How long (seconds) to skip delta checks after a trade opens.
+    # Covers fill latency: positions may not yet appear on both exchanges.
+    delta_grace_seconds: int = 60
 
 
 class ExchangeConfig(BaseModel):
@@ -69,27 +86,53 @@ class ExchangeConfig(BaseModel):
     default_type: str
     rate_limit_ms: int
     max_leverage: int
-    api_key: Optional[str] = None
-    api_secret: Optional[str] = None
-    api_passphrase: Optional[str] = None
+    api_key: Optional[SecretStr] = None
+    api_secret: Optional[SecretStr] = None
+    api_passphrase: Optional[SecretStr] = None
     testnet: bool = False
     leverage: Optional[int] = Field(default=None, ge=1, le=125)
     margin_mode: Optional[str] = None
     position_mode: Optional[str] = None
 
+    def to_adapter_dict(self) -> dict:
+        """Return a plain dict for the ExchangeAdapter, unwrapping SecretStr
+        fields at the only boundary where raw credential values are needed.
+
+        Never call model_dump() on ExchangeConfig directly — it would expose
+        masked fields as '**********' strings rather than the real values.
+        """
+        data = self.model_dump(exclude={"api_key", "api_secret", "api_passphrase"})
+        data["api_key"] = self.api_key.get_secret_value() if self.api_key else None
+        data["api_secret"] = self.api_secret.get_secret_value() if self.api_secret else None
+        data["api_passphrase"] = (
+            self.api_passphrase.get_secret_value() if self.api_passphrase else None
+        )
+        return data
+
 
 class RedisConfig(BaseModel):
     host: str = "localhost"
     port: int = 6379
-    password: Optional[str] = None
+    password: Optional[SecretStr] = None  # never embedded in URL — passed as separate kwarg
     db: int = 0
+    tls: bool = False  # Enable TLS (rediss://) — required for remote/cloud Redis (e.g. Redis Cloud, Upstash)
     key_prefix: str = "trinity:"
     lock_timeout_sec: int = 10
 
     @property
     def url(self) -> str:
-        auth = f":{self.password}@" if self.password else ""
-        return f"redis://{auth}{self.host}:{self.port}/{self.db}"
+        """Safe URL with no credentials — suitable for logging.
+
+        Uses ``rediss://`` scheme when tls=True, signalling TLS to aioredis
+        and making the URL self-describing in logs.
+        """
+        scheme = "rediss" if self.tls else "redis"
+        return f"{scheme}://{self.host}:{self.port}/{self.db}"
+
+    @property
+    def password_plaintext(self) -> Optional[str]:
+        """Unwrap the password only at the connection boundary."""
+        return self.password.get_secret_value() if self.password else None
 
 
 class LoggingConfig(BaseModel):
@@ -104,6 +147,53 @@ class LoggingConfig(BaseModel):
     log_balances_after_trade: bool = True
 
 
+class TelegramConfig(BaseModel):
+    """Telegram Bot notifications + Mini App auth.
+
+    Values are populated from env vars (see Config._env_overrides). The bot
+    token is always read from env — never from YAML — so it never lands in
+    source control. `enabled` is derived: if token + chat_id are both set
+    and non-dummy, the notifier activates automatically.
+    """
+    bot_token: Optional[SecretStr] = None
+    chat_id: Optional[str] = None
+    # Event switches — default ON so a correctly configured install "just works"
+    notify_trade_open: bool = True
+    notify_trade_close: bool = True
+    notify_daily_summary: bool = True
+    # Daily summary local hour (0-23) and minute. Default 23:55.
+    daily_summary_hour: int = 23
+    daily_summary_minute: int = 55
+    daily_summary_tz: str = "Asia/Jerusalem"
+    # Quiet hours: set to (hour24, hour24) — messages sent during this
+    # window use disable_notification=true so they don't wake you up.
+    # Example: (22, 8) = silent from 22:00 until 08:00.
+    silent_from_hour: Optional[int] = 22
+    silent_until_hour: Optional[int] = 8
+    # Mini App auth: whitelist of Telegram user IDs allowed to open the app.
+    # Empty list = allow anyone who can successfully validate initData
+    # (convenient during first setup, tighten later).
+    allowed_user_ids: List[int] = Field(default_factory=list)
+    # Public HTTPS URL where the built dashboard is hosted. Required only
+    # for the /menu command's WebApp button. Leave empty to run notifications
+    # alone (no Mini App launcher).
+    mini_app_url: Optional[str] = None
+
+    @property
+    def enabled(self) -> bool:
+        """Active when token + chat_id are set and neither is the literal
+        "dummy" placeholder shipped in .env.example."""
+        if not self.bot_token or not self.chat_id:
+            return False
+        token = self.bot_token.get_secret_value()
+        return bool(token) and token != "dummy" and self.chat_id != "dummy"
+
+    @property
+    def bot_token_plaintext(self) -> Optional[str]:
+        """Unwrap at the HTTP boundary only."""
+        return self.bot_token.get_secret_value() if self.bot_token else None
+
+
 # ── Master config ────────────────────────────────────────────────
 
 class Config(BaseSettings):
@@ -116,6 +206,7 @@ class Config(BaseSettings):
     risk_guard: RiskGuardConfig = Field(default_factory=RiskGuardConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
     enabled_exchanges: List[str] = Field(default_factory=lambda: ["binance", "bybit"])
     exchanges: Dict[str, ExchangeConfig] = Field(default_factory=dict)
@@ -177,6 +268,31 @@ class Config(BaseSettings):
             }
         if v := os.getenv("LOG_LEVEL"):
             out.setdefault("logging", {})["level"] = v
+        # ── Telegram ──────────────────────────────────────────
+        tg: Dict[str, Any] = {}
+        if v := os.getenv("TELEGRAM_BOT_TOKEN"):
+            tg["bot_token"] = v
+        if v := os.getenv("TELEGRAM_CHAT_ID"):
+            tg["chat_id"] = v
+        if v := os.getenv("TELEGRAM_NOTIFY_OPEN"):
+            tg["notify_trade_open"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_NOTIFY_CLOSE"):
+            tg["notify_trade_close"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_NOTIFY_SUMMARY"):
+            tg["notify_daily_summary"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_SUMMARY_HOUR"):
+            tg["daily_summary_hour"] = int(v)
+        if v := os.getenv("TELEGRAM_SUMMARY_MINUTE"):
+            tg["daily_summary_minute"] = int(v)
+        if v := os.getenv("TELEGRAM_SUMMARY_TZ"):
+            tg["daily_summary_tz"] = v
+        if v := os.getenv("TELEGRAM_ALLOWED_USER_IDS"):
+            # Comma-separated list of numeric IDs
+            tg["allowed_user_ids"] = [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        if v := os.getenv("TELEGRAM_MINI_APP_URL"):
+            tg["mini_app_url"] = v
+        if tg:
+            out["telegram"] = tg
         return out
 
     @staticmethod

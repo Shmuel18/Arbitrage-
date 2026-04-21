@@ -9,6 +9,7 @@ Safety features retained from review:
   • Redis persistence of active trades (crash recovery)
   • orphan detection and alerting
   • cooldown after orphan
+  • supervised exit-monitor loop (auto-restarts with exponential backoff on crash)
 """
 
 from __future__ import annotations
@@ -53,6 +54,19 @@ from src.execution._util_mixin import _UtilMixin
 logger = get_logger("execution")
 
 
+def _task_done_handler(t: asyncio.Task) -> None:
+    """Log exceptions from background tasks — never let them vanish silently."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc:
+        logger.error(
+            f"Task {t.get_name()} failed: {exc}",
+            exc_info=exc,
+            extra={"action": "task_failed", "task_name": t.get_name()},
+        )
+
+
 # ── Structural type that every mixin expects ``self`` to satisfy ──
 # This gives type-checkers a way to validate cross-mixin attribute access
 # without circular imports.  The concrete class (*ExecutionController*)
@@ -71,6 +85,9 @@ class ControllerProtocol(Protocol):
     _active_trades: Dict[str, TradeRecord]
     _active_symbols: set[str]
     _busy_exchanges: set[str]
+    _exchanges_entering: set[str]
+    _symbol_refcount: Dict[str, int]
+    _exchange_refcount: Dict[str, int]
     _symbols_entering: set[str]
     _upgrade_cooldown: Dict[str, float]
     _blacklist: BlacklistManager
@@ -113,6 +130,11 @@ class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
         # O(1) derived sets — kept in sync by _register_trade / _deregister_trade
         self._active_symbols: set[str] = set()
         self._busy_exchanges: set[str] = set()
+        self._exchanges_entering: set[str] = set()
+        # Refcount maps: how many open trades hold a symbol / exchange slot.
+        # Allows O(1) deregistration without scanning _active_trades.
+        self._symbol_refcount: Dict[str, int] = {}
+        self._exchange_refcount: Dict[str, int] = {}
         self._running = False
         self._monitor_task: Optional[asyncio.Task] = None
         # Blacklist: skips symbols/exchanges that are delisting or repeatedly failing
@@ -128,15 +150,58 @@ class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
         # Trade journal for persistent audit trail
         self._journal = get_journal()
 
+        # ── Runtime MRO / protocol guard ────────────────────────────────────
+        # Catches the case where a new method is added to ControllerProtocol
+        # but not implemented by the concrete class or one of its mixins.
+        # `runtime_checkable` validates method presence only (not attributes).
+        assert isinstance(self, ControllerProtocol), (  # noqa: S101
+            f"{type(self).__name__} does not fully satisfy ControllerProtocol — "
+            "a method declared in the protocol is missing from the MRO."
+        )
+
     # ── Lifecycle ────────────────────────────────────────────────
+
+    def _create_supervised_task(
+        self, coro_factory, *, name: str = "supervised"
+    ) -> asyncio.Task:
+        """Create a background task that auto-restarts on unexpected failure.
+
+        *coro_factory* is a zero-arg callable that returns a fresh coroutine
+        each restart (e.g. ``lambda: self._exit_monitor_loop()``).
+        CancelledError exits cleanly. All other exceptions trigger a delayed
+        restart with exponential back-off (capped at 60 s).
+        """
+        async def _supervisor() -> None:
+            backoff = 5
+            while True:
+                try:
+                    await coro_factory()
+                    return  # coroutine exited normally (self._running=False path)
+                except asyncio.CancelledError:
+                    return
+                except Exception as exc:
+                    logger.error(
+                        f"Supervised task '{name}' crashed — restarting in {backoff}s",
+                        exc_info=exc,
+                        extra={"action": "task_restart", "task_name": name},
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60)
+
+        task = asyncio.create_task(_supervisor(), name=name)
+        task.add_done_callback(_task_done_handler)
+        return task
 
     async def start(self) -> None:
         self._running = True
         await self._recover_trades()
-        self._monitor_task = asyncio.create_task(
-            self._exit_monitor_loop(), name="exit-monitor",
+        # Supervised: if the loop crashes unexpectedly it restarts automatically
+        # with exponential back-off (5s → 10s → … → 60s cap) so open trades
+        # are never left unmonitored.
+        self._monitor_task = self._create_supervised_task(
+            lambda: self._exit_monitor_loop(), name="exit-monitor",
         )
-        
+
         # Log balances on startup (if enabled in config)
         if self._cfg.logging.log_balances_on_startup:
             await self._log_exchange_balances()
