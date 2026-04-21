@@ -1,6 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import Dashboard from './components/Dashboard';
-import MemorialDayBanner from './components/MemorialDayBanner';
+import HolidayBanner from './components/HolidayBanner';
 import { useMarketData } from './hooks/useMarketData';
 import { useSettings } from './context/SettingsContext';
 import { translations, Lang } from './i18n/translations';
@@ -100,8 +100,8 @@ function AppShell() {
         wsConnection={wsConnection}
         lastWsMessageAt={lastWsMessageAt}
       />
-      {/* Yom HaZikaron memorial — floats above UI, dismissible */}
-      <MemorialDayBanner />
+      {/* Holiday banner (currently Yom Ha'atzmaut) — floats above UI, dismissible */}
+      <HolidayBanner />
     </div>
   );
 }
