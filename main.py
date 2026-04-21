@@ -14,6 +14,15 @@ import signal
 import socket
 import sys
 
+# Use uvloop on Linux/Mac for faster asyncio (2-4x I/O throughput).
+# No-op on Windows or if uvloop is not installed.
+try:
+    import uvloop  # type: ignore[import-not-found]
+
+    uvloop.install()
+except ImportError:
+    pass
+
 import uvicorn
 
 from src.core.config import init_config
