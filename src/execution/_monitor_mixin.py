@@ -86,7 +86,10 @@ class _MonitorMixin(_ExitLogicMixin):
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
-            await asyncio.sleep(10)
+            # FIX C: reduced from 10s → 5s for faster response to transient
+            # price peaks. Pairs with FIX A's 2-tick sustain guard so
+            # spikes are caught within ~10s of appearing.
+            await asyncio.sleep(5)
         # Cleanup fast-path task when monitor loop exits
         _liq_task.cancel()
         try:

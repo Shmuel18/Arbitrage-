@@ -293,6 +293,54 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             except Exception as _snap_err:
                 logger.debug(f"Snapshot failed for {trade.symbol}: {_snap_err}")
 
+        # ── FIX A: PRICE SPIKE TAKE-PROFIT ───────────────────────
+        # If price_pnl alone (ignoring funding) exceeds threshold AND is
+        # sustained across 2+ consecutive checks (≥10s with 5s polling),
+        # exit immediately — bypassing the funding lock.
+        #
+        # Rationale: a sustained +1% price move is rare and usually fades
+        # within minutes. Locking it in now beats risking it evaporate
+        # while we wait for the next funding window. The 2-tick sustain
+        # guard filters out single-tick slippage blips so we don't chase
+        # phantom profits that vanish before fills complete.
+        _PRICE_SPIKE_THRESHOLD_PCT = Decimal("1.0")  # raw price PnL %
+        _PRICE_SPIKE_SUSTAIN_TICKS = 2               # consecutive ticks
+        _spike_ticks = getattr(trade, "_price_spike_tick_count", 0)
+        if price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
+            trade._price_spike_tick_count = _spike_ticks + 1
+            if trade._price_spike_tick_count >= _PRICE_SPIKE_SUSTAIN_TICKS:
+                _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
+                logger.info(
+                    f"⚡ Trade {trade.trade_id}{tier_tag}: PRICE SPIKE TAKE-PROFIT! "
+                    f"price_pnl={float(price_pnl_pct):+.4f}% ≥ "
+                    f"{float(_PRICE_SPIKE_THRESHOLD_PCT)}% (sustained "
+                    f"{trade._price_spike_tick_count} ticks) — "
+                    f"bypassing funding lock, exiting after {hold_min}min",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "price_spike_exit"},
+                )
+                trade._exit_reason = _reason
+                self._journal.exit_decision(
+                    trade.trade_id, trade.symbol,
+                    reason=_reason,
+                    immediate_spread=Decimal(str(total_pnl_pct)),
+                    hold_min=hold_min,
+                )
+                await self._close_trade(trade)
+                return
+            else:
+                logger.info(
+                    f"⚡ [{trade.symbol}] Price spike detected: "
+                    f"price_pnl={float(price_pnl_pct):+.4f}% "
+                    f"(tick {trade._price_spike_tick_count}/"
+                    f"{_PRICE_SPIKE_SUSTAIN_TICKS}) — exit if sustained",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "price_spike_pending"},
+                )
+        elif _spike_ticks > 0:
+            # Price dropped back below threshold — reset counter.
+            trade._price_spike_tick_count = 0
+
         # ── 3. PROFIT TARGET CHECK ───────────────────────────────
         profit_target = tp.profit_target_pct
         adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
