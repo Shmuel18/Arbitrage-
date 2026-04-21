@@ -46,8 +46,8 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) =>
 
       <div className="card-header mb-4 nx-exch-card-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div className="nx-section-header">
-          <div className="nx-section-header__icon" style={{ background: 'rgba(6,182,212,0.08)', borderColor: 'rgba(6,182,212,0.12)' }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#06b6d4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <div className="nx-section-header__icon" style={{ background: 'rgba(45,184,196,0.08)', borderColor: 'rgba(45,184,196,0.12)' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2DB8C4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
             </svg>
           </div>

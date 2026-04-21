@@ -181,7 +181,7 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
         <div style={{
           flexShrink: 0,
           height: 3,
-          background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899)',
+          background: 'linear-gradient(90deg, #2DB8C4, #1B3A6B, #2DB8C4)',
         }} />
         {/* Scrollable content area */}
         <div style={{ overflowY: 'auto', overflowX: 'hidden', padding: '24px 28px 28px', flex: 1 }}>
