@@ -4,53 +4,24 @@ import React, { useEffect, useState } from 'react';
  * Respectful floating banner for Yom HaZikaron (Israel Memorial Day).
  *
  * Behavior:
- * - Appears centered near the top of the viewport on first render.
- * - Can be dismissed via the X button; dismissal is remembered for the
- *   current calendar date (so the banner returns next time).
- * - Does not block trading operations — it floats above content but a
- *   dismiss button is always visible.
+ * - Appears centered near the top of the viewport on every page load.
+ * - Can be dismissed via the X button, Escape key, or clicking outside.
+ * - Dismissal is NOT persisted — banner reappears on every refresh.
+ * - Background remains visible (no dim/blur) so trading operations
+ *   stay readable underneath.
  *
  * The candle image lives at /public/memorial-day.jpg.
  */
-const STORAGE_KEY = 'ratebridge_memorial_banner_dismissed';
-
-function isDismissedToday(): boolean {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored) return false;
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    return stored === today;
-  } catch {
-    return false;
-  }
-}
-
-function markDismissedToday(): void {
-  try {
-    const today = new Date().toISOString().slice(0, 10);
-    localStorage.setItem(STORAGE_KEY, today);
-  } catch {
-    /* ignore storage errors */
-  }
-}
-
 export const MemorialDayBanner: React.FC = () => {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     // Delay slightly for a gentler entrance after the dashboard mounts.
-    const timer = setTimeout(() => {
-      if (!isDismissedToday()) {
-        setVisible(true);
-      }
-    }, 400);
+    const timer = setTimeout(() => setVisible(true), 400);
     return () => clearTimeout(timer);
   }, []);
 
-  const handleDismiss = () => {
-    setVisible(false);
-    markDismissedToday();
-  };
+  const handleDismiss = () => setVisible(false);
 
   // Keyboard: Escape closes the banner
   useEffect(() => {

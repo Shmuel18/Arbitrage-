@@ -14,9 +14,9 @@ import './styles/memorial.css';
 function readLang(): Lang {
   try {
     const v = localStorage.getItem('trinity_lang');
-    return v === 'he' ? 'he' : 'en';
+    return v === 'en' ? 'en' : 'he';
   } catch {
-    return 'en';
+    return 'he';
   }
 }
 

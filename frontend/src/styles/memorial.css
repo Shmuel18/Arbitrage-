@@ -18,9 +18,9 @@
 .memorial-banner-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+  /* Invisible — only captures click-outside to dismiss.
+     Dashboard underneath stays fully visible. */
+  background: transparent;
   pointer-events: auto;
   cursor: default;
 }
