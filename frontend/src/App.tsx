@@ -1,9 +1,11 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import Dashboard from './components/Dashboard';
+import MemorialDayBanner from './components/MemorialDayBanner';
 import { useMarketData } from './hooks/useMarketData';
 import { useSettings } from './context/SettingsContext';
 import { translations, Lang } from './i18n/translations';
 import './App.css';
+import './styles/memorial.css';
 
 /**
  * ErrorBoundary can't use hooks, so read the language directly from
@@ -98,6 +100,8 @@ function AppShell() {
         wsConnection={wsConnection}
         lastWsMessageAt={lastWsMessageAt}
       />
+      {/* Yom HaZikaron memorial — floats above UI, dismissible */}
+      <MemorialDayBanner />
     </div>
   );
 }
