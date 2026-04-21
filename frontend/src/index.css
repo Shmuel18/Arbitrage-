@@ -3263,25 +3263,25 @@ code, .mono {
    V3 VISUAL UPGRADE — Enhanced light mode, animations, polish
    ══════════════════════════════════════════════════════════════════ */
 
-/* ── Light mode: sidebar enhanced ─────────────────────────────── */
+/* ── Light mode: sidebar stays navy (brand consistency — Linear/Notion pattern) ─ */
 [data-theme="light"] .sidebar {
-  background: linear-gradient(180deg, #ffffff 0%, #f1f4ff 100%);
-  border-right: 1px solid rgba(45, 184, 196, 0.06);
-  box-shadow: 2px 0 30px rgba(45, 184, 196, 0.05), inset -1px 0 0 rgba(45, 184, 196, 0.04);
+  background: linear-gradient(180deg, #1B3A6B 0%, #163256 100%);
+  border-right: 1px solid rgba(45, 184, 196, 0.15);
+  box-shadow: 2px 0 24px rgba(27, 58, 107, 0.18);
 }
 
 [data-theme="light"] .sidebar-nav-item {
-  color: #64748b;
+  color: #94a9c5;
   font-weight: 500;
 }
 
 [data-theme="light"] .sidebar-nav-item .nav-icon {
-  color: #94a3b8;
+  color: #94a9c5;
 }
 
 [data-theme="light"] .sidebar-nav-item:hover {
-  background: rgba(45, 184, 196, 0.05);
-  color: #1B3A6B;
+  background: rgba(45, 184, 196, 0.10);
+  color: #e2e8f0;
 }
 
 [data-theme="light"] .sidebar-nav-item:hover .nav-icon {
@@ -3289,29 +3289,29 @@ code, .mono {
 }
 
 [data-theme="light"] .sidebar-nav-item.active {
-  background: linear-gradient(135deg, rgba(45, 184, 196, 0.12), rgba(42, 77, 130, 0.08));
-  color: #1A8A94;
-  box-shadow: 0 2px 12px rgba(45, 184, 196, 0.12);
-  border-color: rgba(45, 184, 196, 0.12);
+  background: linear-gradient(135deg, rgba(45, 184, 196, 0.22), rgba(45, 184, 196, 0.08));
+  color: #2DB8C4;
+  box-shadow: 0 0 20px rgba(45, 184, 196, 0.12);
+  border-color: rgba(45, 184, 196, 0.28);
 }
 
 [data-theme="light"] .sidebar-nav-item.active .nav-icon {
-  color: #24A3AF;
+  color: #6BD4DD;
 }
 
 [data-theme="light"] .sidebar-logo h1 {
-  background: linear-gradient(135deg, #1B3A6B 0%, #1B3A6B 50%, #2DB8C4 100%);
+  background: linear-gradient(135deg, #6BD4DD 0%, #2DB8C4 60%, #FFFFFF 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
 [data-theme="light"] .sidebar-logo span {
-  color: #94a3b8;
+  color: rgba(255, 255, 255, 0.6);
 }
 
 [data-theme="light"] .nx-sidebar-version {
-  color: #94a3b8;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 [data-theme="light"] .nx-nav-item::before {
