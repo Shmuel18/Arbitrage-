@@ -82,13 +82,16 @@ const ArrowDown = () => (
  */
 type StatIntent = 'info' | 'profit' | 'loss' | 'neutral' | 'system' | 'warning';
 
+// Unified accent — all stat cards share the brand teal so the grid
+// reads as one cohesive surface. Semantic meaning (profit / loss /
+// warning) is still carried via the sub-line text color.
 const INTENT_VAR: Record<StatIntent, string> = {
-  info:    'var(--color-info)',
-  profit:  'var(--color-profit)',
-  loss:    'var(--color-loss)',
-  neutral: 'var(--color-neutral)',
-  system:  'var(--color-system)',
-  warning: 'var(--color-warning)',
+  info:    'var(--brand-teal)',
+  profit:  'var(--brand-teal)',
+  loss:    'var(--brand-teal)',
+  neutral: 'var(--brand-teal)',
+  system:  'var(--brand-teal)',
+  warning: 'var(--brand-teal)',
 };
 
 interface StatCardProps {

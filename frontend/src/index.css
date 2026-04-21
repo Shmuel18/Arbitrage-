@@ -705,10 +705,10 @@ code, .mono {
 }
 
 [data-theme="dark"] .corp-table thead th {
-  background: rgba(6, 12, 24, 0.92);
+  background: linear-gradient(180deg, rgba(23, 48, 92, 0.92) 0%, rgba(14, 31, 60, 0.92) 100%);
   /* bumped from #3d5577 (~3.6:1) to #94a3b8 (~7.5:1) to pass WCAG AA */
   color: #94a3b8;
-  border-bottom-color: rgba(45, 184, 196, 0.12);
+  border-bottom-color: rgba(45, 184, 196, 0.22);
 }
 
 /* Sticky table headers — requires the scroll container to have overflow set */
@@ -5145,11 +5145,11 @@ button:focus-visible {
   display: flex;
   flex-direction: column;
   z-index: 70;
-  background: rgba(10, 17, 32, 0.98);
-  border: 1px solid rgba(45, 184, 196, 0.15);
+  background: linear-gradient(180deg, rgba(23, 48, 92, 0.96) 0%, rgba(14, 31, 60, 0.98) 100%);
+  border: 1px solid rgba(45, 184, 196, 0.22);
   border-radius: 14px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(45, 184, 196, 0.06);
-  backdrop-filter: blur(12px);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(45, 184, 196, 0.10), 0 0 40px rgba(45, 184, 196, 0.06);
+  backdrop-filter: blur(18px) saturate(160%);
   overflow: hidden;
   animation: nx-bell-panel-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
