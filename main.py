@@ -10,6 +10,7 @@ Safety features:
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import socket
 import sys
@@ -110,9 +111,17 @@ async def main() -> None:
         print("\n[WARNING] LIVE TRADING MODE --- real money at risk!")
         print(f"   Exchanges : {cfg.enabled_exchanges}")
         print(f"   Position size: {cfg.risk_limits.position_size_pct} (70% of min balance × leverage)")
-        answer = input("   Type YES to continue: ")
-        if answer.strip() != "YES":
-            print("Aborted.")
+        # Non-interactive environments (systemd, Docker) must pre-approve via env var.
+        # Interactive TTY still prompts for YES.
+        if os.getenv("LIVE_CONFIRMED", "").lower() in {"1", "true", "yes"}:
+            print("   LIVE_CONFIRMED=true set in env — proceeding without prompt.")
+        elif sys.stdin.isatty():
+            answer = input("   Type YES to continue: ")
+            if answer.strip() != "YES":
+                print("Aborted.")
+                return
+        else:
+            print("   ERROR: non-interactive stdin and LIVE_CONFIRMED not set. Aborting.")
             return
 
     # ── Redis ────────────────────────────────────────────────────
