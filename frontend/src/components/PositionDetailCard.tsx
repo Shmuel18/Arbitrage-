@@ -48,6 +48,7 @@ export interface PositionDetail {
   // Lifecycle
   opened_at?: string | null;
   next_funding_ms?: number | null;
+  min_interval_hours?: number;
   state?: string;
 }
 
@@ -170,7 +171,7 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
       detail:
         fundingCollections > 0
           ? `${fundingCollections} ${t.tlCollectionsNet} ${formatUsd(position.funding_collected_usd)}`
-          : `${t.tlNextWindow} ${formatCountdown(position.next_funding_ms)}`,
+          : `${t.tlNextWindow} ${formatCountdown(position.next_funding_ms, position.min_interval_hours)}`,
       confidence: confidenceFrom(fundingCollections > 0 ? 86 : 72),
       status: fundingCollections > 0 ? 'done' : 'live',
     },

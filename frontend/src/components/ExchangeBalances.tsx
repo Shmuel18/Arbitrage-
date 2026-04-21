@@ -16,11 +16,10 @@ const EXCHANGE_ORDER: readonly string[] = [
 const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) => {
   const { t } = useSettings();
 
-  // Show skeleton until first balances payload arrives.
-  if (balances === null) return <SkeletonExchangeBalances rows={3} />;
-
   // Memoize derived data — balances object reference only changes when WS pushes
   // a new payload, so this avoids re-computing on unrelated parent re-renders.
+  // NOTE: useMemo MUST run unconditionally on every render (Rules of Hooks),
+  // so the null-guard early-return MUST come AFTER this hook call.
   const { entries, total } = useMemo(() => {
     const raw = balances?.balances ? Object.entries(balances.balances) : [];
     const sorted = [...raw].sort(([a], [b]) => {
@@ -33,6 +32,9 @@ const ExchangeBalances: React.FC<ExchangeBalancesProps> = memo(({ balances }) =>
     });
     return { entries: sorted, total: balances?.total ?? 0 };
   }, [balances]);
+
+  // Show skeleton until first balances payload arrives.
+  if (balances === null) return <SkeletonExchangeBalances rows={3} />;
 
   return (
     <div className="card p-5" style={{ position: 'relative' }}>

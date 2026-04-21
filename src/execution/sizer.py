@@ -154,8 +154,15 @@ class PositionSizer:
 
         qty_raw = notional / _price_for_sizing
         steps = int(qty_raw / lot)
+        if steps == 0:
+            logger.warning(
+                f"{opp.symbol}: Skipping — calculated qty {qty_raw:.4f} is below "
+                f"minimum lot {lot} (notional=${notional:.2f}, price=${_price_for_sizing:.4f}). "
+                f"Need at least ${float(lot * _price_for_sizing / Decimal(str(lev))):.2f} free on "
+                f"{opp.short_exchange} to open 1 lot."
+            )
+            return None
         qty_rounded = Decimal(str(round(float(steps * lot), 8)))
-        qty_rounded = max(qty_rounded, lot)
         order_qty = qty_rounded
 
         logger.info(

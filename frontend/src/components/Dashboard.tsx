@@ -1,26 +1,34 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
-import { m } from 'framer-motion';
-import ViewReveal from './ViewReveal';
+import React, { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { FullData } from '../hooks/useMarketData';
 import { WsConnectionState } from '../services/websocket';
-import { useSettings } from '../context/SettingsContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
 import ExchangeBalances from './ExchangeBalances';
+import RightPanel from './RightPanel';
 import SignalTape from './SignalTape';
-import {
-  SkeletonRightPanel,
-  SkeletonAnalyticsPanel,
-  SkeletonRecentTrades,
-} from './Skeleton';
+import KeyboardShortcuts from './KeyboardShortcuts';
+import { useSettings } from '../context/SettingsContext';
+import { useToast } from '../context/ToastContext';
+import { useTelegram } from '../context/TelegramContext';
 
-// Below-the-fold sections are lazily loaded — reduces initial JS parse time.
-const RightPanel    = React.lazy(() => import('./RightPanel'));
-const AnalyticsPanel = React.lazy(() => import('./AnalyticsPanel'));
-const RecentTradesPanel = React.lazy(() => import('./RecentTradesPanel'));
-const SystemLogs    = React.lazy(() => import('./SystemLogs'));
+// Below-the-fold components — lazy-loaded to shrink initial bundle
+const AnalyticsPanel    = lazy(() => import('./AnalyticsPanel'));
+const RecentTradesPanel = lazy(() => import('./RecentTradesPanel'));
+const SystemLogs        = lazy(() => import('./SystemLogs'));
+
+/** Fallback placeholder while a chunk is loading — preserves layout */
+const LazyFallback: React.FC<{ minHeight?: number }> = ({ minHeight = 200 }) => (
+  <div
+    className="nx-lazy-fallback"
+    style={{ minHeight }}
+    role="status"
+    aria-label="Loading section"
+  >
+    <div className="nx-lazy-fallback__shimmer" />
+  </div>
+);
 
 export const SECTION_IDS = {
   dashboard: 'section-dashboard',
@@ -39,7 +47,6 @@ interface DashboardProps {
   onPnlHoursChange: (hours: number) => void;
   wsConnection: WsConnectionState;
   lastWsMessageAt: number | null;
-  wsAttempts: number;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({
@@ -48,46 +55,40 @@ const Dashboard: React.FC<DashboardProps> = ({
   onPnlHoursChange,
   wsConnection,
   lastWsMessageAt,
-  wsAttempts,
 }) => {
-  // True only before the very first data payload arrives — both stay null
-  // until WS sends the initial full_update. Once set, never goes back to null.
-  const isLoading = data.balances === null && data.summary === null;
-  const { t } = useSettings();
-
-  // Stable array reference — `data.positions` changes only when positions list
-  // actually mutates, preventing spurious re-renders of memo'd children.
-  const positions = useMemo(() => data.positions ?? [], [data.positions]);
-  const trades    = useMemo(() => data.trades    ?? [], [data.trades]);
-
-  // Compute totalBalance: prefer the server-provided total, but fall back to
-  // summing individual exchange balances if the server sends total=0 while
-  // per-exchange values are already populated (e.g. first WS tick race).
-  const totalBalance = useMemo(() => {
-    if (!data.balances) return 0;
-    if (data.balances.total > 0) return data.balances.total;
-    return Object.values(data.balances.balances ?? {}).reduce(
-      (sum, v) => sum + (Number(v) || 0), 0
-    );
-  }, [data.balances]);
-
-  // Surface the most recent ERROR-level logs as a top-of-page banner.
-  // Only show errors from the last 60 seconds to avoid stale banners.
-  const errorLogs = useMemo(() => {
-    const cutoff = Date.now() - 60_000;
-    return (data.logs ?? [])
-      .filter((l) => {
-        if (l.level.toUpperCase() !== 'ERROR') return false;
-        const ts = new Date(l.timestamp).getTime();
-        // Drop entries with unparseable timestamps (legacy HH:MM:SS format)
-        if (isNaN(ts)) return false;
-        return ts > cutoff;
-      })
-      .slice(0, 5);
-  }, [data.logs]);
-
   const [activeSection, setActiveSection] = useState<SectionId>(SECTION_IDS.dashboard);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const { theme, setTheme } = useSettings();
+  const toast = useToast();
+  const toggleTheme = useCallback(
+    () => setTheme(theme === 'dark' ? 'light' : 'dark'),
+    [theme, setTheme]
+  );
+
+  // WS connection lifecycle → user-visible notifications
+  const prevWsRef = useRef<WsConnectionState>(wsConnection);
+  useEffect(() => {
+    const prev = prevWsRef.current;
+    prevWsRef.current = wsConnection;
+    // Only announce state transitions, not the initial mount value
+    if (prev === wsConnection) return;
+    if (prev === 'connected' && wsConnection !== 'connected') {
+      toast.push({
+        intent: 'warning',
+        title: 'Connection lost',
+        message: 'Live data stream disconnected. Attempting to reconnect…',
+        duration: 6000,
+      });
+    } else if (prev !== 'connected' && wsConnection === 'connected') {
+      toast.push({
+        intent: 'success',
+        title: 'Reconnected',
+        message: 'Live data stream restored.',
+        duration: 3000,
+      });
+    }
+  }, [wsConnection, toast]);
 
   const scrollToSection = useCallback((sectionId: SectionId) => {
     const el = document.getElementById(sectionId);
@@ -125,58 +126,39 @@ const Dashboard: React.FC<DashboardProps> = ({
     return () => observer.disconnect();
   }, []);
 
+  // Mini-App context — drop keyboard-only UX inside Telegram (no hardware kbd).
+  const { isTelegramWebApp } = useTelegram();
+
   return (
-    <div className="app-layout">
-      {/* Elite ambient glow orbs — fixed, behind all content */}
-      <div className="elite-ambient" aria-hidden="true">
-        <div className="elite-orb elite-orb--1" />
-        <div className="elite-orb elite-orb--2" />
-        <div className="elite-orb elite-orb--3" />
-      </div>
-      <Sidebar activeSection={activeSection} onNavigate={scrollToSection} />
+    <div className={`app-layout${isTelegramWebApp ? ' app-layout--telegram' : ''}`}>
+      {!isTelegramWebApp && (
+        <KeyboardShortcuts onNavigate={scrollToSection} onToggleTheme={toggleTheme} />
+      )}
+
+      <Sidebar
+        activeSection={activeSection}
+        onNavigate={scrollToSection}
+        mobileOpen={mobileMenuOpen}
+        onMobileClose={() => setMobileMenuOpen(false)}
+      />
 
       <div className="main-content">
         <Header
           botStatus={data.status}
-          alerts={data.alerts ?? []}
+          alerts={(data as any).alerts ?? []}
           lastFetchedAt={data.lastFetchedAt}
           wsConnection={wsConnection}
           lastWsMessageAt={lastWsMessageAt}
-          wsAttempts={wsAttempts}
+          onMobileMenuToggle={() => setMobileMenuOpen((o) => !o)}
         />
-        <SignalTape
-          logs={data.logs}
-          onSignalClick={(key) => scrollToSection(
-            (SECTION_IDS as Record<string, SectionId>)[key] ?? SECTION_IDS.dashboard
-          )}
-        />
+        <SignalTape logs={data.logs} />
 
-        <div className="content-area" ref={contentRef}>
+        <main className="content-area" ref={contentRef} id="main-content" aria-label="Dashboard main content">
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />
           <div className="space-y-5">
-            <ViewReveal
-              id={SECTION_IDS.dashboard}
-              className="elite-section"
-              from="up"
-              distance={28}
-            >
-              {errorLogs.length > 0 && (
-                <div className="nx-error-banner">
-                  <span className="nx-error-banner__icon">🚨</span>
-                  <span className="nx-error-banner__msg">{errorLogs[0].message}</span>
-                  {errorLogs.length > 1 && (
-                    <span className="nx-error-banner__count">+{errorLogs.length - 1}</span>
-                  )}
-                  <button
-                    className="nx-error-banner__btn"
-                    onClick={() => scrollToSection(SECTION_IDS.logs)}
-                  >
-                    {t.viewLogs}
-                  </button>
-                </div>
-              )}
+            <div id={SECTION_IDS.dashboard}>
               <StatsCards
-                totalBalance={totalBalance}
+                totalBalance={data.balances?.total ?? 0}
                 dailyPnl={data.dailyPnl}
                 activeTrades={data.status.active_positions}
                 systemRunning={data.status.bot_running}
@@ -184,64 +166,44 @@ const Dashboard: React.FC<DashboardProps> = ({
                 totalTrades={data.summary?.total_trades ?? 0}
                 allTimePnl={data.summary?.all_time_pnl ?? 0}
                 avgPnl={data.summary?.avg_pnl ?? 0}
-                isLoading={isLoading}
               />
-            </ViewReveal>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 elite-section">
-              <ViewReveal className="lg:col-span-2" id={SECTION_IDS.positions} from="left" distance={60}>
-                <PositionsTable positions={positions} isLoading={isLoading} />
-              </ViewReveal>
-              <ViewReveal id={SECTION_IDS.balances} from="right" distance={60}>
-                <ExchangeBalances balances={data.balances} />
-              </ViewReveal>
             </div>
 
-            <ViewReveal
-              id={SECTION_IDS.opportunities}
-              className="elite-section"
-              from="up"
-              distance={28}
-            >
-              <Suspense fallback={<SkeletonRightPanel rows={8} />}>
-                <RightPanel opportunities={data.opportunities} status={data.status} />
-              </Suspense>
-            </ViewReveal>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+              <div className="lg:col-span-2" id={SECTION_IDS.positions}>
+                <PositionsTable positions={data.positions || []} />
+              </div>
+              <div id={SECTION_IDS.balances}>
+                <ExchangeBalances balances={data.balances} />
+              </div>
+            </div>
 
-            <ViewReveal className="elite-section" from="up" distance={28}>
-            <Suspense fallback={<SkeletonAnalyticsPanel />}>
+            <div id={SECTION_IDS.opportunities}>
+              <RightPanel opportunities={data.opportunities} status={data.status} />
+            </div>
+
+            <Suspense fallback={<LazyFallback minHeight={260} />}>
               <AnalyticsPanel
                 pnl={data.pnl}
                 pnlHours={pnlHours}
                 onPnlHoursChange={onPnlHoursChange}
-                totalBalance={totalBalance}
+                totalBalance={data.balances?.total ?? 0}
               />
             </Suspense>
-            </ViewReveal>
 
-            <ViewReveal
-              id={SECTION_IDS.trades}
-              className="elite-section"
-              from="up"
-              distance={28}
-            >
-              <Suspense fallback={<SkeletonRecentTrades rows={6} />}>
-                <RecentTradesPanel trades={trades} tradesLoaded={data.tradesLoaded} />
+            <div id={SECTION_IDS.trades}>
+              <Suspense fallback={<LazyFallback minHeight={320} />}>
+                <RecentTradesPanel trades={data.trades || []} tradesLoaded={data.tradesLoaded} />
               </Suspense>
-            </ViewReveal>
+            </div>
 
-            <ViewReveal
-              id={SECTION_IDS.logs}
-              className="elite-section"
-              from="up"
-              distance={28}
-            >
-              <Suspense fallback={<div style={{ height: 280, borderRadius: 14 }} className="card skeleton-shimmer" />}>
+            <div id={SECTION_IDS.logs}>
+              <Suspense fallback={<LazyFallback minHeight={240} />}>
                 <SystemLogs logs={data.logs} summary={data.summary} />
               </Suspense>
-            </ViewReveal>
+            </div>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

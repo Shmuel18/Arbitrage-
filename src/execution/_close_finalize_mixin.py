@@ -164,6 +164,8 @@ class _CloseFinalizeMixin:
         self._journal.trade_closed(
             trade_id=trade.trade_id, symbol=trade.symbol, mode=trade.mode,
             duration_min=float(hold_minutes),
+            long_exchange=trade.long_exchange,
+            short_exchange=trade.short_exchange,
             entry_price_long=trade.entry_price_long,
             entry_price_short=trade.entry_price_short,
             exit_price_long=trade.exit_price_long,

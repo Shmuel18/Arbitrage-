@@ -1,118 +1,24 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { LazyMotion, domAnimation, m } from 'framer-motion';
 import Dashboard from './components/Dashboard';
 import { useMarketData } from './hooks/useMarketData';
+import { useSettings } from './context/SettingsContext';
+import { translations, Lang } from './i18n/translations';
 import './App.css';
 
-import { SettingsContext } from './context/SettingsContext';
-import { translations, Lang } from './i18n/translations';
-
-/* ── Error Fallback (functional — enables motion + CSS vars) ─────── */
-function ErrorFallback({ error, onReload }: { error?: Error; onReload: () => void }) {
-  const ctx = React.useContext(SettingsContext);
-  const lang: Lang = ctx?.lang ?? 'en';
-  const t = translations[lang];
-  return (
-    <m.div
-      initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, ease: 'easeOut' }}
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'var(--bg)',
-        padding: 'var(--space-6)',
-      }}
-    >
-      <div
-        className="card xcard"
-        style={{
-          maxWidth: 480,
-          width: '100%',
-          textAlign: 'center',
-          padding: 'var(--space-8)',
-        }}
-      >
-        {/* Icon */}
-        <m.div
-          initial={{ scale: 0.6, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ delay: 0.15, type: 'spring', stiffness: 280, damping: 22 }}
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 'var(--radius-full)',
-            background: 'rgba(239,68,68,0.12)',
-            border: '1.5px solid rgba(239,68,68,0.35)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto var(--space-5)',
-            fontSize: 26,
-          }}
-        >
-          ⚠
-        </m.div>
-
-        <h2 style={{
-          fontSize: 'var(--text-lg)',
-          fontWeight: 'var(--fw-semibold)',
-          color: 'var(--text)',
-          marginBottom: 'var(--space-3)',
-        }}>
-          {t.errorBoundaryTitle}
-        </h2>
-
-        <p style={{
-          fontSize: 'var(--text-sm)',
-          color: 'var(--muted)',
-          marginBottom: 'var(--space-4)',
-        }}>
-          {t.errorBoundaryMessage}
-        </p>
-
-        {error?.message && (
-          <pre style={{
-            fontSize: 'var(--text-2xs)',
-            color: 'var(--muted)',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius-md)',
-            padding: 'var(--space-3)',
-            marginBottom: 'var(--space-6)',
-            textAlign: 'left',
-            overflowX: 'auto',
-            whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word',
-          }}>
-            {error.message}
-          </pre>
-        )}
-
-        <button
-          onClick={onReload}
-          style={{
-            padding: 'var(--space-2) var(--space-6)',
-            borderRadius: 'var(--radius-md)',
-            background: 'var(--accent)',
-            color: '#fff',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: 'var(--text-sm)',
-            fontWeight: 'var(--fw-medium)',
-            letterSpacing: '0.02em',
-          }}
-        >
-          {t.reloadPage}
-        </button>
-      </div>
-    </m.div>
-  );
+/**
+ * ErrorBoundary can't use hooks, so read the language directly from
+ * localStorage (set by SettingsProvider). Default to English if missing.
+ */
+function readLang(): Lang {
+  try {
+    const v = localStorage.getItem('trinity_lang');
+    return v === 'he' ? 'he' : 'en';
+  } catch {
+    return 'en';
+  }
 }
 
-/* ── Error Boundary (class — required for getDerivedStateFromError) ─ */
+/* ── Error Boundary ──────────────────────────────────────────────── */
 interface ErrorBoundaryState { hasError: boolean; error?: Error }
 
 class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
@@ -128,57 +34,79 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
   render() {
     if (this.state.hasError) {
+      const lang = readLang();
+      const t = translations[lang];
+      const isRtl = lang === 'he';
       return (
-        <ErrorFallback
-          error={this.state.error}
-          onReload={() => window.location.reload()}
-        />
+        <div className="nx-error-boundary" role="alert" aria-live="assertive" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="nx-error-boundary__card">
+            <div className="nx-error-boundary__icon" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <h2 className="nx-error-boundary__title">{t.ebTitle}</h2>
+            <p className="nx-error-boundary__desc">{t.ebDesc}</p>
+            {this.state.error?.message && (
+              <details className="nx-error-boundary__details">
+                <summary>{t.ebDetails}</summary>
+                <pre>{this.state.error.message}</pre>
+              </details>
+            )}
+            <div className="nx-error-boundary__actions">
+              <button
+                type="button"
+                className="nx-error-boundary__btn nx-error-boundary__btn--primary"
+                onClick={() => window.location.reload()}
+              >
+                {t.ebReload}
+              </button>
+              <button
+                type="button"
+                className="nx-error-boundary__btn"
+                onClick={() => this.setState({ hasError: false, error: undefined })}
+              >
+                {t.ebRetry}
+              </button>
+            </div>
+          </div>
+        </div>
       );
     }
     return this.props.children;
   }
 }
 
-function App() {
-  const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt, wsAttempts } = useMarketData();
-  const settingsCtx = React.useContext(SettingsContext);
-  const tApp = settingsCtx?.t ?? translations.en;
+function AppShell() {
+  const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt } = useMarketData();
+  const { t } = useSettings();
 
   return (
-    <LazyMotion features={domAnimation}>
-      <ErrorBoundary>
-        <div className="App min-h-screen bg-slate-900">
-          {/* RateBridge status beam — stretches full width at very top */}
-          <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
-          {/* API connectivity error — shown when all REST poll requests fail */}
-          {data.fetchError && (
-            <div
-              role="alert"
-              aria-live="polite"
-              style={{
-                background: 'rgba(239,68,68,0.1)',
-                borderBottom: '1px solid rgba(239,68,68,0.3)',
-                color: '#f87171',
-                padding: '7px 16px',
-                fontSize: '13px',
-                textAlign: 'center',
-                letterSpacing: '0.01em',
-              }}
-            >
-              ⚠ {data.fetchError} — {tApp.displayingLastKnownData}
-            </div>
-          )}
-          <Dashboard
-            data={data}
-            pnlHours={pnlHours}
-            onPnlHoursChange={handlePnlHoursChange}
-            wsConnection={wsConnection}
-            lastWsMessageAt={lastWsMessageAt}
-            wsAttempts={wsAttempts}
-          />
-        </div>
-      </ErrorBoundary>
-    </LazyMotion>
+    <div className="App min-h-screen bg-slate-900">
+      {/* Skip-to-content link — first tabbable element for keyboard users */}
+      <a href="#main-content" className="nx-skip-link">
+        {t.ksSkipToContent}
+      </a>
+      {/* RateBridge status beam — stretches full width at very top */}
+      <div className={`status-beam ${data.status.bot_running ? 'status-beam--running' : 'status-beam--stopped'}`} />
+      <Dashboard
+        data={data}
+        pnlHours={pnlHours}
+        onPnlHoursChange={handlePnlHoursChange}
+        wsConnection={wsConnection}
+        lastWsMessageAt={lastWsMessageAt}
+      />
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
   );
 }
 

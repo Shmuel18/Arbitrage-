@@ -274,6 +274,64 @@ export interface Translations {
 
   // Countdown
   countdownNow: string;
+
+  // Alert Bell
+  alertsTitle: string;
+  alertsNew: string;
+  alertsMarkAllRead: string;
+  alertsEmpty: string;
+  alertsEmptyUnread: string;
+  alertsEmptyCritical: string;
+  alertsFooter: string;
+  alertsFilterAll: string;
+  alertsFilterUnread: string;
+  alertsFilterCritical: string;
+  alertsToday: string;
+  alertsYesterday: string;
+  alertsEarlier: string;
+  alertSeverityCritical: string;
+  alertSeverityWarning: string;
+  alertSeverityInfo: string;
+  timeJustNow: string;
+  timeSecondsAgo: string;
+  timeMinutesAgo: string;
+  timeHoursAgo: string;
+  timeDaysAgo: string;
+
+  // Keyboard shortcuts
+  ksTitle: string;
+  ksGroupGeneral: string;
+  ksGroupNavigate: string;
+  ksOpenHelp: string;
+  ksCloseDialog: string;
+  ksToggleTheme: string;
+  ksDashboard: string;
+  ksPositions: string;
+  ksOpportunities: string;
+  ksTrades: string;
+  ksBalances: string;
+  ksLogs: string;
+  ksFooter: string;
+  ksCloseBtn: string;
+  ksSkipToContent: string;
+
+  // Error boundary (new)
+  ebTitle: string;
+  ebDesc: string;
+  ebDetails: string;
+  ebReload: string;
+  ebRetry: string;
+
+  // Header / mobile
+  hMenuOpen: string;
+  hDetails: string;
+  hDetailsToggleLabel: string;
+
+  // Empty state
+  esScanning: string;
+
+  // Referenced by TradeDetailModal but not previously declared
+  scannerSpread: string;
 }
 
 const en: Translations = {
@@ -538,6 +596,63 @@ const en: Translations = {
 
   // Countdown
   countdownNow: '⚡ NOW',
+
+  // Alert Bell
+  alertsTitle: 'Notifications',
+  alertsNew: 'new',
+  alertsMarkAllRead: 'Mark all read',
+  alertsEmpty: 'No notifications yet',
+  alertsEmptyUnread: 'No unread notifications',
+  alertsEmptyCritical: 'No critical alerts',
+  alertsFooter: '{count} total alerts',
+  alertsFilterAll: 'All',
+  alertsFilterUnread: 'Unread',
+  alertsFilterCritical: 'Critical',
+  alertsToday: 'Today',
+  alertsYesterday: 'Yesterday',
+  alertsEarlier: 'Earlier',
+  alertSeverityCritical: 'Critical',
+  alertSeverityWarning: 'Warning',
+  alertSeverityInfo: 'Info',
+  timeJustNow: 'just now',
+  timeSecondsAgo: '{count}s ago',
+  timeMinutesAgo: '{count}m ago',
+  timeHoursAgo: '{count}h ago',
+  timeDaysAgo: '{count}d ago',
+
+  // Keyboard shortcuts
+  ksTitle: 'Keyboard shortcuts',
+  ksGroupGeneral: 'General',
+  ksGroupNavigate: 'Navigate',
+  ksOpenHelp: 'Open this help',
+  ksCloseDialog: 'Close dialog / drawer',
+  ksToggleTheme: 'Toggle light/dark theme',
+  ksDashboard: 'Dashboard',
+  ksPositions: 'Active Positions',
+  ksOpportunities: 'Live Opportunities',
+  ksTrades: 'Recent Trades',
+  ksBalances: 'Exchange Portfolio',
+  ksLogs: 'System Log',
+  ksFooter: 'Press {key} to open this anywhere · {esc} to close',
+  ksCloseBtn: 'Close shortcuts help',
+  ksSkipToContent: 'Skip to main content',
+
+  // Error boundary (new)
+  ebTitle: 'Something went wrong',
+  ebDesc: 'The dashboard encountered an unexpected error. Your data is safe — this is only a display issue.',
+  ebDetails: 'Technical details',
+  ebReload: 'Reload dashboard',
+  ebRetry: 'Try again',
+
+  // Header / mobile
+  hMenuOpen: 'Open navigation menu',
+  hDetails: 'Details',
+  hDetailsToggleLabel: 'Toggle detailed status',
+
+  // Empty state
+  esScanning: 'SCANNING MARKETS',
+
+  scannerSpread: 'Scanner spread',
 };
 
 const he: Translations = {
@@ -802,6 +917,63 @@ const he: Translations = {
 
   // Countdown
   countdownNow: '⚡ עכשיו',
+
+  // Alert Bell
+  alertsTitle: 'התראות',
+  alertsNew: 'חדשות',
+  alertsMarkAllRead: 'סמן הכל כנקרא',
+  alertsEmpty: 'אין התראות עדיין',
+  alertsEmptyUnread: 'אין התראות שלא נקראו',
+  alertsEmptyCritical: 'אין התראות קריטיות',
+  alertsFooter: 'סך הכל {count} התראות',
+  alertsFilterAll: 'הכל',
+  alertsFilterUnread: 'לא נקראו',
+  alertsFilterCritical: 'קריטיות',
+  alertsToday: 'היום',
+  alertsYesterday: 'אתמול',
+  alertsEarlier: 'קודם',
+  alertSeverityCritical: 'קריטי',
+  alertSeverityWarning: 'אזהרה',
+  alertSeverityInfo: 'מידע',
+  timeJustNow: 'עכשיו',
+  timeSecondsAgo: 'לפני {count} שניות',
+  timeMinutesAgo: 'לפני {count} דקות',
+  timeHoursAgo: 'לפני {count} שעות',
+  timeDaysAgo: 'לפני {count} ימים',
+
+  // Keyboard shortcuts
+  ksTitle: 'קיצורי מקלדת',
+  ksGroupGeneral: 'כללי',
+  ksGroupNavigate: 'ניווט',
+  ksOpenHelp: 'פתיחת עזרה זו',
+  ksCloseDialog: 'סגירת דיאלוג / מגירה',
+  ksToggleTheme: 'החלפת ערכת נושא',
+  ksDashboard: 'לוח מחוונים',
+  ksPositions: 'פוזיציות פעילות',
+  ksOpportunities: 'הזדמנויות חיות',
+  ksTrades: 'עסקאות אחרונות',
+  ksBalances: 'תיק בורסה',
+  ksLogs: 'יומן מערכת',
+  ksFooter: 'לחץ {key} כדי לפתוח מכל מקום · {esc} לסגירה',
+  ksCloseBtn: 'סגור עזרת קיצורים',
+  ksSkipToContent: 'דלג לתוכן הראשי',
+
+  // Error boundary (new)
+  ebTitle: 'משהו השתבש',
+  ebDesc: 'הלוח נתקל בשגיאה בלתי צפויה. הנתונים שלך בטוחים — זו בעיית תצוגה בלבד.',
+  ebDetails: 'פרטים טכניים',
+  ebReload: 'טעינה מחדש',
+  ebRetry: 'נסה שוב',
+
+  // Header / mobile
+  hMenuOpen: 'פתיחת תפריט ניווט',
+  hDetails: 'פרטים',
+  hDetailsToggleLabel: 'הצג/הסתר פרטי סטטוס',
+
+  // Empty state
+  esScanning: 'סורק שווקים',
+
+  scannerSpread: 'ספרד סורק',
 };
 
 export const translations: Record<Lang, Translations> = { en, he };

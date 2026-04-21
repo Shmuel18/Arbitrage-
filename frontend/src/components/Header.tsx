@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, BotStatus } from '../types';
 import { useSettings } from '../context/SettingsContext';
 import { WsConnectionState } from '../services/websocket';
@@ -6,28 +6,62 @@ import AlertBell from './AlertBell';
 
 interface HeaderProps {
   botStatus: BotStatus;
-  alerts: Alert[];
+  alerts?: Alert[];
   lastFetchedAt?: number;
   wsConnection: WsConnectionState;
   lastWsMessageAt?: number | null;
-  /** Current reconnect attempt (1-based). 0 = not reconnecting. */
-  wsAttempts?: number;
+  onMobileMenuToggle?: () => void;
 }
+
+/* ── Icons — stroke-based, consistent with Sidebar ─────────────── */
+const IconMenu = () => (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+const IconSun = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+  </svg>
+);
+const IconMoon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+  </svg>
+);
+const IconChevron = ({ open }: { open: boolean }) => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}
+  >
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
 
 const Header: React.FC<HeaderProps> = React.memo(({
   botStatus,
-  alerts,
+  alerts = [],
   lastFetchedAt,
   wsConnection,
   lastWsMessageAt,
-  wsAttempts = 0,
+  onMobileMenuToggle,
 }) => {
   const { t, lang, setLang, theme, setTheme } = useSettings();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const secsRef = useRef<HTMLElement>(null);
   const wsSecsRef = useRef<HTMLElement>(null);
   const wsAgePillRef = useRef<HTMLDivElement>(null);
   const stalePillRef = useRef<HTMLDivElement>(null);
-  const heartbeatRef = useRef<SVGSVGElement>(null);
   const startRef = useRef(Date.now());
   const wsStartRef = useRef<number>(Date.now());
 
@@ -40,15 +74,6 @@ const Header: React.FC<HeaderProps> = React.memo(({
   useEffect(() => {
     if (!wsAgePillRef.current) return;
     wsAgePillRef.current.className = 'nx-health-pill nx-health-pill--ok';
-  }, [lastWsMessageAt]);
-
-  // Heartbeat pulse: direct DOM class toggle on every WS message — zero React re-render.
-  useEffect(() => {
-    const el = heartbeatRef.current;
-    if (!el) return;
-    el.classList.remove('hb-pulse');
-    void el.getBoundingClientRect(); // force reflow so animation restarts
-    el.classList.add('hb-pulse');
   }, [lastWsMessageAt]);
 
   // Update DOM directly every second — no React re-render
@@ -83,88 +108,93 @@ const Header: React.FC<HeaderProps> = React.memo(({
       ? 'nx-health-pill nx-health-pill--warn'
       : 'nx-health-pill nx-health-pill--down';
 
-  const wsConnectionLabel =
-    wsConnection === 'connected'
-      ? t.wsConnected
-      : wsConnection === 'reconnecting'
-      ? t.wsReconnecting
-      : t.wsDisconnected;
-
-  // Stable toggle callbacks — functional updater form avoids capturing
-  // stale lang/theme values while keeping the dep array minimal.
-  const toggleLang  = useCallback(() => setLang(lang   === 'en'   ? 'he'    : 'en'),    [lang,  setLang]);
-  const toggleTheme = useCallback(() => setTheme(theme === 'dark' ? 'light' : 'dark'), [theme, setTheme]);
+  const toggleLang = () => setLang(lang === 'en' ? 'he' : 'en');
+  const toggleTheme = () => setTheme(theme === 'dark' ? 'light' : 'dark');
 
   return (
     <header className="top-bar">
       <div className="top-bar-left">
+        {/* Mobile hamburger — hidden on desktop via CSS */}
+        <button
+          type="button"
+          className="nx-topbar-btn nx-mobile-menu-btn"
+          onClick={onMobileMenuToggle}
+          aria-label={t.hMenuOpen}
+        >
+          <IconMenu />
+        </button>
+
+        {/* ── Primary status: always visible ────────── */}
         <div className={`status-badge ${botStatus.bot_running ? 'status-badge--running' : 'status-badge--stopped'}`}>
           <span className="status-dot" />
           {botStatus.bot_running ? t.running : t.stopped}
         </div>
 
         <div className="nx-info-pill">
-          {t.exchanges}: <strong>
-            {botStatus.connected_exchanges.length > 0
-              ? botStatus.connected_exchanges.join(', ')
-              : t.none}
-          </strong>
-        </div>
-
-        <div className="nx-info-pill">
           {t.positions}: <strong>{botStatus.active_positions}</strong>
         </div>
 
-        <div className="nx-info-pill">
-          {t.lastUpdated}: <strong ref={secsRef} style={{ display: 'inline-block', minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
-        </div>
-
         <div className={wsPillClass} title="WebSocket transport health">
-          <span className="nx-health-pill__dot" />
-          {t.wsPrefix}: {wsConnectionLabel}
-          {wsConnection === 'reconnecting' && wsAttempts > 0 && (
-            <span style={{ opacity: 0.7, marginInlineStart: 4 }}>
-              ({wsAttempts}/20)
-            </span>
-          )}
+          <span className="nx-health-pill__dot" />WS {wsConnection}
         </div>
 
-        <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
-          {t.wsAge} <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+        {/* ── Stale-data warning (only shown when relevant) ── */}
+        <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none' }} title="Data may be stale">
+          STALE DATA
         </div>
 
-        {/* Heartbeat: pulses on every WS message via direct DOM class toggle */}
-        <svg
-          ref={heartbeatRef}
-          className="nx-heartbeat"
-          width="28" height="16"
-          viewBox="0 0 28 16"
-          fill="none"
-          aria-hidden
+        {/* ── Secondary details: collapsible ────────── */}
+        <button
+          type="button"
+          className={`nx-details-toggle${detailsOpen ? ' nx-details-toggle--open' : ''}`}
+          onClick={() => setDetailsOpen((o) => !o)}
+          aria-expanded={detailsOpen}
+          aria-label={t.hDetailsToggleLabel}
         >
-          <polyline
-            points="0,8 4,8 6,2 8,14 10,4 12,12 14,8 28,8"
-            stroke="#10b981"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+          <span>{t.hDetails}</span>
+          <IconChevron open={detailsOpen} />
+        </button>
 
-        <div ref={stalePillRef} className="nx-health-pill nx-health-pill--down" style={{ display: 'none', animation: 'nx-stale-pulse 1.4s ease-in-out infinite', fontWeight: 700 }} title="Data may be stale — WebSocket silent for >20s">
-          ⚠ {t.staleData}
-        </div>
+        {detailsOpen && (
+          <div className="nx-details-group">
+            <div className="nx-info-pill">
+              {t.exchanges}: <strong>
+                {botStatus.connected_exchanges.length > 0
+                  ? botStatus.connected_exchanges.join(', ')
+                  : t.none}
+              </strong>
+            </div>
+
+            <div className="nx-info-pill">
+              {t.lastUpdated}: <strong ref={secsRef} style={{ display: 'inline-block', minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+            </div>
+
+            <div ref={wsAgePillRef} className="nx-health-pill nx-health-pill--ok" title="Time since last websocket message">
+              WS age: <strong ref={wsSecsRef} style={{ minWidth: '3.5ch', textAlign: 'right' }}>0s</strong>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="top-bar-right">
         <AlertBell alerts={alerts} />
 
-        <button onClick={toggleLang} className="nx-topbar-btn" title={t.language} aria-label={t.language}>
+        <button
+          onClick={toggleLang}
+          className="nx-topbar-btn"
+          aria-label={t.language}
+          title={t.language}
+        >
           {lang === 'en' ? 'עב' : 'EN'}
         </button>
 
-        <button onClick={toggleTheme} className="nx-topbar-btn" title={t.theme} aria-label={t.theme}>
-          {theme === 'dark' ? '☀️' : '🌙'}
+        <button
+          onClick={toggleTheme}
+          className="nx-topbar-btn"
+          aria-label={t.theme}
+          title={t.theme}
+        >
+          {theme === 'dark' ? <IconSun /> : <IconMoon />}
         </button>
       </div>
     </header>

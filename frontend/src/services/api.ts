@@ -31,6 +31,32 @@ if (readToken) {
   api.defaults.headers.common['X-Read-Token'] = readToken;
 }
 
+/**
+ * Telegram Mini App auth — when the dashboard is opened inside Telegram,
+ * TelegramProvider populates this singleton with the signed `initData`
+ * querystring. The request interceptor below attaches it to every call.
+ * Desktop (non-Mini-App) users skip this entirely and keep using the
+ * X-Read-Token header.
+ */
+let telegramInitData: string | null = null;
+export function setTelegramInitData(data: string | null): void {
+  telegramInitData = data;
+}
+api.interceptors.request.use((config) => {
+  if (telegramInitData) {
+    // Axios 1.x headers are AxiosHeaders instances; .set() works for both
+    // that and the plain object form used in older axios versions.
+    if (config.headers && typeof (config.headers as { set?: unknown }).set === 'function') {
+      (config.headers as unknown as { set: (k: string, v: string) => void }).set(
+        'X-Telegram-Init-Data', telegramInitData,
+      );
+    } else {
+      (config.headers as Record<string, string>)['X-Telegram-Init-Data'] = telegramInitData;
+    }
+  }
+  return config;
+});
+
 /* ── Response types ────────────────────────────────────────────── */
 export interface PositionsResponse { positions: Record<string, unknown>[] }
 export interface TradesResponse { trades: Trade[] }

@@ -307,6 +307,11 @@ class BroadcastService:
                             if trade_data.get("entry_basis_pct") is not None
                             else None
                         ),
+                        "price_spread_pct": (
+                            float(trade_data["price_spread_pct"]) / 100
+                            if trade_data.get("price_spread_pct") is not None
+                            else None
+                        ),
                         "exit_spread": None,
                         "price_pnl": float(trade_data.get("price_pnl") or 0),
                         "funding_net": float(trade_data.get("funding_net") or 0),

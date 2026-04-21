@@ -57,7 +57,7 @@ class TradingParams(BaseModel):
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
     basis_exit_buffer_pct: Decimal = Decimal("0.10")  # Basis-recovery exit requires cushion above entry basis
     min_basis_exit_pnl_pct: Decimal = Decimal("0.08")  # Soft basis exit requires minimum adjusted PnL after slippage buffer
-    max_hold_cycles_without_recovery: int = 3  # Max consecutive "stay for next cycle" holds with no basis recovery before force-exit
+    max_hold_hours: int = 24  # Absolute safety cap — force-close if held longer than this regardless of state
     min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
     liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
 
@@ -147,6 +147,53 @@ class LoggingConfig(BaseModel):
     log_balances_after_trade: bool = True
 
 
+class TelegramConfig(BaseModel):
+    """Telegram Bot notifications + Mini App auth.
+
+    Values are populated from env vars (see Config._env_overrides). The bot
+    token is always read from env — never from YAML — so it never lands in
+    source control. `enabled` is derived: if token + chat_id are both set
+    and non-dummy, the notifier activates automatically.
+    """
+    bot_token: Optional[SecretStr] = None
+    chat_id: Optional[str] = None
+    # Event switches — default ON so a correctly configured install "just works"
+    notify_trade_open: bool = True
+    notify_trade_close: bool = True
+    notify_daily_summary: bool = True
+    # Daily summary local hour (0-23) and minute. Default 23:55.
+    daily_summary_hour: int = 23
+    daily_summary_minute: int = 55
+    daily_summary_tz: str = "Asia/Jerusalem"
+    # Quiet hours: set to (hour24, hour24) — messages sent during this
+    # window use disable_notification=true so they don't wake you up.
+    # Example: (22, 8) = silent from 22:00 until 08:00.
+    silent_from_hour: Optional[int] = 22
+    silent_until_hour: Optional[int] = 8
+    # Mini App auth: whitelist of Telegram user IDs allowed to open the app.
+    # Empty list = allow anyone who can successfully validate initData
+    # (convenient during first setup, tighten later).
+    allowed_user_ids: List[int] = Field(default_factory=list)
+    # Public HTTPS URL where the built dashboard is hosted. Required only
+    # for the /menu command's WebApp button. Leave empty to run notifications
+    # alone (no Mini App launcher).
+    mini_app_url: Optional[str] = None
+
+    @property
+    def enabled(self) -> bool:
+        """Active when token + chat_id are set and neither is the literal
+        "dummy" placeholder shipped in .env.example."""
+        if not self.bot_token or not self.chat_id:
+            return False
+        token = self.bot_token.get_secret_value()
+        return bool(token) and token != "dummy" and self.chat_id != "dummy"
+
+    @property
+    def bot_token_plaintext(self) -> Optional[str]:
+        """Unwrap at the HTTP boundary only."""
+        return self.bot_token.get_secret_value() if self.bot_token else None
+
+
 # ── Master config ────────────────────────────────────────────────
 
 class Config(BaseSettings):
@@ -159,6 +206,7 @@ class Config(BaseSettings):
     risk_guard: RiskGuardConfig = Field(default_factory=RiskGuardConfig)
     redis: RedisConfig = Field(default_factory=RedisConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
     enabled_exchanges: List[str] = Field(default_factory=lambda: ["binance", "bybit"])
     exchanges: Dict[str, ExchangeConfig] = Field(default_factory=dict)
@@ -220,6 +268,31 @@ class Config(BaseSettings):
             }
         if v := os.getenv("LOG_LEVEL"):
             out.setdefault("logging", {})["level"] = v
+        # ── Telegram ──────────────────────────────────────────
+        tg: Dict[str, Any] = {}
+        if v := os.getenv("TELEGRAM_BOT_TOKEN"):
+            tg["bot_token"] = v
+        if v := os.getenv("TELEGRAM_CHAT_ID"):
+            tg["chat_id"] = v
+        if v := os.getenv("TELEGRAM_NOTIFY_OPEN"):
+            tg["notify_trade_open"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_NOTIFY_CLOSE"):
+            tg["notify_trade_close"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_NOTIFY_SUMMARY"):
+            tg["notify_daily_summary"] = v.lower() == "true"
+        if v := os.getenv("TELEGRAM_SUMMARY_HOUR"):
+            tg["daily_summary_hour"] = int(v)
+        if v := os.getenv("TELEGRAM_SUMMARY_MINUTE"):
+            tg["daily_summary_minute"] = int(v)
+        if v := os.getenv("TELEGRAM_SUMMARY_TZ"):
+            tg["daily_summary_tz"] = v
+        if v := os.getenv("TELEGRAM_ALLOWED_USER_IDS"):
+            # Comma-separated list of numeric IDs
+            tg["allowed_user_ids"] = [int(x.strip()) for x in v.split(",") if x.strip().isdigit()]
+        if v := os.getenv("TELEGRAM_MINI_APP_URL"):
+            tg["mini_app_url"] = v
+        if tg:
+            out["telegram"] = tg
         return out
 
     @staticmethod

@@ -33,7 +33,7 @@ trading_params:
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional
   exit_slippage_buffer_pct: 0.3 # Extra margin deducted from PnL before profit target check
   basis_recovery_timeout_minutes: 30 # After funding, wait up to 30min for price basis to recover
-  max_hold_cycles_without_recovery: 3 # Max consecutive "stay for next cycle" holds without basis recovery before force-exit
+  max_hold_hours: 24 # Absolute safety cap — force-close if held longer than this regardless of state
   basis_recovery_tolerance_pct: 0.10 # Allow basis to be 0.10% below entry and still exit (avoid waiting forever)
   min_hold_seconds: 120 # Minimum seconds before any exit fires (except liquidation) — prevents immediate exit on stale timestamps
   liquidation_safety_pct:

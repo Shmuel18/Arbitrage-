@@ -226,6 +226,11 @@ class StatusPublisher:
             "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
             "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
             "next_funding_ms": None,
+            "min_interval_hours": None,
+            "long_next_funding_ms": None,
+            "short_next_funding_ms": None,
+            "long_interval_hours": None,
+            "short_interval_hours": None,
             "entry_tier": trade.entry_tier,
         }
 
@@ -266,6 +271,13 @@ class StatusPublisher:
             pos_entry["current_short_rate"] = str(live_short["rate"])
             if live_long.get("next_timestamp"):
                 pos_entry["next_funding_ms"] = live_long["next_timestamp"]
+            pos_entry["long_next_funding_ms"] = live_long.get("next_timestamp")
+            pos_entry["short_next_funding_ms"] = live_short.get("next_timestamp")
+            _long_ih = live_long.get("interval_hours", 8)
+            _short_ih = live_short.get("interval_hours", 8)
+            pos_entry["long_interval_hours"] = _long_ih
+            pos_entry["short_interval_hours"] = _short_ih
+            pos_entry["min_interval_hours"] = min(_long_ih, _short_ih)
             # Pending funding estimate
             try:
                 _lr = float(live_long["rate"])

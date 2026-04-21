@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:
+    from src.notifications.telegram_notifier import TelegramNotifier
     from src.storage.redis_client import RedisClient
 
 logger = logging.getLogger("trinity.publisher")
@@ -21,13 +22,20 @@ logger = logging.getLogger("trinity.publisher")
 
 class APIPublisher:
     """Publishes bot data to Redis for web interface"""
-    
-    def __init__(self, redis_client: "RedisClient") -> None:
+
+    def __init__(
+        self,
+        redis_client: "RedisClient",
+        telegram: "TelegramNotifier | None" = None,
+    ) -> None:
         self.redis = redis_client
         self.start_time = datetime.now(timezone.utc)
         self._total_trades: int = 0
         self._winning_trades: int = 0
         self._total_realized_pnl: Decimal = Decimal("0")
+        # Optional Telegram fan-out. When None, publish_alert is
+        # indistinguishable from the pre-Telegram behavior.
+        self._telegram = telegram
     
     async def publish_status(self, running: bool, exchanges: List[str], positions_count: int, min_funding_spread: float = 0.5):
         """Publish bot status"""
@@ -193,4 +201,15 @@ class APIPublisher:
         # Also mirror to the signal tape so the log panel reflects the event.
         log_level = "CRITICAL" if severity == "critical" else "WARNING" if severity == "warning" else "INFO"
         await self.publish_log(log_level, message)
+
+        # Fan out to Telegram — strictly fire-and-forget so a slow/failed
+        # sendMessage never blocks the caller (which may be inside the
+        # hot trading path). Errors are swallowed inside send_alert().
+        if self._telegram is not None:
+            try:
+                asyncio.create_task(self._telegram.send_alert(entry))
+            except RuntimeError:
+                # No running loop (sync test context). Skip — Redis write
+                # above is the durable record; Telegram is best-effort.
+                pass
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time as _time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -156,8 +157,54 @@ class _FundingMixin(_FundingCacheMixin):
             except asyncio.CancelledError:
                 return
             except Exception as exc:
+                exc_str = str(exc)
+                msg = exc_str.lower()
+
+                # Bitget (and potentially other exchanges) reject subscriptions for
+                # delisted/non-existent symbols. Extract the offending symbol from
+                # the error message, remove it from the batch, and retry immediately
+                # rather than flooding logs and hammering the exchange.
+                if "doesn't exist" in msg or "does not exist" in msg or "does not have market" in msg:
+                    bad_inst: Optional[str] = None
+                    _m = re.search(r'"instId"\s*:\s*"([^"]+)"', exc_str)
+                    if not _m:
+                        _m = re.search(r'instId:([A-Z0-9]+)', exc_str)
+                    if not _m:
+                        # ccxt format: "exchange does not have market symbol FOO/USDT:USDT"
+                        _m = re.search(r'market symbol\s+([A-Z0-9]+/[A-Z0-9:]+)', exc_str)
+                    if _m:
+                        bad_inst = _m.group(1)  # e.g. "MBOXUSDT" or "ACN/USDT:USDT"
+                    if bad_inst:
+                        bad_resolved = next((s for s in resolved if bad_inst in s), None)
+                        if bad_resolved and bad_resolved in resolved:
+                            bad_idx = resolved.index(bad_resolved)
+                            bad_sym = symbols[bad_idx] if bad_idx < len(symbols) else bad_resolved
+                            resolved.remove(bad_resolved)
+                            if bad_sym in symbols:
+                                symbols.remove(bad_sym)
+                            # Clean ccxt's internal subscription state so the
+                            # symbol is NOT re-subscribed on WS reconnect.
+                            try:
+                                if hasattr(self._exchange, 'un_watch_ticker'):
+                                    await self._exchange.un_watch_ticker(bad_resolved)
+                            except Exception:
+                                pass  # best-effort cleanup; symbol is already removed from our list
+                            logger.warning(
+                                f"[{self.exchange_id}] Dropping delisted symbol {bad_sym} "
+                                f"({bad_inst}) from price WS — exchange rejected subscription",
+                                extra={"exchange": self.exchange_id},
+                            )
+                            if not resolved:
+                                logger.warning(
+                                    f"[{self.exchange_id}] All symbols removed from WS batch — stopping",
+                                    extra={"exchange": self.exchange_id},
+                                )
+                                return
+                            consecutive_failures = 0
+                            continue  # retry immediately without the bad symbol
+                    # Unknown "doesn't exist" format — fall through to normal handling
+
                 consecutive_failures += 1
-                msg = str(exc).lower()
                 if "not supported" in msg or "does not support" in msg:
                     self._ws_ticker_supported = False
                     if not self._ws_ticker_disabled_logged:

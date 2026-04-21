@@ -73,6 +73,7 @@ async def get_trades(
                 'size':                   f"${invested:,.0f}",
                 'entry_spread':           float(entry_edge) / 100 if entry_edge else None,
                 'entry_basis_pct':        float(t['entry_basis_pct']) / 100 if t.get('entry_basis_pct') is not None else None,
+                'price_spread_pct':       float(t['price_spread_pct']) / 100 if t.get('price_spread_pct') is not None else None,
                 'exit_spread':            None,  # not tracked at exit
                 # rich detail fields
                 'price_pnl':              price_pnl,

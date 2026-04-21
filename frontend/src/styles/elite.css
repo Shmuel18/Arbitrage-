@@ -1,23 +1,23 @@
 /* ═══════════════════════════════════════════════════════════════════
-   ELITE VISUAL SYSTEM — Apex Edition
-   Deep-space aesthetics for the apex-tier trading dashboard.
+   ELITE VISUAL SYSTEM — Precision Edition
+   Linear / Stripe / Apple aesthetic for the apex trading dashboard.
    All rules scoped to [data-theme="dark"] — zero light-mode impact.
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ── Ambient orb keyframes ───────────────────────────────────────── */
 @keyframes elite-orb-1 {
-  0%,  100% { transform: translate(0,    0px) scale(1);    }
-  33%        { transform: translate(70px, -50px) scale(1.12); }
-  66%        { transform: translate(-35px, 40px) scale(0.93); }
+  0%,  100% { transform: translate(0, 0px) scale(1); }
+  33%        { transform: translate(60px, -40px) scale(1.08); }
+  66%        { transform: translate(-28px, 32px) scale(0.95); }
 }
 @keyframes elite-orb-2 {
-  0%,  100% { transform: translate(0,    0px)  scale(1);    }
-  33%        { transform: translate(-60px, 55px) scale(1.06); }
-  66%        { transform: translate(45px, -25px) scale(1.12); }
+  0%,  100% { transform: translate(0, 0px) scale(1); }
+  33%        { transform: translate(-50px, 45px) scale(1.05); }
+  66%        { transform: translate(38px, -22px) scale(1.09); }
 }
 @keyframes elite-orb-3 {
-  0%,  100% { transform: translate(0,   0px)  scale(1);   }
-  50%        { transform: translate(35px, 70px) scale(0.88); }
+  0%,  100% { transform: translate(0, 0px) scale(1); }
+  50%        { transform: translate(28px, 55px) scale(0.92); }
 }
 
 /* ── Ambient background orbs ─────────────────────────────────────── */
@@ -27,8 +27,8 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  /* Noise grain texture for depth */
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+  /* Subtle noise grain */
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.025'/%3E%3C/svg%3E");
   background-size: 200px 200px;
   background-repeat: repeat;
 }
@@ -36,47 +36,49 @@
 [data-theme="dark"] .elite-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(90px);
+  filter: blur(110px);
   will-change: transform;
-  opacity: 0.6;
 }
 
 [data-theme="dark"] .elite-orb--1 {
-  width: 700px; height: 700px;
-  top: -180px; left: -120px;
+  width: 800px; height: 800px;
+  top: -220px; left: -160px;
+  opacity: 0.35;
   background: radial-gradient(circle at 40% 40%,
-    rgba(37, 99, 235, 0.14) 0%,
-    rgba(99, 102, 241, 0.06) 50%,
-    transparent 70%);
-  animation: elite-orb-1 20s ease-in-out infinite;
+    rgba(37, 99, 235, 0.18) 0%,
+    rgba(99, 102, 241, 0.08) 45%,
+    transparent 65%);
+  animation: elite-orb-1 22s ease-in-out infinite;
 }
 
 [data-theme="dark"] .elite-orb--2 {
-  width: 600px; height: 600px;
-  bottom: -80px; right: -80px;
+  width: 700px; height: 700px;
+  bottom: -100px; right: -100px;
+  opacity: 0.28;
   background: radial-gradient(circle at 60% 60%,
-    rgba(6, 182, 212, 0.12) 0%,
-    rgba(16, 185, 129, 0.04) 50%,
+    rgba(6, 182, 212, 0.14) 0%,
+    rgba(16, 185, 129, 0.05) 50%,
     transparent 70%);
-  animation: elite-orb-2 25s ease-in-out infinite;
+  animation: elite-orb-2 28s ease-in-out infinite;
 }
 
 [data-theme="dark"] .elite-orb--3 {
-  width: 500px; height: 500px;
-  top: 38%; left: 42%;
+  width: 550px; height: 550px;
+  top: 40%; left: 45%;
+  opacity: 0.22;
   background: radial-gradient(circle at 50% 50%,
-    rgba(139, 92, 246, 0.09) 0%,
+    rgba(139, 92, 246, 0.11) 0%,
     transparent 70%);
-  animation: elite-orb-3 30s ease-in-out infinite;
+  animation: elite-orb-3 32s ease-in-out infinite;
 }
 
 /* ── Content area background ─────────────────────────────────────── */
 [data-theme="dark"] .content-area {
   background:
-    radial-gradient(ellipse 80% 50% at 15% 0%,   rgba(37,  99, 235, 0.07) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 45% at 90% 100%,  rgba(6,  182, 212, 0.05) 0%, transparent 55%),
-    radial-gradient(ellipse 55% 40% at 50% 55%,   rgba(139, 92, 246, 0.04) 0%, transparent 60%),
-    linear-gradient(185deg, #04080f 0%, #020510 100%) !important;
+    radial-gradient(ellipse 70% 45% at 10% 0%,   rgba(37,  99, 235, 0.05) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 40% at 92% 100%,  rgba(6,  182, 212, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 38% at 52% 58%,   rgba(139, 92, 246, 0.03) 0%, transparent 58%),
+    linear-gradient(180deg, #07080d 0%, #06070b 100%) !important;
 }
 
 /* ── Ultra-premium cards ─────────────────────────────────────────── */
@@ -84,75 +86,25 @@
 [data-theme="dark"] .stat-card,
 [data-theme="dark"] .logs-container {
   background: linear-gradient(
-    150deg,
-    rgba(13, 20, 42, 0.88) 0%,
-    rgba(8, 14, 28, 0.92) 100%
+    155deg,
+    rgba(18, 20, 30, 0.90) 0%,
+    rgba(13, 14, 22, 0.94) 100%
   ) !important;
-  border: 1px solid rgba(96, 165, 250, 0.09) !important;
-  box-shadow:
-    0 1px 0  rgba(255, 255, 255, 0.035) inset,
-    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
-    0 4px 24px rgba(0, 0, 0, 0.45),
-    0 0 0 0.5px rgba(96, 165, 250, 0.04) !important;
-  backdrop-filter: blur(28px) saturate(200%) !important;
-  -webkit-backdrop-filter: blur(28px) saturate(200%) !important;
-  transition:
-    border-color 0.3s ease,
-    box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1) !important;
-}
-
-/* Holographic top-border for all generic .card */
-[data-theme="dark"] .card::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 8%; right: 8%;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(96, 165, 250, 0.45) 25%,
-    rgba(167, 139, 250, 0.4) 60%,
-    rgba(52, 211, 153, 0.3) 85%,
-    transparent 100%
-  );
-  pointer-events: none;
-}
-
-[data-theme="dark"] .card:hover {
-  border-color: rgba(96, 165, 250, 0.18) !important;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
-    0 14px 48px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(96, 165, 250, 0.1),
-    0 0 50px rgba(96, 165, 250, 0.05) !important;
-  transform: translateY(-2px) !important;
-}
-
-/* ── Stat cards (nx-xcard) ── */
-[data-theme="dark"] .nx-xcard {
-  background: linear-gradient(
-    145deg,
-    rgba(13, 20, 44, 0.88) 0%,
-    rgba(8, 14, 30, 0.93) 100%
-  ) !important;
-  border: 1px solid rgba(96, 165, 250, 0.09) !important;
+  border: 1px solid rgba(255, 255, 255, 0.065) !important;
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
-    0 6px 28px rgba(0, 0, 0, 0.42),
-    0 0 0 0.5px rgba(96, 165, 250, 0.05) !important;
-  backdrop-filter: blur(32px) saturate(210%) !important;
-  -webkit-backdrop-filter: blur(32px) saturate(210%) !important;
+    0 -1px 0 rgba(0, 0, 0, 0.3) inset,
+    0 4px 24px rgba(0, 0, 0, 0.44) !important;
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
   transition:
-    border-color 0.3s ease,
-    box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.3s cubic-bezier(0.22, 1, 0.36, 1) !important;
+    border-color 0.25s ease,
+    box-shadow 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.25s cubic-bezier(0.22, 1, 0.36, 1) !important;
 }
 
-/* Holographic top gradient line on stat cards */
-[data-theme="dark"] .nx-xcard::after {
+/* Subtle top highlight line — single color, not rainbow */
+[data-theme="dark"] .card::before {
   content: '';
   position: absolute;
   top: 0; left: 10%; right: 10%;
@@ -160,402 +112,131 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    rgba(96, 165, 250, 0.5) 30%,
-    rgba(167, 139, 250, 0.45) 65%,
-    rgba(52, 211, 153, 0.35) 88%,
+    rgba(255, 255, 255, 0.1) 30%,
+    rgba(255, 255, 255, 0.08) 70%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+[data-theme="dark"] .card:hover {
+  border-color: rgba(255, 255, 255, 0.11) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.055) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.3) inset,
+    0 8px 32px rgba(0, 0, 0, 0.48) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ── Stat cards (nx-xcard) — refined ── */
+[data-theme="dark"] .nx-xcard {
+  background: linear-gradient(
+    148deg,
+    rgba(17, 19, 30, 0.90) 0%,
+    rgba(12, 14, 22, 0.94) 100%
+  ) !important;
+  border: 1px solid rgba(255, 255, 255, 0.065) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.045) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.3) inset,
+    0 4px 20px rgba(0, 0, 0, 0.42) !important;
+  backdrop-filter: blur(28px) saturate(190%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(190%) !important;
+  transition:
+    border-color 0.25s ease,
+    box-shadow 0.25s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.25s cubic-bezier(0.22, 1, 0.36, 1) !important;
+}
+
+/* Accent-colored top hairline — per-card accent using CSS custom property */
+[data-theme="dark"] .nx-xcard::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 12%; right: 12%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--xcard-accent, #3b82f6) 55%, transparent) 35%,
+    color-mix(in srgb, var(--xcard-accent, #3b82f6) 40%, transparent) 65%,
     transparent 100%
   );
   pointer-events: none;
 }
 
 [data-theme="dark"] .nx-xcard:hover {
-  border-color: rgba(96, 165, 250, 0.20) !important;
+  border-color: rgba(255, 255, 255, 0.10) !important;
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.06) inset,
-    0 -1px 0 rgba(0, 0, 0, 0.35) inset,
-    0 16px 48px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(96, 165, 250, 0.12),
-    0 0 60px rgba(96, 165, 250, 0.07) !important;
-  transform: translateY(-3px) scale(1.008) !important;
+    0 1px 0 rgba(255, 255, 255, 0.055) inset,
+    0 -1px 0 rgba(0, 0, 0, 0.3) inset,
+    0 10px 36px rgba(0, 0, 0, 0.50),
+    0 0 0 0.5px color-mix(in srgb, var(--xcard-accent, #3b82f6) 18%, transparent) !important;
+  transform: translateY(-2px) !important;
 }
 
-/* ── Stat card large value glow ─────────────────────────────────── */
+/* ── Stat card values — clean near-white, no rainbow gradient ─────── */
 [data-theme="dark"] .xcard-value {
-  text-shadow: 0 0 24px rgba(96, 165, 250, 0.18);
+  text-shadow: none;
 }
 [data-theme="dark"] .nx-xcard-value {
-  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 50%, #93c5fd 100%) !important;
-  -webkit-background-clip: text !important;
-  -webkit-text-fill-color: transparent !important;
-  background-clip: text !important;
+  color: #f0f1f5 !important;
+  background: none !important;
+  -webkit-text-fill-color: #f0f1f5 !important;
+  text-shadow: none !important;
 }
 
-/* Main KPI hero value — extra large */
-[data-theme="dark"] .xcards-grid--primary .nx-xcard:first-child .xcard-value {
-  text-shadow: 0 0 40px rgba(96, 165, 250, 0.22);
-}
-
-/* ── PnL color values — neon glow ─────────────────────────────── */
-[data-theme="dark"] .pnl-positive {
-  color: #4ade80 !important;
-  text-shadow: 0 0 14px rgba(74, 222, 128, 0.45) !important;
-}
-[data-theme="dark"] .pnl-negative {
-  color: #f87171 !important;
-  text-shadow: 0 0 14px rgba(248, 113, 113, 0.4) !important;
-}
-[data-theme="dark"] .nx-pos-pnl--positive {
-  color: #4ade80 !important;
-  text-shadow: 0 0 12px rgba(74, 222, 128, 0.4) !important;
-}
-[data-theme="dark"] .nx-pos-pnl--negative {
-  color: #f87171 !important;
-  text-shadow: 0 0 12px rgba(248, 113, 113, 0.35) !important;
-}
-
-/* ── Sidebar active nav item ─────────────────────────────────────── */
-[data-theme="dark"] .sidebar-nav-item.active {
-  background: linear-gradient(
-    135deg,
-    rgba(37, 99, 235, 0.18) 0%,
-    rgba(99, 102, 241, 0.12) 100%
-  ) !important;
-  border: 1px solid rgba(96, 165, 250, 0.16) !important;
-  color: #e2e8f0 !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 2px 12px rgba(37, 99, 235, 0.18),
-    0 0 20px rgba(37, 99, 235, 0.05) !important;
-}
-[data-theme="dark"] .sidebar-nav-item.active .nav-icon {
-  color: #60a5fa !important;
-  filter: drop-shadow(0 0 6px rgba(96, 165, 250, 0.55)) !important;
-}
-
-/* Nav item hover */
-[data-theme="dark"] .sidebar-nav-item:hover:not(.active) {
-  background: rgba(96, 165, 250, 0.07) !important;
-  border: 1px solid rgba(96, 165, 250, 0.09) !important;
-  color: #c7d7f0 !important;
-}
-[data-theme="dark"] .sidebar-nav-item:hover:not(.active) .nav-icon {
-  color: #94b8e0 !important;
-}
-
-/* Active indicator: left-side glowing bar */
-[data-theme="dark"] .elite-nav-indicator {
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #60a5fa 0%, #818cf8 50%, #34d399 100%);
-  box-shadow:
-    0 0 8px rgba(96, 165, 250, 0.7),
-    0 0 20px rgba(96, 165, 250, 0.35),
-    0 0 40px rgba(96, 165, 250, 0.15);
-}
-
-/* Sidebar background */
-[data-theme="dark"] .sidebar {
-  background: linear-gradient(
-    185deg,
-    #030612 0%,
-    #050c1c 60%,
-    #040a18 100%
-  ) !important;
-  border-right: 1px solid rgba(96, 165, 250, 0.07) !important;
-  box-shadow:
-    2px 0 40px rgba(0, 0, 0, 0.6),
-    inset -1px 0 0 rgba(96, 165, 250, 0.05) !important;
-}
-
-/* Sidebar logo pulsing bottom line */
-@keyframes elite-logo-pulse {
-  0%, 100% { opacity: 0.35; }
-  50%       { opacity: 0.8; }
-}
-
-[data-theme="dark"] .nx-sidebar-logo {
-  position: relative;
-}
-[data-theme="dark"] .nx-sidebar-logo::after {
-  content: '';
-  position: absolute;
-  bottom: 0; left: 18%; right: 18%;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(96, 165, 250, 0.55),
-    rgba(167, 139, 250, 0.45),
-    transparent
-  );
-  animation: elite-logo-pulse 3.5s ease-in-out infinite;
-}
-
-/* ── Header glassmorphism ─────────────────────────────────────────── */
-[data-theme="dark"] .top-bar {
-  background: rgba(3, 6, 18, 0.78) !important;
-  backdrop-filter: blur(22px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(22px) saturate(180%) !important;
-  border-bottom: 1px solid rgba(96, 165, 250, 0.08) !important;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.025),
-    0 6px 20px rgba(0, 0, 0, 0.35) !important;
-}
-
-/* ── Status badges — neon ─────────────────────────────────────────── */
-@keyframes elite-status-pulse {
-  0%, 100% { opacity: 0.75; box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2); }
-  50%       { opacity: 1;    box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.1), 0 0 12px rgba(16, 185, 129, 0.4); }
-}
-
-[data-theme="dark"] .status-badge--running {
-  background: rgba(16, 185, 129, 0.10) !important;
-  border: 1px solid rgba(16, 185, 129, 0.32) !important;
-  color: #34d399 !important;
-  box-shadow:
-    0 0 16px rgba(16, 185, 129, 0.18),
-    inset 0 0 10px rgba(16, 185, 129, 0.05) !important;
-}
-[data-theme="dark"] .status-badge--stopped {
-  background: rgba(239, 68, 68, 0.09) !important;
-  border: 1px solid rgba(239, 68, 68, 0.28) !important;
-  color: #f87171 !important;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.15) !important;
-}
-
-/* Status dot — pulsing ring */
-[data-theme="dark"] .status-badge--running .status-dot {
-  background: #10b981 !important;
-  box-shadow:
-    0 0 0 2px rgba(16, 185, 129, 0.25),
-    0 0 10px rgba(16, 185, 129, 0.6) !important;
-  animation: elite-status-pulse 2.5s ease-in-out infinite;
-}
-
-/* ── Health pills — neon style ────────────────────────────────────── */
-[data-theme="dark"] .nx-health-pill--ok {
-  background: rgba(16, 185, 129, 0.10) !important;
-  border-color: rgba(16, 185, 129, 0.32) !important;
-  color: #34d399 !important;
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.22) !important;
-}
-[data-theme="dark"] .nx-health-pill--warn {
-  background: rgba(245, 158, 11, 0.10) !important;
-  border-color: rgba(245, 158, 11, 0.32) !important;
-  color: #fbbf24 !important;
-  box-shadow: 0 0 10px rgba(245, 158, 11, 0.22) !important;
-}
-[data-theme="dark"] .nx-health-pill--down {
-  background: rgba(239, 68, 68, 0.10) !important;
-  border-color: rgba(239, 68, 68, 0.32) !important;
-  color: #f87171 !important;
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.22) !important;
-}
-
-/* ── Heartbeat glow animation ─────────────────────────────────────── */
-@keyframes elite-heartbeat {
-  0%   { opacity: 0.55; transform: scale(0.9);  filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.25)); }
-  50%  { opacity: 1;    transform: scale(1.12); filter: drop-shadow(0 0 12px rgba(96, 165, 250, 0.9));  }
-  100% { opacity: 0.55; transform: scale(0.9);  filter: drop-shadow(0 0 3px rgba(96, 165, 250, 0.25)); }
-}
-[data-theme="dark"] .hb-pulse {
-  animation: elite-heartbeat 0.65s ease-out !important;
-}
-
-/* ── Section / card titles — gradient text ────────────────────────── */
-[data-theme="dark"] .card-header,
-[data-theme="dark"] .section-title,
-[data-theme="dark"] .nx-card-title {
-  background: linear-gradient(90deg, #e2e8f0 0%, #94a3b8 100%);
-  -webkit-background-clip: text !important;
-  -webkit-text-fill-color: transparent !important;
-  background-clip: text !important;
-}
-
-/* ── Table upgrades ─────────────────────────────────────────────── */
-[data-theme="dark"] .corp-table thead th {
-  color: rgba(96, 165, 250, 0.45) !important;
-  background: rgba(4, 8, 20, 0.85) !important;
-  letter-spacing: 0.12em !important;
-  border-bottom: 1px solid rgba(96, 165, 250, 0.06) !important;
-}
-[data-theme="dark"] .corp-table tbody tr:hover td {
-  background: rgba(96, 165, 250, 0.04) !important;
-}
-[data-theme="dark"] .corp-table tbody td {
-  border-bottom-color: rgba(96, 165, 250, 0.04) !important;
-}
-
-/* ── Signal tape ────────────────────────────────────────────────── */
-[data-theme="dark"] .signal-tape-track {
-  border-top: 1px solid rgba(96, 165, 250, 0.07) !important;
-  border-bottom: 1px solid rgba(96, 165, 250, 0.07) !important;
-  background: rgba(3, 6, 18, 0.5) !important;
-  backdrop-filter: blur(10px) !important;
-}
-
-/* ── Elite scrollbar ────────────────────────────────────────────── */
-[data-theme="dark"] ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
-}
-[data-theme="dark"] ::-webkit-scrollbar-track {
-  background: rgba(4, 8, 16, 0.4);
-}
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: rgba(96, 165, 250, 0.16);
-  border-radius: 3px;
-}
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(96, 165, 250, 0.36);
-}
-
-/* ── Progress bars ──────────────────────────────────────────────── */
-[data-theme="dark"] .nx-progress-bar-fill {
-  box-shadow: 0 0 8px currentColor;
-}
-
-/* ── Error banner ───────────────────────────────────────────────── */
-[data-theme="dark"] .nx-error-banner {
-  background: rgba(239, 68, 68, 0.09) !important;
-  border: 1px solid rgba(239, 68, 68, 0.28) !important;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12) !important;
-}
-
-/* ── Position cards ─────────────────────────────────────────────── */
-[data-theme="dark"] .nx-pos-card {
-  background: linear-gradient(
-    148deg,
-    rgba(12, 20, 42, 0.88) 0%,
-    rgba(8, 14, 28, 0.92) 100%
-  ) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
-}
-[data-theme="dark"] .nx-pos-card:hover {
-  border-color: rgba(96, 165, 250, 0.16) !important;
-  box-shadow:
-    0 10px 36px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(96, 165, 250, 0.10),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
-  transform: translateY(-3px) !important;
-}
-
-/* ── Mode badge upgrade ─────────────────────────────────────────── */
-[data-theme="dark"] .nx-mode-badge {
-  letter-spacing: 0.07em;
-  font-weight: 700;
-}
-
-/* ── Stagger section reveal ─────────────────────────────────────── */
-.elite-section {
-  will-change: opacity, transform;
-}
-
-/* ── Info pill ──────────────────────────────────────────────────── */
-[data-theme="dark"] .nx-info-pill {
-  background: rgba(96, 165, 250, 0.08) !important;
-  border: 1px solid rgba(96, 165, 250, 0.14) !important;
-  color: #8dafd9 !important;
-}
-
-/* ── Version badge ──────────────────────────────────────────────── */
-[data-theme="dark"] .nx-sidebar-version {
-  color: rgba(96, 165, 250, 0.35) !important;
-  letter-spacing: 0.1em;
-}
-
-/* ── Opportunity / right panel cards ───────────────────────────── */
-[data-theme="dark"] .nx-opp-card,
-[data-theme="dark"] .nx-trade-row {
-  transition: background 0.2s ease, border-color 0.2s ease !important;
-}
-[data-theme="dark"] .nx-opp-card:hover {
-  background: rgba(37, 99, 235, 0.05) !important;
-  border-color: rgba(96, 165, 250, 0.12) !important;
-}
-
-/* ── Analytics panel ──────────────────────────────────────────── */
-[data-theme="dark"] .nx-analytics-tab--active {
-  background: rgba(37, 99, 235, 0.16) !important;
-  border: 1px solid rgba(96, 165, 250, 0.22) !important;
-  box-shadow: 0 0 14px rgba(37, 99, 235, 0.15) !important;
-}
-
-/* ── Watermark logo ─────────────────────────────────────────────── */
-[data-theme="dark"] .logo-watermark {
-  opacity: 0.025 !important;
-  filter: blur(1px) !important;
-}
-
-/* ── Stat card icon — accent glow halo in dark mode ────────────── */
+/* ── Stat card icon — accent glow halo ─────────────────────────── */
 [data-theme="dark"] .xcard-icon {
-  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 18%, transparent) !important;
-  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 28%, transparent) !important;
-  box-shadow: 0 0 16px color-mix(in srgb, var(--xcard-accent, #3b82f6) 30%, transparent) !important;
+  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 14%, transparent) !important;
+  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 22%, transparent) !important;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--xcard-accent, #3b82f6) 22%, transparent) !important;
 }
 [data-theme="dark"] .xcard:hover .xcard-icon {
-  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 26%, transparent) !important;
-  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 38%, transparent) !important;
-  box-shadow: 0 0 22px color-mix(in srgb, var(--xcard-accent, #3b82f6) 40%, transparent) !important;
+  background: color-mix(in srgb, var(--xcard-accent, #3b82f6) 20%, transparent) !important;
+  border-color: color-mix(in srgb, var(--xcard-accent, #3b82f6) 32%, transparent) !important;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--xcard-accent, #3b82f6) 32%, transparent) !important;
 }
 
-/* ── Tick-up: number goes green + pulse glow ────────────────────── */
+/* ── Tick-up: number goes green ─────────────────────────────────── */
 [data-theme="dark"] .nx-xcard-value--tick-up {
   color: #4ade80 !important;
-  text-shadow: 0 0 16px rgba(74, 222, 128, 0.55) !important;
+  text-shadow: 0 0 14px rgba(74, 222, 128, 0.45) !important;
   -webkit-text-fill-color: #4ade80 !important;
 }
-/* ── Tick-down: number goes red + pulse glow ────────────────────── */
+/* ── Tick-down: number goes red ─────────────────────────────────── */
 [data-theme="dark"] .nx-xcard-value--tick-down {
   color: #f87171 !important;
-  text-shadow: 0 0 16px rgba(248, 113, 113, 0.5) !important;
+  text-shadow: 0 0 14px rgba(248, 113, 113, 0.42) !important;
   -webkit-text-fill-color: #f87171 !important;
 }
 
-/* ── Heartbeat SVG — enhanced glow ─────────────────────────────── */
-[data-theme="dark"] .nx-heartbeat polyline {
-  stroke: #34d399;
-  filter: drop-shadow(0 0 4px rgba(52, 211, 153, 0.5));
+/* ── PnL color values ─────────────────────────────────────────── */
+[data-theme="dark"] .pnl-positive {
+  color: #4ade80 !important;
+  text-shadow: 0 0 12px rgba(74, 222, 128, 0.35) !important;
+}
+[data-theme="dark"] .pnl-negative {
+  color: #f87171 !important;
+  text-shadow: 0 0 12px rgba(248, 113, 113, 0.32) !important;
+}
+[data-theme="dark"] .nx-pos-pnl--positive {
+  color: #4ade80 !important;
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.35) !important;
+}
+[data-theme="dark"] .nx-pos-pnl--negative {
+  color: #f87171 !important;
+  text-shadow: 0 0 10px rgba(248, 113, 113, 0.30) !important;
 }
 
-/* ── Top-bar control buttons ────────────────────────────────────── */
-[data-theme="dark"] .nx-topbar-btn {
-  background: rgba(96, 165, 250, 0.07) !important;
-  border: 1px solid rgba(96, 165, 250, 0.12) !important;
-  color: #94b8d6 !important;
-  transition: all 0.2s ease !important;
-}
-[data-theme="dark"] .nx-topbar-btn:hover {
-  background: rgba(96, 165, 250, 0.14) !important;
-  border-color: rgba(96, 165, 250, 0.24) !important;
-  color: #e2e8f0 !important;
-  box-shadow: 0 0 12px rgba(96, 165, 250, 0.18) !important;
-}
-
-/* ── Live badge on stat cards ───────────────────────────────────── */
-[data-theme="dark"] .xcard-live {
-  color: #34d399 !important;
-  text-shadow: 0 0 8px rgba(52, 211, 153, 0.45) !important;
-}
-[data-theme="dark"] .xcard-live-dot {
-  background: #10b981 !important;
-  box-shadow: 0 0 6px rgba(16, 185, 129, 0.7) !important;
-}
-
-/* ── Sidebar footer version ─────────────────────────────────────── */
-[data-theme="dark"] .sidebar-footer {
-  border-top: 1px solid rgba(96, 165, 250, 0.06) !important;
-}
-
-/* ── Section header line-reveal ─────────────────────────────────── */
-@keyframes elite-line-reveal {
-  from { transform: scaleX(0); transform-origin: left center; }
-  to   { transform: scaleX(1); transform-origin: left center; }
+/* ── Section / card titles — clean, no gradient text ─────────── */
+[data-theme="dark"] .card-header,
+[data-theme="dark"] .section-title,
+[data-theme="dark"] .nx-card-title {
+  color: #f0f1f5 !important;
+  background: none !important;
+  -webkit-text-fill-color: #f0f1f5 !important;
+  background-clip: unset !important;
+  -webkit-background-clip: unset !important;
 }
 
 [data-theme="dark"] .card-header,
@@ -572,8 +253,294 @@
   width: 100%;
   margin-top: 6px;
   height: 1px;
-  background: linear-gradient(90deg, rgba(96, 165, 250, 0.28), transparent);
-  animation: elite-line-reveal 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.07), transparent);
+}
+
+/* ── Sidebar — Linear-inspired minimal nav ───────────────────────── */
+[data-theme="dark"] .sidebar {
+  background: linear-gradient(
+    180deg,
+    #04050a 0%,
+    #05060b 100%
+  ) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.055) !important;
+  box-shadow: 1px 0 0 rgba(255, 255, 255, 0.02) !important;
+}
+
+/* Sidebar logo bottom border */
+[data-theme="dark"] .nx-sidebar-logo {
+  position: relative;
+}
+[data-theme="dark"] .nx-sidebar-logo::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 20%; right: 20%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.1),
+    transparent
+  );
+}
+
+/* Logo title — clean white, no rainbow gradient */
+[data-theme="dark"] .sidebar-logo h1,
+[data-theme="dark"] .nx-sidebar-title {
+  color: #f0f1f5 !important;
+  background: none !important;
+  -webkit-text-fill-color: #f0f1f5 !important;
+  filter: none !important;
+  letter-spacing: 0.1em;
+}
+
+/* Nav item — hover: very subtle bg lift */
+[data-theme="dark"] .sidebar-nav-item:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.045) !important;
+  border: 1px solid rgba(255, 255, 255, 0.055) !important;
+  color: #d4d6e0 !important;
+}
+[data-theme="dark"] .sidebar-nav-item:hover:not(.active) .nav-icon {
+  color: #a0a4b8 !important;
+}
+
+/* Active nav item — refined: subtle bg + accent border, no glow */
+[data-theme="dark"] .sidebar-nav-item.active {
+  background: rgba(79, 112, 232, 0.12) !important;
+  border: 1px solid rgba(79, 112, 232, 0.22) !important;
+  color: #f0f1f5 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+[data-theme="dark"] .sidebar-nav-item.active .nav-icon {
+  color: #7fa7f8 !important;
+  filter: none !important;
+}
+
+/* Active indicator — left-side glowing bar */
+[data-theme="dark"] .elite-nav-indicator {
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(180deg, #7fa7f8 0%, #a78bfa 100%);
+  box-shadow:
+    0 0 6px rgba(127, 167, 248, 0.55),
+    0 0 16px rgba(127, 167, 248, 0.25);
+}
+
+/* Sidebar footer */
+[data-theme="dark"] .sidebar-footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.055) !important;
+}
+[data-theme="dark"] .nx-sidebar-version {
+  color: rgba(255, 255, 255, 0.2) !important;
+  letter-spacing: 0.1em;
+}
+
+/* ── Header glassmorphism ─────────────────────────────────────────── */
+[data-theme="dark"] .top-bar {
+  background: rgba(5, 6, 10, 0.82) !important;
+  backdrop-filter: blur(20px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(160%) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055) !important;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.03),
+    0 4px 16px rgba(0, 0, 0, 0.32) !important;
+}
+
+/* ── Status badges ─────────────────────────────────────────────────── */
+@keyframes elite-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.15); }
+  50%       { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.08), 0 0 10px rgba(34, 197, 94, 0.3); }
+}
+
+[data-theme="dark"] .status-badge--running {
+  background: rgba(34, 197, 94, 0.09) !important;
+  border: 1px solid rgba(34, 197, 94, 0.28) !important;
+  color: #4ade80 !important;
+  box-shadow: 0 0 12px rgba(34, 197, 94, 0.12) !important;
+}
+[data-theme="dark"] .status-badge--stopped {
+  background: rgba(239, 68, 68, 0.09) !important;
+  border: 1px solid rgba(239, 68, 68, 0.25) !important;
+  color: #f87171 !important;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.12) !important;
+}
+
+[data-theme="dark"] .status-badge--running .status-dot {
+  background: #22c55e !important;
+  box-shadow:
+    0 0 0 2px rgba(34, 197, 94, 0.2),
+    0 0 8px rgba(34, 197, 94, 0.5) !important;
+  animation: elite-status-pulse 2.8s ease-in-out infinite;
+}
+
+/* ── Health pills ──────────────────────────────────────────────────── */
+[data-theme="dark"] .nx-health-pill--ok {
+  background: rgba(34, 197, 94, 0.08) !important;
+  border-color: rgba(34, 197, 94, 0.26) !important;
+  color: #4ade80 !important;
+  box-shadow: none !important;
+}
+[data-theme="dark"] .nx-health-pill--warn {
+  background: rgba(245, 158, 11, 0.08) !important;
+  border-color: rgba(245, 158, 11, 0.26) !important;
+  color: #fbbf24 !important;
+  box-shadow: none !important;
+}
+[data-theme="dark"] .nx-health-pill--down {
+  background: rgba(239, 68, 68, 0.08) !important;
+  border-color: rgba(239, 68, 68, 0.26) !important;
+  color: #f87171 !important;
+  box-shadow: none !important;
+}
+
+/* ── Heartbeat glow animation ─────────────────────────────────────── */
+@keyframes elite-heartbeat {
+  0%   { opacity: 0.5;  transform: scale(0.92); filter: drop-shadow(0 0 2px rgba(127, 167, 248, 0.2)); }
+  50%  { opacity: 1;    transform: scale(1.10); filter: drop-shadow(0 0 10px rgba(127, 167, 248, 0.7)); }
+  100% { opacity: 0.5;  transform: scale(0.92); filter: drop-shadow(0 0 2px rgba(127, 167, 248, 0.2)); }
+}
+[data-theme="dark"] .hb-pulse {
+  animation: elite-heartbeat 0.6s ease-out !important;
+}
+
+/* ── Heartbeat SVG ─────────────────────────────────────────────── */
+[data-theme="dark"] .nx-heartbeat polyline {
+  stroke: #4ade80;
+  filter: drop-shadow(0 0 3px rgba(74, 222, 128, 0.45));
+}
+
+/* ── Top-bar control buttons ────────────────────────────────────── */
+[data-theme="dark"] .nx-topbar-btn {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  color: #8b8fa5 !important;
+  transition: all 0.2s ease !important;
+}
+[data-theme="dark"] .nx-topbar-btn:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: #f0f1f5 !important;
+  box-shadow: none !important;
+}
+
+/* ── Table upgrades ─────────────────────────────────────────────── */
+[data-theme="dark"] .corp-table thead th {
+  color: rgba(139, 143, 165, 0.65) !important;
+  background: rgba(7, 8, 13, 0.92) !important;
+  letter-spacing: 0.10em !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+[data-theme="dark"] .corp-table tbody tr:hover td {
+  background: rgba(255, 255, 255, 0.025) !important;
+}
+[data-theme="dark"] .corp-table tbody td {
+  border-bottom-color: rgba(255, 255, 255, 0.038) !important;
+}
+
+/* ── Signal tape ────────────────────────────────────────────────── */
+[data-theme="dark"] .signal-tape-track {
+  border-top: 1px solid rgba(255, 255, 255, 0.055) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055) !important;
+  background: rgba(5, 6, 10, 0.55) !important;
+  backdrop-filter: blur(10px) !important;
+}
+
+/* ── Premium scrollbar ────────────────────────────────────────── */
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 3px;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Progress bars ──────────────────────────────────────────────── */
+[data-theme="dark"] .nx-progress-bar-fill {
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* ── Error banner ───────────────────────────────────────────────── */
+[data-theme="dark"] .nx-error-banner {
+  background: rgba(239, 68, 68, 0.08) !important;
+  border: 1px solid rgba(239, 68, 68, 0.25) !important;
+  box-shadow: none !important;
+}
+
+/* ── Position cards ─────────────────────────────────────────────── */
+[data-theme="dark"] .nx-pos-card {
+  background: linear-gradient(
+    152deg,
+    rgba(16, 18, 28, 0.90) 0%,
+    rgba(12, 14, 22, 0.94) 100%
+  ) !important;
+  backdrop-filter: blur(18px) saturate(170%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(170%) !important;
+}
+[data-theme="dark"] .nx-pos-card:hover {
+  border-color: rgba(255, 255, 255, 0.10) !important;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.48),
+    0 0 0 0.5px rgba(255, 255, 255, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+  transform: translateY(-2px) !important;
+}
+
+/* ── Mode badge ─────────────────────────────────────────────────── */
+[data-theme="dark"] .nx-mode-badge {
+  letter-spacing: 0.07em;
+  font-weight: 700;
+}
+
+/* ── Info pill ──────────────────────────────────────────────────── */
+[data-theme="dark"] .nx-info-pill {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #8b8fa5 !important;
+}
+
+/* ── Opportunity / right panel cards ───────────────────────────── */
+[data-theme="dark"] .nx-opp-card,
+[data-theme="dark"] .nx-trade-row {
+  transition: background 0.2s ease, border-color 0.2s ease !important;
+}
+[data-theme="dark"] .nx-opp-card:hover {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-color: rgba(255, 255, 255, 0.09) !important;
+}
+
+/* ── Analytics panel ──────────────────────────────────────────── */
+[data-theme="dark"] .nx-analytics-tab--active {
+  background: rgba(79, 112, 232, 0.14) !important;
+  border: 1px solid rgba(79, 112, 232, 0.26) !important;
+  box-shadow: none !important;
+}
+
+/* ── Watermark logo ─────────────────────────────────────────────── */
+[data-theme="dark"] .logo-watermark {
+  opacity: 0.02 !important;
+  filter: blur(1px) !important;
+}
+
+/* ── Live badge on stat cards ───────────────────────────────────── */
+[data-theme="dark"] .xcard-live {
+  color: #4ade80 !important;
+  text-shadow: none !important;
+}
+[data-theme="dark"] .xcard-live-dot {
+  background: #22c55e !important;
+  box-shadow: 0 0 5px rgba(34, 197, 94, 0.6) !important;
 }
 
 /* ── StaggerItem grid cells fill their container ────────────────── */
@@ -581,3 +548,7 @@
   display: contents;
 }
 
+/* ── Stagger section reveal ─────────────────────────────────────── */
+.elite-section {
+  will-change: opacity, transform;
+}

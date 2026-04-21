@@ -7,6 +7,7 @@ silent misbehaviour in production. Tests are ordered by severity (highest first)
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -553,3 +554,122 @@ class TestRedisCredentialIsolation:
 
         assert client_plain._tls is False
         assert client_tls._tls is True
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 9. CRITICAL — _exchanges_entering leak on early gate rejection
+# ═══════════════════════════════════════════════════════════════════
+
+class TestExchangesEnteringCleanup:
+    """Ensure _exchanges_entering is always released when a gate rejects.
+
+    Regression test for: RAVE timing-gate rejection leaked binance+gateio
+    into _exchanges_entering permanently, blocking ALL subsequent trades
+    on those exchanges (including BROCCOLIF3B for 10+ hours).
+    """
+
+    @pytest.mark.asyncio
+    async def test_timing_gate_rejection_releases_exchanges(
+        self, controller, mock_exchange_mgr
+    ):
+        """Timing gate rejects (funding too close) → exchanges must be released."""
+        opp = OpportunityCandidate(
+            symbol="BTC/USDT",
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"),
+            short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.2"),
+            fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"),
+            suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("50000"),
+            # Funding in 60s — below min_entry_secs_before_funding (120s)
+            next_funding_ms=time.time() * 1000 + 60_000,
+        )
+
+        await controller.handle_opportunity(opp)
+
+        # Key assertion: exchanges must NOT be stuck in _exchanges_entering
+        assert "exchange_a" not in controller._exchanges_entering
+        assert "exchange_b" not in controller._exchanges_entering
+
+    @pytest.mark.asyncio
+    async def test_funding_spread_gate_releases_exchanges(
+        self, controller, mock_exchange_mgr
+    ):
+        """Funding spread too low → exchanges must be released."""
+        opp = OpportunityCandidate(
+            symbol="BTC/USDT",
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"),
+            short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.01"),
+            immediate_spread_pct=Decimal("0.01"),
+            immediate_net_pct=Decimal("0.01"),
+            gross_edge_pct=Decimal("0.02"),
+            fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.01"),  # Below min_funding_spread (0.05)
+            suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("50000"),
+            next_funding_ms=time.time() * 1000 + 300_000,
+        )
+
+        await controller.handle_opportunity(opp)
+
+        assert "exchange_a" not in controller._exchanges_entering
+        assert "exchange_b" not in controller._exchanges_entering
+
+    @pytest.mark.asyncio
+    async def test_second_trade_succeeds_after_timing_rejection(
+        self, controller, mock_exchange_mgr
+    ):
+        """After a timing-gate rejection, a new opp on the same exchanges must not be blocked."""
+        # First: rejected by timing gate (funding too close)
+        opp1 = OpportunityCandidate(
+            symbol="BTC/USDT",
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"),
+            short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.2"),
+            fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"),
+            suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("50000"),
+            next_funding_ms=time.time() * 1000 + 60_000,  # too close
+        )
+        await controller.handle_opportunity(opp1)
+
+        # Second: same exchanges, valid timing — should NOT be blocked
+        opp2 = OpportunityCandidate(
+            symbol="ETH/USDT",
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_funding_rate=Decimal("-0.001"),
+            short_funding_rate=Decimal("0.001"),
+            funding_spread_pct=Decimal("0.2"),
+            immediate_spread_pct=Decimal("-0.5"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.0"),
+            fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"),
+            suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("3000"),
+            next_funding_ms=time.time() * 1000 + 300_000,  # 5 min — valid window
+            entry_tier="top",
+            price_spread_pct=Decimal("-0.5"),
+        )
+        await controller.handle_opportunity(opp2)
+
+        # If exchanges were leaked, the second call would skip with
+        # "exchange_a already in use" — not reach "Passed all gates"
+        assert "exchange_a" not in controller._exchanges_entering
+        assert "exchange_b" not in controller._exchanges_entering

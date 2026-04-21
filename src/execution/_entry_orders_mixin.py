@@ -302,6 +302,28 @@ class _EntryOrdersMixin:
 
         entry_fees = entry_fee_long + entry_fee_short
 
+        # ── Reconcile entry prices from trades API (more precise than fill avg) ──
+        # The CCXT fill `average` field can differ from the exchange-confirmed
+        # price by 1 pip, because some exchanges compute averages server-side
+        # with different rounding.  fetch_fill_details_from_trades returns the
+        # exchange-authoritative avg_price which we prefer when available.
+        if _entry_details[0] and _entry_details[0].get("avg_price"):
+            _ep_long_confirmed = Decimal(str(_entry_details[0]["avg_price"]))
+            if _ep_long_confirmed > 0 and _ep_long_confirmed != entry_price_long:
+                logger.debug(
+                    f"[{opp.symbol}] Long entry price refined: "
+                    f"{entry_price_long} → {_ep_long_confirmed} (trades API)"
+                )
+                entry_price_long = _ep_long_confirmed
+        if _entry_details[1] and _entry_details[1].get("avg_price"):
+            _ep_short_confirmed = Decimal(str(_entry_details[1]["avg_price"]))
+            if _ep_short_confirmed > 0 and _ep_short_confirmed != entry_price_short:
+                logger.debug(
+                    f"[{opp.symbol}] Short entry price refined: "
+                    f"{entry_price_short} → {_ep_short_confirmed} (trades API)"
+                )
+                entry_price_short = _ep_short_confirmed
+
         # ── Entry price basis ─────────────────────────────────────
         if entry_price_long and entry_price_short and entry_price_short > 0:
             entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * Decimal("100")

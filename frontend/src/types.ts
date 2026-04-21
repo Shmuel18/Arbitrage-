@@ -69,6 +69,7 @@ export interface Trade {
   funding_collected_usd?: number | null;
   // basis
   entry_basis_pct?: string | number | null;
+  price_spread_pct?: string | number | null;
   // exit metadata
   exit_reason?: string | null;
   entry_tier?: string | null;

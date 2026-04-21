@@ -18,10 +18,11 @@
 }
 
 [data-theme="dark"] .nx-xcard-value {
-  background: linear-gradient(135deg, #f1f5f9 30%, #60a5fa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #f0f1f5;
+  background: none;
+  -webkit-text-fill-color: #f0f1f5;
+  background-clip: unset;
+  -webkit-background-clip: unset;
   font-variant-numeric: tabular-nums;
 }
 
@@ -83,17 +84,17 @@
 }
 
 [data-theme="dark"] .nx-pos-card {
-  background: rgba(10, 18, 36, 0.6) !important;
-  backdrop-filter: blur(16px) saturate(170%);
-  -webkit-backdrop-filter: blur(16px) saturate(170%);
-  border: 1px solid rgba(96, 165, 250, 0.06) !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.02);
+  background: rgba(14, 15, 23, 0.88) !important;
+  backdrop-filter: blur(18px) saturate(170%);
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  border: 1px solid rgba(255, 255, 255, 0.065) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.035);
 }
 
 [data-theme="dark"] .nx-pos-card:hover {
-  border-color: rgba(96, 165, 250, 0.12) !important;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(96,165,250,0.08), 
-              inset 0 1px 0 rgba(255,255,255,0.03) !important;
+  border-color: rgba(255, 255, 255, 0.10) !important;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.48), 0 0 0 0.5px rgba(255,255,255,0.06),
+              inset 0 1px 0 rgba(255,255,255,0.04) !important;
   transform: translateY(-2px) !important;
 }
 
@@ -140,22 +141,21 @@
 }
 
 [data-theme="dark"] .nx-pos-symbol {
-  background: linear-gradient(135deg, #f1f5f9, #94a3b8);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: #f0f1f5;
+  background: none;
+  -webkit-text-fill-color: #f0f1f5;
 }
 
 .nx-pos-exchange-tag {
   font-size: 10px;
   font-weight: 700;
-  color: #4b6a8f;
-  background: rgba(96,165,250,0.06);
+  color: #6b7280;
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 6px;
   padding: 2px 8px;
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.04em;
-  border: 1px solid rgba(96,165,250,0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .nx-pos-mode-badge {
@@ -639,6 +639,8 @@
   transition: all 0.2s ease;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  /* Prevent digit-width changes from causing flex reflow */
+  white-space: nowrap;
 }
 
 .nx-info-pill:hover {
@@ -651,6 +653,8 @@
   font-weight: 700;
   letter-spacing: normal;
   text-transform: none;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
 }
 
 .nx-health-pill {
@@ -665,6 +669,8 @@
   border-radius: 8px;
   border: 1px solid transparent;
   transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  /* Prevent digit-width changes from causing flex reflow */
+  white-space: nowrap;
 }
 
 .nx-health-pill strong {
@@ -672,6 +678,7 @@
   font-size: 11px;
   letter-spacing: normal;
   text-transform: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .nx-health-pill__dot {

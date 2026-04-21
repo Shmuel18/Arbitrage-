@@ -1,5 +1,6 @@
 """Tests for execution controller — the critical safety path."""
 
+import asyncio
 import json
 import time
 from dataclasses import replace
@@ -120,6 +121,47 @@ class TestHandleOpportunity:
         )
         await controller.handle_opportunity(opp2)
         assert len(controller._active_trades) == 1
+
+    @pytest.mark.asyncio
+    async def test_blocks_concurrent_entry_on_busy_exchange_during_opening(
+        self, controller, sample_opportunity, mock_redis
+    ):
+        from src.core.contracts import OpportunityCandidate
+
+        first_lock_released = asyncio.Event()
+        acquire_calls = 0
+
+        async def _acquire_lock(*args, **kwargs):
+            nonlocal acquire_calls
+            acquire_calls += 1
+            if acquire_calls == 1:
+                await first_lock_released.wait()
+            return True
+
+        mock_redis.acquire_lock_with_token.side_effect = _acquire_lock
+
+        opp2 = OpportunityCandidate(
+            symbol="ETH/USDT",
+            long_exchange="exchange_a", short_exchange="exchange_b",
+            long_funding_rate=Decimal("0.0001"), short_funding_rate=Decimal("0.0005"),
+            funding_spread_pct=Decimal("0.06"),
+            immediate_spread_pct=Decimal("0.9"),
+            immediate_net_pct=Decimal("0.7"),
+            gross_edge_pct=Decimal("1.2"), fees_pct=Decimal("0.2"),
+            net_edge_pct=Decimal("0.7"), suggested_qty=Decimal("0.01"),
+            reference_price=Decimal("3000"),
+            next_funding_ms=time.time() * 1000 + 300_000,
+        )
+
+        task1 = asyncio.create_task(controller.handle_opportunity(sample_opportunity))
+        await asyncio.sleep(0)
+        await controller.handle_opportunity(opp2)
+        first_lock_released.set()
+        await task1
+
+        assert len(controller._active_trades) == 1
+        assert list(controller._active_trades.values())[0].symbol == "BTC/USDT"
+        assert controller._exchanges_entering == set()
 
     @pytest.mark.asyncio
     async def test_uses_filled_qty_not_requested(self, controller, sample_opportunity, mock_exchange_mgr):
@@ -374,10 +416,10 @@ class TestHoldOrExit:
         assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
-    async def test_exits_when_next_funding_too_far(
+    async def test_holds_when_next_funding_too_far(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """After 1.5h timeout + next funding doesn't qualify → EXIT."""
+        """After timeout + next funding doesn't qualify → HOLD for spread recovery (don't exit)."""
         config.trading_params.exit_offset_seconds = 0
 
         # Low funding rates (won't qualify for next cycle)
@@ -392,7 +434,7 @@ class TestHoldOrExit:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding already collected, timeout elapsed (2h > 1.5h)
+        # Pre-set: funding already collected, timeout elapsed (2h > 30min)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -401,8 +443,11 @@ class TestHoldOrExit:
 
         await controller._check_exit(trade)
 
-        # Should have exited — timeout reached, next funding doesn't qualify
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — no qualifying next funding, waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        # Timer was reset (funding_paid_at set to ~now) so the 30min window restarts
+        assert trade._funding_paid_at is not None
 
     @pytest.mark.asyncio
     async def test_holds_when_basis_only_recovers_within_old_tolerance(
@@ -935,10 +980,10 @@ class TestBasisGuard:
         assert trade._funding_paid_at is not None
 
     @pytest.mark.asyncio
-    async def test_exits_on_basis_timeout(
+    async def test_holds_on_basis_timeout_no_qualifying_funding(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """After 1.5h timeout with no qualifying next funding → EXIT."""
+        """After timeout with no qualifying next funding → HOLD for spread recovery (don't exit)."""
         config.trading_params.exit_offset_seconds = 0
 
         past_ms = (time.time() - 1200) * 1000
@@ -954,7 +999,7 @@ class TestBasisGuard:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding collected, 2h have passed (> 1.5h timeout)
+        # Pre-set: funding collected, 2h have passed (> 30min timeout)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -963,8 +1008,46 @@ class TestBasisGuard:
 
         await controller._check_exit(trade)
 
-        # Should have been closed (timeout + no qualifying next funding)
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — holding for spread recovery; _funding_paid_at reset to now
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        assert trade._funding_paid_at is not None
+
+    @pytest.mark.asyncio
+    async def test_holds_on_basis_timeout_after_tracker_advances_to_next_cycle(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """Post-funding timeout with far-future trackers → HOLD for spread recovery (don't exit)."""
+        config.trading_params.exit_offset_seconds = 0
+        config.trading_params.basis_recovery_timeout_minutes = Decimal("30")
+
+        future_ms = (time.time() + 2 * 3600) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": future_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        mock_exchange_mgr.get("exchange_a").get_ticker.return_value = {"last": 50000.0}
+        mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
+        trade.next_funding_long = datetime.now(timezone.utc) + timedelta(hours=2)
+        trade.next_funding_short = datetime.now(timezone.utc) + timedelta(hours=2)
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(minutes=40)
+        trade.funding_collections = 1
+        trade.funding_collected_usd = Decimal("1.0")
+
+        await controller._check_exit(trade)
+
+        # Should HOLD — next payment is 2h away (outside window), waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
     async def test_exits_immediately_when_basis_favorable(
@@ -1030,10 +1113,10 @@ class TestNonQuickCyclePath:
     """Tests for timeout-based exit and next-cycle hold logic."""
 
     @pytest.mark.asyncio
-    async def test_exits_when_net_below_threshold(
+    async def test_holds_when_net_below_threshold(
         self, controller, config, mock_exchange_mgr, mock_redis
     ):
-        """Timeout elapsed + next funding doesn't qualify → EXIT."""
+        """Timeout elapsed + next funding doesn't qualify → HOLD for spread recovery."""
         config.trading_params.exit_offset_seconds = 0
 
         # Low funding rates (won't qualify for next cycle)
@@ -1050,7 +1133,7 @@ class TestNonQuickCyclePath:
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
         trade.entry_price_short = Decimal("50000")
-        # Pre-set: funding collected 2h ago (past 1.5h timeout)
+        # Pre-set: funding collected 2h ago (past 30min timeout)
         trade._exit_check_active = True
         trade._funding_paid_long = True
         trade._funding_paid_short = True
@@ -1059,7 +1142,9 @@ class TestNonQuickCyclePath:
 
         await controller._check_exit(trade)
 
-        assert trade.trade_id not in controller._active_trades
+        # Should HOLD — waiting for spread recovery
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
 
     @pytest.mark.asyncio
     async def test_holds_when_net_above_threshold(

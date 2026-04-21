@@ -340,7 +340,7 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 return
 
         # ── 4. BASIS RECOVERY EXIT (after funding) ──────────────
-        if not (long_paid or short_paid):
+        if not (trade._funding_paid_at or long_paid or short_paid):
             return
 
         _entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else _ZERO
@@ -393,6 +393,26 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             return
 
         # ── 5. BASIS HARD STOP (30min timeout) ───────────────────
+
+        # Absolute safety cap — force-close regardless of state after max_hold_hours
+        _max_hold_min = float(getattr(tp, "max_hold_hours", 24)) * 60
+        if hold_min >= _max_hold_min:
+            _reason = f"max_hold_timeout_{hold_min}min"
+            logger.warning(
+                f"⛔ Trade {trade.trade_id}{tier_tag}: MAX HOLD TIMEOUT "
+                f"({_max_hold_min:.0f}min) — force-closing after {hold_min}min",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "max_hold_timeout"},
+            )
+            trade._exit_reason = _reason
+            self._journal.exit_decision(
+                trade.trade_id, trade.symbol,
+                reason=_reason,
+                immediate_spread=Decimal(str(total_pnl_pct)),
+                hold_min=hold_min,
+            )
+            await self._close_trade(trade)
+            return
+
         basis_timeout_min = float(tp.basis_recovery_timeout_minutes)  # P2-2: direct field access
         time_since_funding_min = 0.0
         if trade._funding_paid_at:
@@ -400,15 +420,14 @@ class _ExitLogicMixin(_ExitComputationsMixin):
 
         if time_since_funding_min >= basis_timeout_min:
             next_cycle_ok = await self._next_funding_qualifies(trade, long_adapter, short_adapter)
-            max_cycles = getattr(tp, "max_hold_cycles_without_recovery", 3)
 
-            if next_cycle_ok and trade._hold_cycles_stayed < max_cycles:
+            if next_cycle_ok:
                 trade._hold_cycles_stayed += 1
                 logger.info(
                     f"🔄 Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min reached "
                     f"(basis: entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%), "
                     f"BUT next funding qualifies — staying "
-                    f"(collections={trade.funding_collections}, hold_cycle={trade._hold_cycles_stayed}/{max_cycles})",
+                    f"(collections={trade.funding_collections}, hold_cycle={trade._hold_cycles_stayed})",
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "stay_next_cycle"},
                 )
                 # Reset flags for next funding cycle
@@ -457,42 +476,58 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 if short_funding and "rate" in short_funding:
                     trade.short_funding_rate = Decimal(str(short_funding["rate"]))
                 return
-            elif next_cycle_ok:
-                # next_cycle_ok but _hold_cycles_stayed >= max_cycles — force exit
-                _reason = f"basis_hard_stop_max_cycles_{max_cycles}"
-                logger.warning(
-                    f"⛔ Trade {trade.trade_id}{tier_tag}: BASIS HARD STOP (max hold cycles) — "
-                    f"held {trade._hold_cycles_stayed}/{max_cycles} consecutive cycles without basis recovery "
-                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%) — "
-                    f"force-closing after {hold_min}min despite next funding qualifying",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_hard_stop_max_cycles"},
-                )
-                trade._exit_reason = _reason
-                self._journal.exit_decision(
-                    trade.trade_id, trade.symbol,
-                    reason=_reason,
-                    immediate_spread=Decimal(str(total_pnl_pct)),
-                    hold_min=hold_min,
-                )
-                await self._close_trade(trade)
-                return
             else:
-                _reason = f"basis_hard_stop_{basis_timeout_min:.0f}min"
+                # Next funding doesn't qualify — hold for spread recovery.
+                # Don't exit: wait until basis recovers (section 4) or funding
+                # turns negative (negative_funding guard), or max_hold_hours fires.
+                trade._hold_cycles_stayed += 1
                 logger.info(
-                    f"⏱️ Trade {trade.trade_id}{tier_tag}: BASIS HARD STOP — "
-                    f"{basis_timeout_min:.0f}min since funding, basis NOT recovered "
-                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%) "
-                    f"and next funding doesn't qualify — closing after {hold_min}min",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_hard_stop_exit"},
+                    f"⏳ Trade {trade.trade_id}{tier_tag}: basis timeout {basis_timeout_min:.0f}min, "
+                    f"next funding doesn't qualify — holding for spread recovery "
+                    f"(entry={float(_entry_basis):+.4f}% current={float(_current_basis):+.4f}%, "
+                    f"collections={trade.funding_collections}, held={hold_min}min, cycle={trade._hold_cycles_stayed})",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "hold_for_spread_recovery"},
                 )
-                trade._exit_reason = _reason
-                self._journal.exit_decision(
-                    trade.trade_id, trade.symbol,
-                    reason=_reason,
-                    immediate_spread=Decimal(str(total_pnl_pct)),
-                    hold_min=hold_min,
-                )
-                await self._close_trade(trade)
+                # Reset payment flags so future funding payments are detected correctly.
+                # _funding_paid_at = now (NOT None) keeps the section-4 basis recovery
+                # gate open: that gate returns early if _funding_paid_at is falsy.
+                trade._exit_check_active = False
+                trade._funding_paid_long = False
+                trade._funding_paid_short = False
+                trade._funding_paid_at = now
+                trade._hold_logged_until = None
+
+                # Advance trackers to next cycle if timestamps are available.
+                if long_funding:
+                    _ln = long_funding.get("next_timestamp")
+                    if _ln:
+                        _ln_dt = _funding_ts_to_dt(_ln)
+                        if _ln_dt > now:
+                            trade.next_funding_long = _ln_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale long next_timestamp in cache "
+                                f"({_ln_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+                if short_funding:
+                    _sn = short_funding.get("next_timestamp")
+                    if _sn:
+                        _sn_dt = _funding_ts_to_dt(_sn)
+                        if _sn_dt > now:
+                            trade.next_funding_short = _sn_dt
+                        else:
+                            logger.warning(
+                                f"[{trade.symbol}] Stale short next_timestamp in cache "
+                                f"({_sn_dt.strftime('%H:%M:%S')} <= now) — "
+                                f"not advancing tracker to avoid double-fire",
+                                extra={"trade_id": trade.trade_id},
+                            )
+                if long_funding and "rate" in long_funding:
+                    trade.long_funding_rate = Decimal(str(long_funding["rate"]))
+                if short_funding and "rate" in short_funding:
+                    trade.short_funding_rate = Decimal(str(short_funding["rate"]))
                 return
 
         # ── Not yet at basis timeout — keep holding ──────────────

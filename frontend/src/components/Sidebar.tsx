@@ -1,5 +1,4 @@
-import React from 'react';
-import { m } from 'framer-motion';
+import React, { useEffect } from 'react';
 import { useSettings } from '../context/SettingsContext';
 import { SECTION_IDS, SectionId } from './Dashboard';
 
@@ -38,13 +37,20 @@ const IconLogs = () => (
     <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" />
   </svg>
 );
+const IconClose = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
 
 interface SidebarProps {
   activeSection: SectionId;
   onNavigate: (sectionId: SectionId) => void;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate, mobileOpen = false, onMobileClose }) => {
   const { t } = useSettings();
 
   const navItems: { id: SectionId; icon: React.ReactNode; label: string }[] = [
@@ -56,40 +62,75 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate }) => {
     { id: SECTION_IDS.logs,          icon: <IconLogs />,          label: t.systemLogs },
   ];
 
+  // Close drawer on ESC
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onMobileClose?.();
+    };
+    window.addEventListener('keydown', onKey);
+    // Lock body scroll while drawer is open
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [mobileOpen, onMobileClose]);
+
+  const handleNav = (id: SectionId) => {
+    onNavigate(id);
+    onMobileClose?.();
+  };
+
   return (
-    <aside className="sidebar">
-      <div className="sidebar-logo nx-sidebar-logo">
-        <img src="/logo.png" alt="RateBridge" className="sidebar-logo-img" />
-        <h1 className="nx-sidebar-title">RATEBRIDGE</h1>
-        <span>{t.arbitrageEngine}</span>
-      </div>
+    <>
+      {/* Backdrop — only rendered when drawer is open on mobile */}
+      {mobileOpen && (
+        <div
+          className="sidebar-backdrop"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
 
-      <nav className="sidebar-nav">
-        {navItems.map((item) => (
+      <aside
+        className={`sidebar${mobileOpen ? ' sidebar--mobile-open' : ''}`}
+        aria-label="Primary navigation"
+      >
+        <div className="sidebar-logo nx-sidebar-logo">
+          <img src="/logo.png" alt="RateBridge" className="sidebar-logo-img" />
+          <h1 className="nx-sidebar-title">RATEBRIDGE</h1>
+          <span>{t.arbitrageEngine}</span>
+          {/* Mobile-only close button */}
           <button
-            key={item.id}
-            className={`sidebar-nav-item nx-nav-item${activeSection === item.id ? ' active' : ''}`}
-            onClick={() => onNavigate(item.id)}
-            style={{ position: 'relative' }}
+            type="button"
+            className="sidebar-close-btn"
+            onClick={onMobileClose}
+            aria-label="Close navigation"
           >
-            {activeSection === item.id && (
-              <m.span
-                layoutId="nav-active"
-                className="elite-nav-indicator"
-                transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                aria-hidden="true"
-              />
-            )}
-            <span className="nav-icon">{item.icon}</span>
-            <span>{item.label}</span>
+            <IconClose />
           </button>
-        ))}
-      </nav>
+        </div>
 
-      <div className="sidebar-footer nx-sidebar-footer">
-        <div className="nx-sidebar-version">v2.1</div>
-      </div>
-    </aside>
+        <nav className="sidebar-nav">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              className={`sidebar-nav-item nx-nav-item${activeSection === item.id ? ' active' : ''}`}
+              onClick={() => handleNav(item.id)}
+              aria-current={activeSection === item.id ? 'page' : undefined}
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer nx-sidebar-footer">
+          <div className="nx-sidebar-version">v2.1</div>
+        </div>
+      </aside>
+    </>
   );
 };
 

@@ -80,6 +80,7 @@ class _EntryMixin(_EntryOrdersMixin):
     async def _handle_opportunity_inner(self, opp: OpportunityCandidate) -> None:
         """Inner implementation — called only after the TOCTOU guard is held."""
         _t0_mono = _time.monotonic()
+        _reserved_exchanges: set[str] = set()
 
         # Duplicate guard — O(1) via maintained set
         if opp.symbol in self._active_symbols:
@@ -94,14 +95,30 @@ class _EntryMixin(_EntryOrdersMixin):
             )
             return
 
-        # Exchange-in-use guard — O(1) via maintained set
-        for ex in (opp.long_exchange, opp.short_exchange):
-            if ex in self._busy_exchanges:
+        # Exchange-in-use guard — block both OPEN trades and entries mid-flight.
+        for ex in {opp.long_exchange, opp.short_exchange}:
+            if ex in self._busy_exchanges or ex in self._exchanges_entering:
                 logger.info(
                     f"🔒 Skipping {opp.symbol}: {ex} already in use by another trade"
                 )
                 return
+        _reserved_exchanges = {opp.long_exchange, opp.short_exchange}
+        self._exchanges_entering.update(_reserved_exchanges)
+        try:
+            return await self._handle_opportunity_guarded(opp, _reserved_exchanges, _t0_mono)
+        finally:
+            # P0: ALWAYS release reserved exchanges — prevents permanent lock-out
+            # when any gate (timing, spread, lock, rate-flip, etc.) rejects early.
+            for ex in _reserved_exchanges:
+                self._exchanges_entering.discard(ex)
 
+    async def _handle_opportunity_guarded(
+        self,
+        opp: OpportunityCandidate,
+        _reserved_exchanges: set[str],
+        _t0_mono: float,
+    ) -> None:
+        """Continue entry after exchange reservation — caller guarantees cleanup."""
         # ── Funding spread gate (safety check) ──
         tp = self._cfg.trading_params
         if opp.mode == TradeMode.CHERRY_PICK:
@@ -560,8 +577,9 @@ class _EntryMixin(_EntryOrdersMixin):
                     f"| funding={lr_pct:+.4f}%\n"
                 f"  SHORT:     {opp.short_exchange} qty={short_filled_qty} @ ${float(entry_price_short or 0):.6f} "
                     f"| funding={sr_pct:+.4f}%\n"
-                f"  Price Spread: {float(opp.price_spread_pct):+.4f}% "
-                    f"({'favorable ✅' if opp.price_spread_pct < 0 else 'adverse ⚠️' if opp.price_spread_pct > 0 else 'neutral'})\n"
+                f"  Price Spread: {float(entry_basis_pct):+.4f}% "
+                    f"({'favorable ✅' if entry_basis_pct < 0 else 'adverse ⚠️' if entry_basis_pct > 0 else 'neutral'})"
+                    f" (scanner: {float(opp.price_spread_pct):+.4f}%)\n"
                 f"  Notional:  ${entry_notional:.2f} per leg\n"
                 f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
                 f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"

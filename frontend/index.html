@@ -7,10 +7,17 @@
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="description" content="Trinity Arbitrage Bot Dashboard" />
     <title>Trinity Bot - Dashboard</title>
+    <!-- Telegram WebApp SDK — only activates when the page is opened
+         inside a Telegram Mini App; harmless on regular browsers. -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <script>
       (function() {
         try {
-          var t = localStorage.getItem('trinity_theme') || 'dark';
+          // Telegram Mini App overrides the stored theme with the client's
+          // active color scheme. Detect and apply before React mounts so
+          // there's no flash of wrong theme.
+          var tgTheme = window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.colorScheme;
+          var t = tgTheme || localStorage.getItem('trinity_theme') || 'dark';
           document.documentElement.setAttribute('data-theme', t);
         } catch(e) {}
       })();

@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useSettings } from '../context/SettingsContext';
-import { TierBadge, formatCountdown, formatFundingRateN } from '../utils/format';
+import { TierBadge, advanceFundingTs, formatCountdown, formatFundingRateN } from '../utils/format';
 import { SkeletonRightPanel } from './Skeleton';
 import type { Opportunity, OpportunitySet } from '../hooks/useMarketReducer';
 
@@ -152,10 +152,11 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
     intervalHours: number,
   ) => {
     const now = Date.now();
-    const diff = nextMs ? nextMs - now : null;
+    const adjusted = advanceFundingTs(nextMs, intervalHours) ?? nextMs;
+    const diff = adjusted ? adjusted - now : null;
     const isUrgent = diff !== null && diff < 900000;
     const isNear   = diff !== null && diff < 3600000;
-    const countdown = formatCountdown(nextMs);
+    const countdown = formatCountdown(nextMs, intervalHours);
 
     // Progress: how far into the funding interval we are (0 → just reset, 1 → imminent)
     const progress = diff !== null

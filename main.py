@@ -35,6 +35,14 @@ _WS_NOISE_PHRASES = (
     "closing code 1001",
     "cannot write to closing transport",
     "the specified network name is no longer available",
+    # Bitget (and similar) reject subscriptions for delisted symbols with this phrase.
+    # Our _watch_price_tickers_loop already catches and drops them, but ccxt's internal
+    # subscription futures also raise the error and Python prints it as
+    # "Future exception was never retrieved".  Suppress those here.
+    "doesn't exist",
+    "does not exist",
+    "precision:null",          # bitget delisted-symbol error variant
+    "connection was forcibly closed",  # Windows WinError 10054
 )
 
 
@@ -53,12 +61,20 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
     if exc is not None and (
         "future exception was never retrieved" in _msg_lower
         or "task exception was never retrieved" in _msg_lower
+        or "exception in callback" in _msg_lower
         or "accept failed on a socket" in _msg_lower
     ):
         exc_str = str(exc).lower()
         if any(phrase in exc_str for phrase in _WS_NOISE_PHRASES):
             if logger.isEnabledFor(10):  # DEBUG
                 logger.debug(f"[WS noise suppressed] {exc}")
+            return
+        # Also suppress ccxt BadRequest exceptions (delisted symbols, invalid
+        # subscriptions, etc.) — they are always transient WS noise.
+        exc_cls = type(exc).__name__.lower()
+        if exc_cls in ("badrequest", "networkerror", "requesttimeout"):
+            if logger.isEnabledFor(10):  # DEBUG
+                logger.debug(f"[WS noise suppressed by class] {exc_cls}: {exc}")
             return
 
     loop.default_exception_handler(context)
@@ -166,7 +182,15 @@ async def main() -> None:
                 extra={"action": "settings_warm_done"})
 
     # ── Components ───────────────────────────────────────────────
-    publisher = APIPublisher(redis)
+    # Telegram notifier — None when disabled; publish_alert() no-ops Telegram.
+    telegram = None
+    if cfg.telegram.enabled:
+        from src.notifications.telegram_notifier import TelegramNotifier
+        telegram = TelegramNotifier(cfg.telegram)
+        # Send startup ping — surfaces misconfig at boot, not at first trade.
+        await telegram.self_test()
+
+    publisher = APIPublisher(redis, telegram=telegram)
     guard = RiskGuard(cfg, mgr, redis)
     controller = ExecutionController(cfg, mgr, redis, guard, publisher=publisher)
     scanner = Scanner(cfg, mgr, redis, publisher=publisher)
@@ -253,6 +277,25 @@ async def main() -> None:
     status_pub = StatusPublisher(cfg, mgr, controller, redis, publisher, shutdown_event)
     status_task = asyncio.create_task(status_pub.run(), name="status_publisher")
 
+    # ── Daily summary (Telegram) ─────────────────────────────────
+    summary_task = None
+    if cfg.telegram.enabled and cfg.telegram.notify_daily_summary:
+        from src.notifications.daily_summary import daily_summary_loop
+        summary_task = asyncio.create_task(
+            daily_summary_loop(publisher, redis, cfg.telegram, shutdown_event),
+            name="daily_summary",
+        )
+
+    # ── Telegram command loop (inbound /start /status /menu) ────
+    bot_cmd_task = None
+    if cfg.telegram.enabled:
+        from src.notifications.bot_commands import bot_commands_loop
+        bot_cmd_task = asyncio.create_task(
+            bot_commands_loop(cfg.telegram, redis, shutdown_event,
+                              mini_app_url=cfg.telegram.mini_app_url),
+            name="telegram_commands",
+        )
+
     logger.info("Bot is running — press Ctrl+C to stop")
     await shutdown_event.wait()
 
@@ -261,6 +304,10 @@ async def main() -> None:
     scanner.stop()
     scan_task.cancel()
     status_task.cancel()
+    if summary_task is not None:
+        summary_task.cancel()
+    if bot_cmd_task is not None:
+        bot_cmd_task.cancel()
     if broadcast_task is not None:
         broadcast_task.cancel()
     if uvicorn_server is not None:
@@ -281,6 +328,8 @@ async def main() -> None:
     await guard.stop()
     await mgr.disconnect_all()
     await redis.disconnect()
+    if telegram is not None:
+        await telegram.close()
 
     logger.info("Shutdown complete")
 

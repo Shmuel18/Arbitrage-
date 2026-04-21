@@ -29,8 +29,8 @@
 }
 
 [data-theme="dark"] .card:hover {
-  border-color: rgba(96, 165, 250, 0.15);
-  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.08), 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 40px rgba(96, 165, 250, 0.03);
+  border-color: rgba(255, 255, 255, 0.11);
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 8px 32px rgba(0, 0, 0, 0.5);
   transform: translateY(-1px);
 }
 
@@ -130,9 +130,9 @@
 }
 
 [data-theme="dark"] .corp-table thead th {
-  background: rgba(6, 12, 24, 0.7);
-  color: #3d5577;
-  border-bottom-color: rgba(96, 165, 250, 0.06);
+  background: rgba(8, 9, 16, 0.92);
+  color: #4d5170;
+  border-bottom-color: rgba(255, 255, 255, 0.05);
 }
 
 .corp-table tbody td {
@@ -140,7 +140,7 @@
   border-bottom: 1px solid var(--table-border);
   color: var(--text-primary);
   white-space: nowrap;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -154,8 +154,8 @@
 }
 
 [data-theme="dark"] .corp-table tbody tr:hover {
-  background: rgba(96, 165, 250, 0.04);
-  box-shadow: inset 0 0 0 0.5px rgba(96, 165, 250, 0.06);
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="dark"] .corp-table tbody tr:nth-child(even) {
@@ -270,7 +270,7 @@
   border-radius: 8px;
   padding: 9px 12px;
   font-size: 13px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   color: var(--text-primary);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
   outline: none;
@@ -305,7 +305,7 @@
 }
 
 .log-entry {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 11.5px;
   line-height: 1.65;
 }
@@ -408,13 +408,13 @@
 .nx-stats-layout {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .xcards-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  gap: 14px;
 }
 
 /* Secondary row: compact height */
@@ -444,9 +444,9 @@
 
 .xcard {
   position: relative;
-  background: rgba(10, 18, 36, 0.75);
-  border: 1px solid rgba(96, 165, 250, 0.06);
-  border-radius: 16px;
+  background: rgba(14, 15, 23, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.065);
+  border-radius: var(--card-radius, 10px);
   padding: 20px 22px 16px;
   display: flex;
   flex-direction: column;
@@ -559,13 +559,13 @@
 }
 
 .xcard-value {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  font-size: 28px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: clamp(20px, 2vw, 28px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
-  letter-spacing: -0.025em;
-  line-height: 1.1;
+  letter-spacing: -0.022em;
+  line-height: 1.12;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

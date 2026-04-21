@@ -54,6 +54,11 @@ export function useSnapshotPoller(
 
       if (signal.aborted) return;
 
+      // Drop our pnl result if the user flipped the pill while this poll
+      // was in flight — the response is for a now-stale hours window and
+      // would visibly overwrite the chart the user just chose.
+      const stalePnl = hours !== pnlHoursRef.current;
+
       dispatchRef.current({
         type: 'HTTP_FETCH_RESULT',
         payload: {
@@ -63,7 +68,9 @@ export function useSnapshotPoller(
           logs: logsRes,
           summary: summRes,
           positions: posRes,
-          pnl: pnlRes,
+          pnl: stalePnl
+            ? ({ status: 'rejected', reason: 'stale-pnl-hours' } as PromiseRejectedResult)
+            : pnlRes,
           dailyPnl: dailyPnlRes,
           trades: tradesRes,
         },

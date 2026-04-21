@@ -78,10 +78,36 @@ export const TierBadge: React.FC<{ tier?: string | null; t: TierTranslations }> 
   );
 };
 
+/**
+ * Advance a stale funding timestamp to the next future occurrence.
+ * When the backend scan takes 7-12 minutes, the published `next_funding_ms`
+ * may drift into the past before a fresh scan publishes an updated value.
+ * This client-side fix uses the known interval to advance to the next future
+ * boundary so the UI doesn't show "⚡ NOW" for minutes after funding fires.
+ */
+export const advanceFundingTs = (
+  ms: number | null | undefined,
+  intervalHours?: number,
+): number | null | undefined => {
+  if (!ms) return ms;
+  const now = Date.now();
+  if (ms > now) return ms;
+  if (!intervalHours || intervalHours <= 0) return ms;
+  const intervalMs = intervalHours * 3_600_000;
+  let ts = ms;
+  while (ts <= now) {
+    ts += intervalMs;
+  }
+  return ts;
+};
+
 /* ── Countdown formatter (used in PositionsTable, RightPanel) ──── */
-export const formatCountdown = (ms?: number | null): string => {
+export const formatCountdown = (ms?: number | null, intervalHours?: number): string => {
   if (!ms) return '--';
-  const diff = ms - Date.now();
+  // Auto-advance past timestamps when interval is known
+  const adjusted = intervalHours ? advanceFundingTs(ms, intervalHours) : ms;
+  if (!adjusted) return '--';
+  const diff = adjusted - Date.now();
   if (diff <= 0) return '⚡ NOW';
   const mins = Math.floor(diff / 60000);
   if (mins < 60) return `${mins}m`;

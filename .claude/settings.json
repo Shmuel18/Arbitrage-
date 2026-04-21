@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py)",
+      "Bash(npm run *)",
+      "Bash(npm start *)",
+      "Bash(python3 -c \" import sys, json for line in sys.stdin: try: d = json.loads\\(line.strip\\(\\)\\) print\\(json.dumps\\(d, indent=None\\)\\) except: pass \")",
+      "Bash(python3 -c ' *)",
+      "Bash(tasklist /fi \"imagename eq python.exe\")",
+      "Bash(python -m pytest tests/test_controller.py tests/test_edge_cases.py -x -q)",
+      "Bash(python -m pytest tests/test_controller.py tests/test_edge_cases.py tests/test_sizer.py -q)",
+      "Bash(python -m pytest -q)"
+    ]
+  }
+}

@@ -144,6 +144,12 @@ class Scanner(_ScannerEvaluatorMixin):
         # The hot-scan loop injects these on its 1s timeout so they are
         # re-evaluated every second until they enter (or pass) the window.
         self._near_window_watch: set[str] = set()
+        # Callback for entry dispatch — stored so scan_all() can dispatch
+        # qualified opportunities immediately (not wait for gather to complete).
+        self._scan_callback = None
+        # Track routes already dispatched during the current scan_all() to
+        # avoid double-dispatch when the main loop also processes results.
+        self._early_dispatched: set[str] = set()
 
     def _opportunity_fingerprint(self, display_top: list[OpportunityCandidate]) -> str:
         """Return a stable fingerprint for the published display opportunities."""
@@ -207,6 +213,7 @@ class Scanner(_ScannerEvaluatorMixin):
     async def start(self, callback) -> None:
         """Continuously scan; call *callback(opp)* when an opportunity is found."""
         self._running = True
+        self._scan_callback = callback
         scan_interval = self._cfg.risk_guard.scanner_interval_sec
 
         # Start WebSocket watchers for all symbols
@@ -283,6 +290,7 @@ class Scanner(_ScannerEvaluatorMixin):
                                 f"[circuit-breaker] {_eid}: reload recovered — circuit closed"
                             )
                         self._exchange_backoff_until.pop(_eid, None)
+                self._early_dispatched = set()
                 opps = await self.scan_all()
 
                 # ── Order-book enrichment for stale-price candidates ─────
@@ -577,11 +585,16 @@ class Scanner(_ScannerEvaluatorMixin):
                     # Send opportunities to controller
                     execute_only_best = self._cfg.trading_params.execute_only_best_opportunity
 
-                    if execute_only_best and qualified_opps:
+                    # Skip opportunities already dispatched early during scan_all()
+                    _remaining_qualified = [
+                        o for o in qualified_opps
+                        if f"{o.symbol}|{o.long_exchange}|{o.short_exchange}" not in self._early_dispatched
+                    ]
+                    if execute_only_best and _remaining_qualified:
                         # Send best opportunity PER exchange pair
                         seen_pairs: set[tuple[str, str]] = set()
                         best_per_pair: list = []
-                        for opp in qualified_opps:
+                        for opp in _remaining_qualified:
                             pair = tuple(sorted([opp.long_exchange, opp.short_exchange]))
                             if pair not in seen_pairs:
                                 seen_pairs.add(pair)
@@ -599,9 +612,9 @@ class Scanner(_ScannerEvaluatorMixin):
                                 callback(opp), name=_task_name,
                             )
                             _t.add_done_callback(_hot_entry_task_done)
-                    else:
+                    elif _remaining_qualified:
                         # Send top qualified opportunities — controller handles further filtering
-                        for opp in qualified_opps[:5]:
+                        for opp in _remaining_qualified[:5]:
                             _task_name = (
                                 f"scan-entry:{opp.symbol}"
                                 f"|{opp.long_exchange}|{opp.short_exchange}"
@@ -810,7 +823,7 @@ class Scanner(_ScannerEvaluatorMixin):
                     except asyncio.CancelledError:
                         return
                     except Exception as exc:
-                        logger.debug(f"[hot-scan] Error evaluating {symbol}: {exc}")
+                        logger.warning(f"[hot-scan] Error evaluating {symbol}: {exc}")
 
             except asyncio.CancelledError:
                 return
@@ -903,10 +916,60 @@ class Scanner(_ScannerEvaluatorMixin):
 
         symbol_list = list(common_symbols)
         semaphore = asyncio.Semaphore(parallelism)
+        # P1: Early dispatch — send qualified opportunities to execution
+        # immediately as they're found, instead of waiting for all 629 symbols
+        # to complete in the gather.  This prevents 15+ minute delays when the
+        # full scan takes longer than the entry window.
+        _early_cb = self._scan_callback
+        _execute_best = self._cfg.trading_params.execute_only_best_opportunity
+        _early_seen_pairs: set[tuple[str, str]] = set()
 
-        async def bounded_scan(symbol):
+        # Tier priority for sorting: TOP first, then MEDIUM, then WEAK/None
+        _TIER_PRIORITY = {"TOP": 0, "MEDIUM": 1, "WEAK": 2}
+        _MAX_EARLY_PER_SYMBOL = 2  # dispatch at most 2 best routes per symbol
+
+        async def bounded_scan(symbol: str) -> List[OpportunityCandidate]:
             async with semaphore:
-                return await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols, cheap=True)
+                opps = await self._scan_symbol(symbol, adapters, exchange_ids, cooled_symbols, cheap=True)
+                # Dispatch qualified opportunities immediately
+                if _early_cb and opps:
+                    qualified_opps = [o for o in opps if o.qualified]
+                    # Sort by tier (TOP first) then net_edge_pct descending
+                    # so the best route grabs the execution lock first.
+                    qualified_opps.sort(
+                        key=lambda o: (
+                            _TIER_PRIORITY.get((o.entry_tier or "").upper(), 9),
+                            -o.net_edge_pct,
+                        )
+                    )
+                    _dispatched_count = 0
+                    for opp in qualified_opps:
+                        if _dispatched_count >= _MAX_EARLY_PER_SYMBOL:
+                            break
+                        _route_key = f"{opp.symbol}|{opp.long_exchange}|{opp.short_exchange}"
+                        if _execute_best:
+                            _pair = tuple(sorted([opp.long_exchange, opp.short_exchange]))
+                            if _pair in _early_seen_pairs:
+                                continue
+                            _early_seen_pairs.add(_pair)
+                        self._early_dispatched.add(_route_key)
+                        _dispatched_count += 1
+                        logger.info(
+                            f"⚡ [early-dispatch] {opp.symbol} "
+                            f"{opp.long_exchange}↔{opp.short_exchange} "
+                            f"tier={opp.entry_tier} net={opp.net_edge_pct:.4f}% "
+                            f"price_spread={opp.price_spread_pct:+.4f}% — dispatching immediately",
+                            extra={"action": "early_dispatch", "symbol": opp.symbol},
+                        )
+                        _task_name = (
+                            f"early-entry:{opp.symbol}"
+                            f"|{opp.long_exchange}|{opp.short_exchange}"
+                        )
+                        _t = asyncio.create_task(
+                            _early_cb(opp), name=_task_name,
+                        )
+                        _t.add_done_callback(_hot_entry_task_done)
+                return opps
 
         gathered = await asyncio.gather(*[bounded_scan(s) for s in symbol_list], return_exceptions=True)
 

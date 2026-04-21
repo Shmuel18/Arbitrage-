@@ -85,6 +85,7 @@ class ControllerProtocol(Protocol):
     _active_trades: Dict[str, TradeRecord]
     _active_symbols: set[str]
     _busy_exchanges: set[str]
+    _exchanges_entering: set[str]
     _symbol_refcount: Dict[str, int]
     _exchange_refcount: Dict[str, int]
     _symbols_entering: set[str]
@@ -129,6 +130,7 @@ class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
         # O(1) derived sets — kept in sync by _register_trade / _deregister_trade
         self._active_symbols: set[str] = set()
         self._busy_exchanges: set[str] = set()
+        self._exchanges_entering: set[str] = set()
         # Refcount maps: how many open trades hold a symbol / exchange slot.
         # Allows O(1) deregistration without scanning _active_trades.
         self._symbol_refcount: Dict[str, int] = {}

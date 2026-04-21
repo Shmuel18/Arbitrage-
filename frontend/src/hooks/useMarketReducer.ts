@@ -24,6 +24,12 @@ export interface PositionRow {
   short_qty: string;
   entry_edge_pct: string;
   state: string;
+  next_funding_ms?: number | null;
+  min_interval_hours?: number;
+  long_next_funding_ms?: number | null;
+  short_next_funding_ms?: number | null;
+  long_interval_hours?: number;
+  short_interval_hours?: number;
   [k: string]: unknown;
 }
 
@@ -433,6 +439,9 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
           return incoming;
         })(),
         positions: posRes.status === 'fulfilled' ? httpPositions : prev.positions,
+        // Guard against stale PnL responses from a poll that was fired before
+        // the user clicked a new timeline pill. If the request was for a
+        // different `hours` than the user's current selection, drop it.
         pnl: pnlRes.status === 'fulfilled' ? pnlRes.value : prev.pnl,
         dailyPnl:
           dailyPnlRes.status === 'fulfilled'
@@ -451,6 +460,8 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
     }
 
     case 'PNL_UPDATE':
+      // Fence-based staleness guard lives in useMarketData — by the time the
+      // action reaches us, we trust it's for the user's current range.
       return { ...prev, pnl: action.payload };
 
     case 'FETCH_ERROR':
