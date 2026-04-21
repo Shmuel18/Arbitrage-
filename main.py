@@ -228,7 +228,10 @@ async def main() -> None:
     api_task = None
     broadcast_task = None
 
-    if _port_in_use("0.0.0.0", 8000):
+    # Bind to 127.0.0.1 only — nginx proxies external traffic.
+    # Prevents accidental exposure if firewall rules slip.
+    api_host = "127.0.0.1"
+    if _port_in_use(api_host, 8000):
         logger.warning(
             "Port 8000 already in use — skipping embedded API server. "
             "An external API server is likely running.",
@@ -236,7 +239,7 @@ async def main() -> None:
         )
     else:
         uvicorn_config = uvicorn.Config(
-            api_app, host="0.0.0.0", port=8000,
+            api_app, host=api_host, port=8000,
             log_level="warning",   # suppress noisy access logs
             lifespan="off",        # we manage lifecycle ourselves (Redis already connected)
             ws_ping_interval=60,   # ping every 60s (default 20) — tolerates event-loop congestion
