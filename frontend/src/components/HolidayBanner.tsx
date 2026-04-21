@@ -17,7 +17,6 @@ import React, { useEffect, useState } from 'react';
 // ── Configure the current occasion here ───────────────────────────
 const IMAGE_SRC = '/independence-day.png';
 const IMAGE_ALT = 'יום העצמאות ה-78 של מדינת ישראל';
-const CAPTION = '🇮🇱 חג עצמאות שמח!';
 const DISMISS_LABEL = 'סגירת באנר יום העצמאות';
 // ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +66,6 @@ export const HolidayBanner: React.FC = () => {
           className="memorial-banner-image"
           draggable={false}
         />
-        <div className="memorial-banner-caption">{CAPTION}</div>
       </div>
     </div>
   );

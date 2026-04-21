@@ -36,8 +36,9 @@
     0 0 0 1px rgba(212, 164, 77, 0.35),
     0 20px 60px rgba(0, 0, 0, 0.7),
     0 0 90px rgba(212, 164, 77, 0.15);
-  background: #0a0a0a;
+  /* No solid background — image fills the frame. */
   animation: memorial-rise 1100ms cubic-bezier(0.22, 1, 0.36, 1);
+  line-height: 0; /* removes any sub-pixel gap under the img */
 }
 
 .memorial-banner-image {
@@ -48,6 +49,7 @@
   pointer-events: none;
 }
 
+/* Caption kept for future holidays if needed, but blended into image. */
 .memorial-banner-caption {
   padding: 14px 20px 18px;
   text-align: center;
@@ -56,12 +58,9 @@
   font-weight: 500;
   color: #d4a44d;
   letter-spacing: 0.04em;
-  background: linear-gradient(
-    180deg,
-    rgba(10, 10, 10, 0) 0%,
-    rgba(10, 10, 10, 1) 60%
-  );
+  background: transparent;
   direction: rtl;
+  line-height: 1.4;
 }
 
 .memorial-banner-close {
