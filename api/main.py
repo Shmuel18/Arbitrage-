@@ -25,7 +25,7 @@ from threading import Lock
 
 from .auth import require_read_token
 from .broadcast_service import BroadcastService
-from .routes import positions, trades, controls, analytics, alerts
+from .routes import positions, trades, controls, analytics, alerts, ai
 from .websocket_manager import ConnectionManager
 from src.storage.redis_client import RedisClient
 
@@ -144,6 +144,7 @@ app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
 app.include_router(controls.router, prefix="/api/controls", tags=["controls"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
+app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 
 
 @app.get("/api/opportunities")

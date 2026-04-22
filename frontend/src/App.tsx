@@ -1,10 +1,12 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import Dashboard from './components/Dashboard';
+import AIChatWidget from './components/AIChatWidget';
 // import HolidayBanner from './components/HolidayBanner';  // re-enable for next holiday
 import { useMarketData } from './hooks/useMarketData';
 import { useSettings } from './context/SettingsContext';
 import { translations, Lang } from './i18n/translations';
 import './App.css';
+import './styles/ai-chat.css';
 // import './styles/memorial.css';  // re-enable for next holiday
 
 /**
@@ -102,6 +104,9 @@ function AppShell() {
       />
       {/* Holiday banner — re-enable by uncommenting import + render + memorial.css */}
       {/* <HolidayBanner /> */}
+
+      {/* AI chat widget — floating FAB, opens chat panel */}
+      <AIChatWidget />
     </div>
   );
 }

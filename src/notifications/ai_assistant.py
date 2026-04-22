@@ -375,13 +375,24 @@ async def _answer_with_gemini(
     model_name = model or os.getenv("AI_MODEL", "gemini-2.5-flash")
     max_tokens_i = max_tokens or int(os.getenv("AI_MAX_TOKENS", "1024"))
 
-    # Gemini tool declarations (similar schema to Anthropic, slightly different shape).
+    # Gemini tool declarations. Gemini's Schema is more restrictive than
+    # JSON Schema — it does NOT accept 'default' values inside properties,
+    # so we strip them before passing.
+    def _strip_defaults(schema: dict) -> dict:
+        if not isinstance(schema, dict):
+            return schema
+        out = {k: v for k, v in schema.items() if k != "default"}
+        props = out.get("properties")
+        if isinstance(props, dict):
+            out["properties"] = {k: _strip_defaults(v) for k, v in props.items()}
+        return out
+
     gemini_tools = [{
         "function_declarations": [
             {
                 "name": t["name"],
                 "description": t["description"],
-                "parameters": t["input_schema"],
+                "parameters": _strip_defaults(t["input_schema"]),
             }
             for t in _TOOLS
         ],
