@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional
 
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -19,9 +21,18 @@ logger = logging.getLogger("trinity.api.ai")
 router = APIRouter(redirect_slashes=False)
 
 
+class ChatHistoryItem(BaseModel):
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str = Field(..., max_length=4000)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     lang: Optional[str] = Field(None, description="'he', 'en', or None for auto")
+    history: Optional[List[ChatHistoryItem]] = Field(
+        None,
+        description="Prior conversation (oldest → newest), up to last 8 exchanges.",
+    )
 
 
 class ChatResponse(BaseModel):
@@ -52,8 +63,17 @@ async def chat(
             detail="AI not configured. Set GEMINI_API_KEY (free) or ANTHROPIC_API_KEY.",
         )
 
+    history = None
+    if body.history:
+        history = [{"role": h.role, "content": h.content} for h in body.history]
+
     try:
-        answer = await answer_question(body.question, redis_client, lang=body.lang)
+        answer = await answer_question(
+            body.question,
+            redis_client,
+            lang=body.lang,
+            history=history,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI chat failed")
         raise HTTPException(status_code=502, detail=f"AI error: {exc}")

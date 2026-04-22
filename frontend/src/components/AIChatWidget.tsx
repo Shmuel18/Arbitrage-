@@ -99,7 +99,12 @@ export const AIChatWidget: React.FC = () => {
     setMessages((prev) => [...prev, { role: 'user', text: question, ts: Date.now() }]);
     setBusy(true);
     try {
-      const resp = await api.post('/ai/chat', { question, lang });
+      // Send last ~8 exchanges as context so follow-up questions work.
+      const history = messages.slice(-16).map((m) => ({
+        role: m.role === 'ai' ? 'assistant' : 'user',
+        content: m.text,
+      }));
+      const resp = await api.post('/ai/chat', { question, lang, history });
       const answer: string = resp.data?.answer || '(empty)';
       setMessages((prev) => [...prev, { role: 'ai', text: answer, ts: Date.now() }]);
     } catch (err: any) {

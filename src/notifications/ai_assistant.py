@@ -283,8 +283,14 @@ async def answer_question(
     model: Optional[str] = None,
     max_tokens: Optional[int] = None,
     lang: Optional[str] = None,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Answer with auto-fallback: tries providers in order until one succeeds.
+
+    `history`: optional list of prior exchanges in OpenAI-style format:
+        [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+    Providing it lets the model answer follow-up questions coherently
+    (e.g., 'why?' or 'which?' referring to the previous reply).
 
     Falls through on 429/quota errors — so if Gemini's daily quota is
     exhausted, Groq takes over automatically, etc.
@@ -302,15 +308,18 @@ async def answer_question(
     if lang == "auto":
         lang = _detect_language(question)
 
+    # Sanitize history: keep last 8 exchanges (16 messages max) to bound context.
+    hist = history[-16:] if history else []
+
     last_err: Optional[Exception] = None
     for i, provider in enumerate(chain):
         try:
             if provider == "anthropic":
-                return await _answer_with_anthropic(question, redis, api_key, model, max_tokens, lang)
+                return await _answer_with_anthropic(question, redis, api_key, model, max_tokens, lang, hist)
             if provider == "gemini":
-                return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang)
+                return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang, hist)
             if provider == "groq":
-                return await _answer_with_groq(question, redis, api_key, model, max_tokens, lang)
+                return await _answer_with_groq(question, redis, api_key, model, max_tokens, lang, hist)
         except (_ProviderQuotaError, _ProviderToolError) as exc:
             nxt = chain[i + 1] if i + 1 < len(chain) else "none"
             logger.warning("Provider %s failed (%s), trying next (%s): %s",
@@ -359,6 +368,7 @@ async def _answer_with_anthropic(
     model: Optional[str],
     max_tokens: Optional[int],
     lang: str,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Answer using Claude + native tool use."""
     api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -387,9 +397,14 @@ async def _answer_with_anthropic(
         "Use Telegram HTML tags only: <b>, <i>, <code>. No markdown."
     )
 
-    messages: List[Dict[str, Any]] = [
-        {"role": "user", "content": question},
-    ]
+    messages: List[Dict[str, Any]] = []
+    # Prior conversation (if provided)
+    for h in (history or []):
+        role = h.get("role")
+        content = h.get("content") or h.get("text") or ""
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)[:2000]})
+    messages.append({"role": "user", "content": question})
 
     tool_impls: Dict[str, Callable[..., Awaitable[Any]]] = {
         "get_status":            lambda **kw: _tool_get_status(redis),
@@ -457,6 +472,7 @@ async def _answer_with_gemini(
     model: Optional[str],
     max_tokens: Optional[int],
     lang: str,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Answer using Google Gemini (free tier) + native function calling."""
     api_key = api_key or os.getenv("GEMINI_API_KEY", "").strip()
@@ -531,8 +547,23 @@ async def _answer_with_gemini(
         "get_pnl_summary":       lambda **kw: _tool_get_pnl_summary(redis, **kw),
     }
 
+    # Pre-seed the chat with prior conversation history (if any). Gemini's
+    # chat.history accepts OpenAI-style roles renamed: user→"user", assistant→"model".
+    gemini_history = []
+    for h in (history or []):
+        role = h.get("role")
+        content = h.get("content") or h.get("text") or ""
+        if not content:
+            continue
+        gm_role = "user" if role == "user" else "model" if role == "assistant" else None
+        if gm_role:
+            gemini_history.append({"role": gm_role, "parts": [str(content)[:2000]]})
+
     # Start a chat so history persists across tool calls.
-    chat = gmodel.start_chat(enable_automatic_function_calling=False)
+    chat = gmodel.start_chat(
+        history=gemini_history,
+        enable_automatic_function_calling=False,
+    )
 
     # Model that forbids further tool calls — used as a forced-answer fallback
     # after 2 tool rounds, so we never return "Too many tool-call rounds".
@@ -677,6 +708,7 @@ async def _answer_with_groq(
     model: Optional[str],
     max_tokens: Optional[int],
     lang: str,
+    history: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """Answer using Groq (free tier, ~14K req/day on Llama 3.3 70B)."""
     api_key = api_key or os.getenv("GROQ_API_KEY", "").strip()
@@ -738,10 +770,14 @@ async def _answer_with_groq(
         "get_pnl_summary":       lambda **kw: _tool_get_pnl_summary(redis, **kw),
     }
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": question},
-    ]
+    messages = [{"role": "system", "content": system_prompt}]
+    # Prior conversation (if provided) — gives context for follow-up questions
+    for h in (history or []):
+        role = h.get("role")
+        content = h.get("content") or h.get("text") or ""
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": str(content)[:2000]})
+    messages.append({"role": "user", "content": question})
 
     try:
         MAX_TOOL_ROUNDS = 3  # Force answer after 3 tool rounds

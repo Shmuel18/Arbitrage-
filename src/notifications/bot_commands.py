@@ -137,11 +137,27 @@ class _BotCommands:
     async def _cmd_ask(
         self, session: aiohttp.ClientSession, chat_id: int, question: str,
     ) -> None:
-        """Forward the question to the AI assistant and reply with its answer."""
+        """Forward the question to the AI assistant and reply with its answer.
+
+        Per-chat history is stored in Redis (last 16 messages) so follow-up
+        questions like "why?" or "which?" are handled coherently.
+        """
+        hist_key = f"trinity:ai:history:{chat_id}"
         try:
-            # Lazy import so bots without ANTHROPIC_API_KEY don't pull the SDK.
+            # Load prior history (list of JSON strings, oldest first)
+            history: list = []
+            try:
+                raws = await self._redis.lrange(hist_key, 0, 15)
+                for r in raws or []:
+                    try:
+                        history.append(json.loads(r) if isinstance(r, (str, bytes)) else r)
+                    except Exception:
+                        pass
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("history load failed: %s", exc)
+
             from src.notifications.ai_assistant import answer_question
-            # Let the user see we're working (typing indicator)
+            # Typing indicator
             try:
                 await session.post(
                     f"{_API_BASE}/bot{self._token}/sendChatAction",
@@ -150,7 +166,16 @@ class _BotCommands:
                 )
             except Exception:  # noqa: BLE001
                 pass
-            answer = await answer_question(question, self._redis)
+            answer = await answer_question(question, self._redis, history=history)
+
+            # Persist exchange: append user→assistant, trim to 16 messages, 24h TTL
+            try:
+                await self._redis.rpush(hist_key, json.dumps({"role": "user", "content": question}))
+                await self._redis.rpush(hist_key, json.dumps({"role": "assistant", "content": answer}))
+                await self._redis.ltrim(hist_key, -16, -1)
+                await self._redis.expire(hist_key, 86400)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("history persist failed: %s", exc)
         except Exception as exc:  # noqa: BLE001
             logger.exception("/ask failed")
             answer = f"🤖 Error: <code>{str(exc)[:200]}</code>"
