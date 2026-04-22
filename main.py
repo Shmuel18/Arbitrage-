@@ -237,9 +237,12 @@ async def main() -> None:
     api_task = None
     broadcast_task = None
 
-    # Bind to 127.0.0.1 only — nginx proxies external traffic.
-    # Prevents accidental exposure if firewall rules slip.
-    api_host = "127.0.0.1"
+    # Bind to 127.0.0.1 by default — nginx proxies external traffic.
+    # In Docker, set API_BIND_HOST=0.0.0.0 so the host port mapping
+    # (127.0.0.1:8000:8000) can forward from the host's localhost into
+    # the container. External exposure is still blocked by the bind in
+    # docker-compose.yml.
+    api_host = os.getenv("API_BIND_HOST", "127.0.0.1")
     if _port_in_use(api_host, 8000):
         logger.warning(
             "Port 8000 already in use — skipping embedded API server. "

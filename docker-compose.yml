@@ -1,18 +1,25 @@
 version: "3.8"
 
+# Hybrid deployment: bot + redis containerized, nginx/SSL stay native
+# on the host. This keeps the existing Let's Encrypt setup stable while
+# giving us isolation + reproducible builds for the bot itself.
+#
+# The native nginx (system service) proxies:
+#   /           → static files at /opt/ratebridge/frontend/build
+#   /api/*, /ws → 127.0.0.1:8000  (the bot container, mapped to host)
+# Redis is bound to 127.0.0.1:6379 so only local processes can reach it.
+
 services:
   redis:
     image: redis:7-alpine
     container_name: trinity-redis
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    command: redis-server --appendonly yes
     ports:
-      # Bind only to localhost — do NOT expose Redis externally.
-      # Docker normally bypasses UFW; this 127.0.0.1 binding is the fix.
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,38 +34,28 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
+      # Inside the container, Redis is reachable via its service name.
       REDIS_HOST: redis
-      REDIS_PORT: 6379
-      CORS_ORIGINS: https://${DOMAIN}
+      REDIS_PORT: "6379"
+      # Bind FastAPI to 0.0.0.0 so the host's 127.0.0.1:8000 port map works.
+      API_BIND_HOST: "0.0.0.0"
+      # uvloop, precompiled bytecode, no stdout buffering
+      PYTHONUNBUFFERED: "1"
+    ports:
+      # Only accessible from the host's localhost — nginx proxies.
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml:ro
+      - ./frontend/build:/app/frontend/build:ro
     restart: unless-stopped
     networks: [trinity-net]
-
-  nginx:
-    image: nginx:alpine
-    container_name: trinity-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./certbot/conf:/etc/letsencrypt:ro
-      - ./certbot/www:/var/www/certbot:ro
-      - ./nginx/logs:/var/log/nginx
-    depends_on: [bot]
-    restart: unless-stopped
-    networks: [trinity-net]
-
-  certbot:
-    image: certbot/certbot
-    container_name: trinity-certbot
-    volumes:
-      - ./certbot/conf:/etc/letsencrypt
-      - ./certbot/www:/var/www/certbot
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done'"
-    networks: [trinity-net]
+    # Higher priority + resource ceilings
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1500M
 
 volumes:
   redis_data:
