@@ -372,7 +372,11 @@ async def _answer_with_gemini(
             "Add <code>google-generativeai</code> to requirements.txt."
         )
 
-    model_name = model or os.getenv("AI_MODEL", "gemini-2.5-flash")
+    # Free tier comparison (daily request quota):
+    #   gemini-2.0-flash      → 1500/day (current default, best balance)
+    #   gemini-2.5-flash      → 500/day  (newer but stricter)
+    #   gemini-2.5-flash-lite → 1500/day (cheapest+newest, slightly weaker)
+    model_name = model or os.getenv("AI_MODEL", "gemini-2.0-flash")
     max_tokens_i = max_tokens or int(os.getenv("AI_MAX_TOKENS", "1024"))
 
     # Gemini tool declarations. Gemini's Schema is more restrictive than
@@ -430,10 +434,45 @@ async def _answer_with_gemini(
 
     # Start a chat so history persists across tool calls.
     chat = gmodel.start_chat(enable_automatic_function_calling=False)
+
+    # List of fallback models (try in order on 429/quota errors).
+    fallback_models = [
+        model_name,
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+    # De-duplicate while preserving order
+    tried: List[str] = []
+    fallback_unique = [m for m in fallback_models if not (m in tried or tried.append(m))]
+
+    import asyncio
+
+    async def _send_with_fallback(chat_obj, msg):
+        last_err = None
+        for idx, m in enumerate(fallback_unique):
+            try:
+                if idx > 0:
+                    # Rebuild chat with fallback model
+                    new_model = genai.GenerativeModel(
+                        model_name=m,
+                        system_instruction=system_instruction,
+                        tools=gemini_tools,
+                        generation_config={"max_output_tokens": max_tokens_i, "temperature": 0.2},
+                    )
+                    chat_obj = new_model.start_chat(enable_automatic_function_calling=False)
+                    logger.info("Gemini falling back to model %s after quota", m)
+                return chat_obj, await asyncio.to_thread(chat_obj.send_message, msg)
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                msg_text = str(e).lower()
+                if "429" in msg_text or "quota" in msg_text or "rate" in msg_text:
+                    continue
+                raise
+        raise last_err or RuntimeError("All fallback models failed")
+
     try:
-        # The SDK is sync under the hood; run in a thread pool.
-        import asyncio
-        response = await asyncio.to_thread(chat.send_message, question)
+        chat, response = await _send_with_fallback(chat, question)
 
         # Tool-use loop (up to 5 rounds)
         for _round in range(5):
