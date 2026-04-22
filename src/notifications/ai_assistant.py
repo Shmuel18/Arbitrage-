@@ -311,9 +311,10 @@ async def answer_question(
                 return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang)
             if provider == "groq":
                 return await _answer_with_groq(question, redis, api_key, model, max_tokens, lang)
-        except _ProviderQuotaError as exc:
-            logger.warning("Provider %s hit quota, trying next (%s)",
-                           provider, chain[i + 1] if i + 1 < len(chain) else "none")
+        except (_ProviderQuotaError, _ProviderToolError) as exc:
+            nxt = chain[i + 1] if i + 1 < len(chain) else "none"
+            logger.warning("Provider %s failed (%s), trying next (%s): %s",
+                           provider, type(exc).__name__, nxt, str(exc)[:150])
             last_err = exc
             continue
         except Exception:  # noqa: BLE001
@@ -332,9 +333,23 @@ class _ProviderQuotaError(Exception):
     pass
 
 
+class _ProviderToolError(Exception):
+    """Raised when a provider fails due to tool-schema validation issues."""
+    pass
+
+
 def _is_quota_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return "429" in msg or "quota" in msg or "rate limit" in msg or "too many requests" in msg
+
+
+def _is_tool_schema_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "tool_use_failed" in msg
+        or "tool call validation failed" in msg
+        or "parameters for tool" in msg
+    )
 
 
 async def _answer_with_anthropic(
@@ -685,14 +700,21 @@ async def _answer_with_groq(
         "Use Telegram HTML tags only: <b>, <i>, <code>. No markdown."
     )
 
-    # OpenAI-compatible tools schema. Strip 'default' for safety.
-    def _strip_defaults(schema: dict) -> dict:
+    # Prepare tool schemas for Groq. Two transformations:
+    # 1. Strip 'default' (Groq doesn't allow it in strict validation).
+    # 2. Relax integer types to accept both int AND string, because Llama
+    #    3.3 often returns `"5"` instead of `5`, and Groq rejects the
+    #    call at the API layer before our int-coercion can fire.
+    def _prepare_schema(schema: dict) -> dict:
         if not isinstance(schema, dict):
             return schema
         out = {k: v for k, v in schema.items() if k != "default"}
+        # Relax integer → also accept string (Llama stringifies ints)
+        if out.get("type") == "integer":
+            out["type"] = ["integer", "string"]
         props = out.get("properties")
         if isinstance(props, dict):
-            out["properties"] = {k: _strip_defaults(v) for k, v in props.items()}
+            out["properties"] = {k: _prepare_schema(v) for k, v in props.items()}
         return out
 
     groq_tools = [
@@ -701,7 +723,7 @@ async def _answer_with_groq(
             "function": {
                 "name": t["name"],
                 "description": t["description"],
-                "parameters": _strip_defaults(t["input_schema"]),
+                "parameters": _prepare_schema(t["input_schema"]),
             },
         }
         for t in _TOOLS
@@ -722,12 +744,15 @@ async def _answer_with_groq(
     ]
 
     try:
-        for _round in range(5):
+        MAX_TOOL_ROUNDS = 3  # Keep low — force answer after 3 tool rounds
+        for _round in range(MAX_TOOL_ROUNDS):
+            # On the last round, disable tool choice so the model MUST answer
+            tc = "none" if _round == MAX_TOOL_ROUNDS - 1 else "auto"
             resp = await client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                tools=groq_tools,
-                tool_choice="auto",
+                tools=groq_tools if tc == "auto" else [],
+                tool_choice=tc if tc == "auto" else None,
                 max_tokens=max_tokens_i,
                 temperature=0.2,
             )
@@ -774,10 +799,12 @@ async def _answer_with_groq(
                 })
 
         return "🤖 Too many tool-call rounds. Try rephrasing."
-    except _ProviderQuotaError:
+    except (_ProviderQuotaError, _ProviderToolError):
         raise
     except Exception as exc:  # noqa: BLE001
         if _is_quota_error(exc):
             raise _ProviderQuotaError(str(exc)) from exc
+        if _is_tool_schema_error(exc):
+            raise _ProviderToolError(str(exc)) from exc
         logger.exception("Groq request failed")
         return f"🤖 Groq error: <code>{str(exc)[:300]}</code>"
