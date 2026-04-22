@@ -1,21 +1,21 @@
 """
 AI trading assistant — answers natural-language questions about RateBridge.
 
-Uses Claude (Anthropic API) with tool use to pull real-time bot data from
-Redis. The model decides which tool(s) to call based on the question.
+Supports two providers:
+  * Anthropic Claude (paid but cheap, better tool use)
+  * Google Gemini   (free tier: 1M tokens/day, 15 RPM)
+
+The provider is chosen at runtime via AI_PROVIDER. If only one API key is
+set, that provider is used automatically.
 
 Environment:
-  ANTHROPIC_API_KEY   (required)
-  AI_MODEL            (optional, default claude-sonnet-4-5)
-  AI_MAX_TOKENS       (optional, default 1024)
-  AI_LANG             (optional; 'auto' | 'he' | 'en', default 'auto')
-
-Design:
-  * Single-turn with tool use loop (model can call multiple tools in one turn).
-  * System prompt is cached (server-side prompt caching) to keep costs low —
-    ~$0.01-0.05 per question for a small account.
-  * All tool results are truncated to safe sizes so long trade histories
-    don't blow up the context window.
+  AI_PROVIDER         'anthropic' | 'gemini' | 'auto' (default 'auto')
+  ANTHROPIC_API_KEY   for Claude
+  GEMINI_API_KEY      for Gemini (get: https://aistudio.google.com/apikey)
+  AI_MODEL            optional override (anthropic: claude-sonnet-4-5,
+                      gemini: gemini-2.5-flash)
+  AI_MAX_TOKENS       default 1024
+  AI_LANG             'auto' | 'he' | 'en' (default 'auto')
 """
 
 from __future__ import annotations
@@ -34,9 +34,15 @@ if TYPE_CHECKING:
 
 try:
     from anthropic import AsyncAnthropic
-    _SDK_AVAILABLE = True
+    _ANTHROPIC_AVAILABLE = True
 except ImportError:
-    _SDK_AVAILABLE = False
+    _ANTHROPIC_AVAILABLE = False
+
+try:
+    import google.generativeai as genai  # type: ignore[import-not-found]
+    _GEMINI_AVAILABLE = True
+except ImportError:
+    _GEMINI_AVAILABLE = False
 
 
 # ── Tool definitions (exposed to the model) ──────────────────────
@@ -215,6 +221,20 @@ def _detect_language(text: str) -> str:
     return "he" if re.search(r"[\u0590-\u05FF]", text) else "en"
 
 
+def _resolve_provider() -> str:
+    """Pick AI provider based on env vars. 'auto' = prefer whichever key exists."""
+    provider = os.getenv("AI_PROVIDER", "auto").strip().lower()
+    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    has_gemini = bool(os.getenv("GEMINI_API_KEY", "").strip())
+    if provider == "auto":
+        if has_anthropic:
+            return "anthropic"
+        if has_gemini:
+            return "gemini"
+        return "none"
+    return provider
+
+
 async def answer_question(
     question: str,
     redis: "RedisClient",
@@ -223,24 +243,41 @@ async def answer_question(
     max_tokens: Optional[int] = None,
     lang: Optional[str] = None,
 ) -> str:
-    """Answer a natural-language question about the bot using Claude + tools.
+    """Answer a natural-language question, dispatching to the configured provider."""
+    provider = _resolve_provider()
+    if provider == "none":
+        return (
+            "🤖 AI assistant is not configured. Set either "
+            "<code>ANTHROPIC_API_KEY</code> (Claude, paid) or "
+            "<code>GEMINI_API_KEY</code> (free) in .env."
+        )
 
-    Returns plain text (Telegram HTML-safe) suitable for sendMessage.
-    """
+    lang = lang or os.getenv("AI_LANG", "auto")
+    if lang == "auto":
+        lang = _detect_language(question)
+
+    if provider == "gemini":
+        return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang)
+    return await _answer_with_anthropic(question, redis, api_key, model, max_tokens, lang)
+
+
+async def _answer_with_anthropic(
+    question: str,
+    redis: "RedisClient",
+    api_key: Optional[str],
+    model: Optional[str],
+    max_tokens: Optional[int],
+    lang: str,
+) -> str:
+    """Answer using Claude + native tool use."""
     api_key = api_key or os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        return (
-            "🤖 AI assistant is not configured. "
-            "Set <code>ANTHROPIC_API_KEY</code> in .env to enable."
-        )
-    if not _SDK_AVAILABLE:
+        return "🤖 ANTHROPIC_API_KEY is not set."
+    if not _ANTHROPIC_AVAILABLE:
         return "🤖 The `anthropic` Python SDK is not installed."
 
     model = model or os.getenv("AI_MODEL", "claude-sonnet-4-5")
     max_tokens = max_tokens or int(os.getenv("AI_MAX_TOKENS", "1024"))
-    lang = lang or os.getenv("AI_LANG", "auto")
-    if lang == "auto":
-        lang = _detect_language(question)
 
     client = AsyncAnthropic(api_key=api_key)
 
@@ -313,3 +350,117 @@ async def answer_question(
         messages.append({"role": "user", "content": tool_results})
 
     return "🤖 I spent too many tool-call rounds and couldn't finish. Try rephrasing."
+
+
+# ── Gemini provider (free) ──────────────────────────────────────
+
+async def _answer_with_gemini(
+    question: str,
+    redis: "RedisClient",
+    api_key: Optional[str],
+    model: Optional[str],
+    max_tokens: Optional[int],
+    lang: str,
+) -> str:
+    """Answer using Google Gemini (free tier) + native function calling."""
+    api_key = api_key or os.getenv("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        return "🤖 GEMINI_API_KEY is not set. Get one free at https://aistudio.google.com/apikey"
+    if not _GEMINI_AVAILABLE:
+        return (
+            "🤖 The `google-generativeai` Python package is not installed. "
+            "Add <code>google-generativeai</code> to requirements.txt."
+        )
+
+    model_name = model or os.getenv("AI_MODEL", "gemini-2.5-flash")
+    max_tokens_i = max_tokens or int(os.getenv("AI_MAX_TOKENS", "1024"))
+
+    # Gemini tool declarations (similar schema to Anthropic, slightly different shape).
+    gemini_tools = [{
+        "function_declarations": [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["input_schema"],
+            }
+            for t in _TOOLS
+        ],
+    }]
+
+    genai.configure(api_key=api_key)
+
+    system_instruction = (
+        "You are the RateBridge trading bot's AI assistant. RateBridge is a "
+        "delta-neutral funding-rate arbitrage engine running on Binance, "
+        "Bybit, KuCoin, Gate.io, and Bitget. It takes opposing positions "
+        "across exchanges to capture funding-rate differentials.\n\n"
+        "Always call a tool first before answering — never guess from memory. "
+        "Keep answers concise (2-5 short lines). Use $X.XX for money and "
+        "X.XX% for percentages.\n\n"
+        f"Respond in {'Hebrew (עברית)' if lang == 'he' else 'English'}. "
+        "Use Telegram HTML tags only: <b>, <i>, <code>. No markdown."
+    )
+
+    gmodel = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=system_instruction,
+        tools=gemini_tools,
+        generation_config={"max_output_tokens": max_tokens_i, "temperature": 0.2},
+    )
+
+    tool_impls: Dict[str, Callable[..., Awaitable[Any]]] = {
+        "get_status":            lambda **kw: _tool_get_status(redis),
+        "get_balances":          lambda **kw: _tool_get_balances(redis),
+        "get_open_positions":    lambda **kw: _tool_get_open_positions(redis),
+        "get_recent_trades":     lambda **kw: _tool_get_recent_trades(redis, **kw),
+        "get_top_opportunities": lambda **kw: _tool_get_top_opportunities(redis, **kw),
+        "get_pnl_summary":       lambda **kw: _tool_get_pnl_summary(redis, **kw),
+    }
+
+    # Start a chat so history persists across tool calls.
+    chat = gmodel.start_chat(enable_automatic_function_calling=False)
+    try:
+        # The SDK is sync under the hood; run in a thread pool.
+        import asyncio
+        response = await asyncio.to_thread(chat.send_message, question)
+
+        # Tool-use loop (up to 5 rounds)
+        for _round in range(5):
+            fc_calls = []
+            for part in response.candidates[0].content.parts:
+                fc = getattr(part, "function_call", None)
+                if fc is not None and fc.name:
+                    fc_calls.append(fc)
+
+            if not fc_calls:
+                # No more tool calls → return the final text.
+                text = response.text if hasattr(response, "text") else ""
+                return (text or "🤖 (empty response)").strip()
+
+            # Execute each tool call and send results back.
+            fn_responses = []
+            for fc in fc_calls:
+                name = fc.name
+                args = dict(fc.args) if fc.args else {}
+                try:
+                    impl = tool_impls.get(name)
+                    if impl is None:
+                        result = {"error": f"unknown tool {name}"}
+                    else:
+                        result = await impl(**args)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Gemini tool %s failed", name)
+                    result = {"error": str(exc)}
+                fn_responses.append({
+                    "function_response": {
+                        "name": name,
+                        "response": {"result": json.loads(json.dumps(result, default=str))[:20] if isinstance(result, str) else result},
+                    }
+                })
+
+            response = await asyncio.to_thread(chat.send_message, fn_responses)
+
+        return "🤖 Too many tool-call rounds. Try rephrasing."
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Gemini request failed")
+        return f"🤖 Gemini error: <code>{str(exc)[:300]}</code>"

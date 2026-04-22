@@ -12,8 +12,9 @@ uvloop>=0.19; sys_platform != "win32"
 fastapi>=0.110
 uvicorn[standard]>=0.27
 
-# AI assistant (Anthropic Claude API)
-anthropic>=0.40
+# AI assistant — one or both providers
+anthropic>=0.40                 # Paid, best tool use
+google-generativeai>=0.8         # Free tier: 1M tokens/day, 15 RPM
 
 # Storage
 redis[hiredis]>=5.0

@@ -25,11 +25,12 @@ echo "Rebuilding frontend..."
 cd /opt/ratebridge/frontend
 npm run build 2>&1 | tail -2
 
-echo "Restarting bot..."
-systemctl restart ratebridge
-sleep 3
-if systemctl is-active ratebridge > /dev/null; then
-  echo "Bot active."
+echo "Restarting bot (docker)..."
+cd /opt/ratebridge
+docker compose restart bot 2>&1 | tail -3
+sleep 5
+if docker ps --filter name=trinity-bot --filter status=running --format '{{.Names}}' | grep -q trinity-bot; then
+  echo "Bot container running."
 else
-  echo "WARNING: bot not active - check logs"
+  echo "WARNING: bot container not running — check: docker logs trinity-bot"
 fi

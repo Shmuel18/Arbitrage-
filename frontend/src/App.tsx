@@ -1,11 +1,11 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import Dashboard from './components/Dashboard';
-import HolidayBanner from './components/HolidayBanner';
+// import HolidayBanner from './components/HolidayBanner';  // re-enable for next holiday
 import { useMarketData } from './hooks/useMarketData';
 import { useSettings } from './context/SettingsContext';
 import { translations, Lang } from './i18n/translations';
 import './App.css';
-import './styles/memorial.css';
+// import './styles/memorial.css';  // re-enable for next holiday
 
 /**
  * ErrorBoundary can't use hooks, so read the language directly from
@@ -100,8 +100,8 @@ function AppShell() {
         wsConnection={wsConnection}
         lastWsMessageAt={lastWsMessageAt}
       />
-      {/* Holiday banner (currently Yom Ha'atzmaut) — floats above UI, dismissible */}
-      <HolidayBanner />
+      {/* Holiday banner — re-enable by uncommenting import + render + memorial.css */}
+      {/* <HolidayBanner /> */}
     </div>
   );
 }
