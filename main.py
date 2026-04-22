@@ -251,8 +251,11 @@ async def main() -> None:
             api_app, host=api_host, port=8000,
             log_level="warning",   # suppress noisy access logs
             lifespan="off",        # we manage lifecycle ourselves (Redis already connected)
-            ws_ping_interval=60,   # ping every 60s (default 20) — tolerates event-loop congestion
-            ws_ping_timeout=60,    # wait 60s for pong (default 20) — avoids premature disconnects
+            # Ping every 25s — keeps connections alive through typical NAT/LB
+            # idle timeouts (30-60s). Faster than 60s so browser-side watchdog
+            # (30s threshold) gets corroborating server-side keepalive traffic.
+            ws_ping_interval=25,
+            ws_ping_timeout=20,    # 20s for pong before closing — fails fast on dead peers
         )
         uvicorn_server = uvicorn.Server(uvicorn_config)
 
