@@ -30,7 +30,10 @@ RUN mkdir -p logs
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -fsS http://localhost:8000/api/health || exit 1
+# Healthcheck: /openapi.json is always served (no auth token required) once
+# FastAPI is up. Using that instead of /api/health (which requires X-Read-Token).
+# start-period=180s accommodates the 3-5 min warmup (exchange settings sync).
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -fsS http://localhost:8000/openapi.json > /dev/null || exit 1
 
 CMD ["python", "main.py"]
