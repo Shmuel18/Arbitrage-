@@ -12,6 +12,9 @@ uvloop>=0.19; sys_platform != "win32"
 fastapi>=0.110
 uvicorn[standard]>=0.27
 
+# AI assistant (Anthropic Claude API)
+anthropic>=0.40
+
 # Storage
 redis[hiredis]>=5.0
 

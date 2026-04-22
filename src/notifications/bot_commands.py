@@ -95,13 +95,11 @@ class _BotCommands:
         self, session: aiohttp.ClientSession, message: Dict[str, Any],
     ) -> None:
         text = (message.get("text") or "").strip()
-        if not text.startswith("/"):
+        if not text:
             return
         chat_id = message["chat"]["id"]
         user = message.get("from") or {}
         user_id = int(user.get("id", 0))
-
-        cmd = text.split()[0].lstrip("/").split("@", 1)[0].lower()
 
         if not self._is_allowed(user_id):
             await self._send(session, chat_id,
@@ -109,15 +107,54 @@ class _BotCommands:
                 f"Add it to <code>TELEGRAM_ALLOWED_USER_IDS</code> to authorize.")
             return
 
-        if cmd == "start":
-            await self._cmd_start(session, chat_id, user_id)
-        elif cmd == "status":
-            await self._cmd_status(session, chat_id)
-        elif cmd == "menu":
-            await self._cmd_menu(session, chat_id)
-        else:
-            await self._send(session, chat_id,
-                "Unknown command. Try <code>/status</code> or <code>/menu</code>.")
+        # ── Slash commands ──
+        if text.startswith("/"):
+            cmd = text.split()[0].lstrip("/").split("@", 1)[0].lower()
+            if cmd == "start":
+                await self._cmd_start(session, chat_id, user_id)
+            elif cmd == "status":
+                await self._cmd_status(session, chat_id)
+            elif cmd == "menu":
+                await self._cmd_menu(session, chat_id)
+            elif cmd == "ask":
+                question = text.split(maxsplit=1)[1] if " " in text else ""
+                if not question:
+                    await self._send(session, chat_id,
+                        "Usage: <code>/ask &lt;question&gt;</code>\n"
+                        "Example: <code>/ask כמה הרווחתי היום?</code>")
+                    return
+                await self._cmd_ask(session, chat_id, question)
+            else:
+                await self._send(session, chat_id,
+                    "Unknown command. Try <code>/status</code>, <code>/menu</code>, "
+                    "<code>/ask &lt;question&gt;</code>, or just type a question.")
+            return
+
+        # ── Natural language → AI assistant ──
+        # Any non-slash message from an allowed user is treated as a question.
+        await self._cmd_ask(session, chat_id, text)
+
+    async def _cmd_ask(
+        self, session: aiohttp.ClientSession, chat_id: int, question: str,
+    ) -> None:
+        """Forward the question to the AI assistant and reply with its answer."""
+        try:
+            # Lazy import so bots without ANTHROPIC_API_KEY don't pull the SDK.
+            from src.notifications.ai_assistant import answer_question
+            # Let the user see we're working (typing indicator)
+            try:
+                await session.post(
+                    f"{_API_BASE}/bot{self._token}/sendChatAction",
+                    json={"chat_id": chat_id, "action": "typing"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            answer = await answer_question(question, self._redis)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("/ask failed")
+            answer = f"🤖 Error: <code>{str(exc)[:200]}</code>"
+        await self._send(session, chat_id, answer)
 
     async def _cmd_start(
         self, session: aiohttp.ClientSession, chat_id: int, user_id: int,
