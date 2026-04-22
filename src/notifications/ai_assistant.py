@@ -44,6 +44,12 @@ try:
 except ImportError:
     _GEMINI_AVAILABLE = False
 
+try:
+    from groq import AsyncGroq  # type: ignore[import-not-found]
+    _GROQ_AVAILABLE = True
+except ImportError:
+    _GROQ_AVAILABLE = False
+
 
 # ── Tool definitions (exposed to the model) ──────────────────────
 _TOOLS: List[Dict[str, Any]] = [
@@ -222,17 +228,37 @@ def _detect_language(text: str) -> str:
 
 
 def _resolve_provider() -> str:
-    """Pick AI provider based on env vars. 'auto' = prefer whichever key exists."""
-    provider = os.getenv("AI_PROVIDER", "auto").strip().lower()
+    """Legacy helper — returns the top provider for backwards compat."""
+    chain = _provider_chain()
+    return chain[0] if chain else "none"
+
+
+def _provider_chain() -> List[str]:
+    """Ordered list of providers to try. Earlier = preferred.
+
+    AI_PROVIDER env var overrides the primary choice. Fallbacks then run
+    in this order: gemini → groq → anthropic, skipping any without a key.
+    """
     has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
     has_gemini = bool(os.getenv("GEMINI_API_KEY", "").strip())
-    if provider == "auto":
-        if has_anthropic:
-            return "anthropic"
-        if has_gemini:
-            return "gemini"
-        return "none"
-    return provider
+    has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+
+    default_order = []
+    if has_gemini:    default_order.append("gemini")
+    if has_groq:      default_order.append("groq")
+    if has_anthropic: default_order.append("anthropic")
+
+    primary = os.getenv("AI_PROVIDER", "auto").strip().lower()
+    if primary in ("anthropic", "gemini", "groq"):
+        chain = [primary] + [p for p in default_order if p != primary]
+        # Filter out providers without a key
+        return [
+            p for p in chain
+            if (p == "anthropic" and has_anthropic)
+            or (p == "gemini" and has_gemini)
+            or (p == "groq" and has_groq)
+        ]
+    return default_order
 
 
 async def answer_question(
@@ -243,22 +269,57 @@ async def answer_question(
     max_tokens: Optional[int] = None,
     lang: Optional[str] = None,
 ) -> str:
-    """Answer a natural-language question, dispatching to the configured provider."""
-    provider = _resolve_provider()
-    if provider == "none":
+    """Answer with auto-fallback: tries providers in order until one succeeds.
+
+    Falls through on 429/quota errors — so if Gemini's daily quota is
+    exhausted, Groq takes over automatically, etc.
+    """
+    chain = _provider_chain()
+    if not chain:
         return (
-            "🤖 AI assistant is not configured. Set either "
-            "<code>ANTHROPIC_API_KEY</code> (Claude, paid) or "
-            "<code>GEMINI_API_KEY</code> (free) in .env."
+            "🤖 AI assistant is not configured. Set at least one of:\n"
+            "• <code>GEMINI_API_KEY</code> (free, 1500 req/day)\n"
+            "• <code>GROQ_API_KEY</code> (free, 14,400 req/day)\n"
+            "• <code>ANTHROPIC_API_KEY</code> (paid, high quality)"
         )
 
     lang = lang or os.getenv("AI_LANG", "auto")
     if lang == "auto":
         lang = _detect_language(question)
 
-    if provider == "gemini":
-        return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang)
-    return await _answer_with_anthropic(question, redis, api_key, model, max_tokens, lang)
+    last_err: Optional[Exception] = None
+    for i, provider in enumerate(chain):
+        try:
+            if provider == "anthropic":
+                return await _answer_with_anthropic(question, redis, api_key, model, max_tokens, lang)
+            if provider == "gemini":
+                return await _answer_with_gemini(question, redis, api_key, model, max_tokens, lang)
+            if provider == "groq":
+                return await _answer_with_groq(question, redis, api_key, model, max_tokens, lang)
+        except _ProviderQuotaError as exc:
+            logger.warning("Provider %s hit quota, trying next (%s)",
+                           provider, chain[i + 1] if i + 1 < len(chain) else "none")
+            last_err = exc
+            continue
+        except Exception:  # noqa: BLE001
+            # Non-quota errors bubble up — don't silently swap providers
+            # when there's a code bug.
+            raise
+
+    return (
+        "🤖 All AI providers hit their quota. Try again later, or add another "
+        "free provider key (GROQ_API_KEY or GEMINI_API_KEY)."
+    )
+
+
+class _ProviderQuotaError(Exception):
+    """Raised when a provider responds with 429 / quota exceeded."""
+    pass
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "429" in msg or "quota" in msg or "rate limit" in msg or "too many requests" in msg
 
 
 async def _answer_with_anthropic(
@@ -311,13 +372,18 @@ async def _answer_with_anthropic(
 
     # Tool-use loop (up to 5 rounds to prevent runaway token spend)
     for _round in range(5):
-        resp = await client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-            tools=_TOOLS,
-            messages=messages,
-        )
+        try:
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                tools=_TOOLS,
+                messages=messages,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if _is_quota_error(exc):
+                raise _ProviderQuotaError(str(exc)) from exc
+            raise
 
         # Assistant may have text blocks, tool_use blocks, or both.
         assistant_content = resp.content
@@ -472,7 +538,12 @@ async def _answer_with_gemini(
         raise last_err or RuntimeError("All fallback models failed")
 
     try:
-        chat, response = await _send_with_fallback(chat, question)
+        try:
+            chat, response = await _send_with_fallback(chat, question)
+        except Exception as exc:  # noqa: BLE001
+            if _is_quota_error(exc):
+                raise _ProviderQuotaError(str(exc)) from exc
+            raise
 
         # Tool-use loop (up to 5 rounds)
         for _round in range(5):
@@ -508,9 +579,147 @@ async def _answer_with_gemini(
                     }
                 })
 
-            response = await asyncio.to_thread(chat.send_message, fn_responses)
+            try:
+                response = await asyncio.to_thread(chat.send_message, fn_responses)
+            except Exception as exc:  # noqa: BLE001
+                if _is_quota_error(exc):
+                    raise _ProviderQuotaError(str(exc)) from exc
+                raise
 
         return "🤖 Too many tool-call rounds. Try rephrasing."
+    except _ProviderQuotaError:
+        # Let the outer dispatcher fall through to the next provider
+        raise
     except Exception as exc:  # noqa: BLE001
         logger.exception("Gemini request failed")
         return f"🤖 Gemini error: <code>{str(exc)[:300]}</code>"
+
+
+# ── Groq provider (free) ───────────────────────────────────────
+
+async def _answer_with_groq(
+    question: str,
+    redis: "RedisClient",
+    api_key: Optional[str],
+    model: Optional[str],
+    max_tokens: Optional[int],
+    lang: str,
+) -> str:
+    """Answer using Groq (free tier, ~14K req/day on Llama 3.3 70B)."""
+    api_key = api_key or os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return "🤖 GROQ_API_KEY is not set. Get one free at https://console.groq.com/keys"
+    if not _GROQ_AVAILABLE:
+        return "🤖 The `groq` Python package is not installed."
+
+    model_name = model or os.getenv("AI_MODEL", "llama-3.3-70b-versatile")
+    max_tokens_i = max_tokens or int(os.getenv("AI_MAX_TOKENS", "1024"))
+
+    client = AsyncGroq(api_key=api_key)
+
+    system_prompt = (
+        "You are the RateBridge trading bot's AI assistant. RateBridge is a "
+        "delta-neutral funding-rate arbitrage engine running on Binance, "
+        "Bybit, KuCoin, Gate.io, and Bitget.\n\n"
+        "Always call a tool first before answering. Keep answers concise "
+        "(2-5 short lines). Use $X.XX for money and X.XX% for percentages.\n\n"
+        f"Respond in {'Hebrew (עברית)' if lang == 'he' else 'English'}. "
+        "Use Telegram HTML tags only: <b>, <i>, <code>. No markdown."
+    )
+
+    # OpenAI-compatible tools schema. Strip 'default' for safety.
+    def _strip_defaults(schema: dict) -> dict:
+        if not isinstance(schema, dict):
+            return schema
+        out = {k: v for k, v in schema.items() if k != "default"}
+        props = out.get("properties")
+        if isinstance(props, dict):
+            out["properties"] = {k: _strip_defaults(v) for k, v in props.items()}
+        return out
+
+    groq_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": _strip_defaults(t["input_schema"]),
+            },
+        }
+        for t in _TOOLS
+    ]
+
+    tool_impls: Dict[str, Callable[..., Awaitable[Any]]] = {
+        "get_status":            lambda **kw: _tool_get_status(redis),
+        "get_balances":          lambda **kw: _tool_get_balances(redis),
+        "get_open_positions":    lambda **kw: _tool_get_open_positions(redis),
+        "get_recent_trades":     lambda **kw: _tool_get_recent_trades(redis, **kw),
+        "get_top_opportunities": lambda **kw: _tool_get_top_opportunities(redis, **kw),
+        "get_pnl_summary":       lambda **kw: _tool_get_pnl_summary(redis, **kw),
+    }
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": question},
+    ]
+
+    try:
+        for _round in range(5):
+            resp = await client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                tools=groq_tools,
+                tool_choice="auto",
+                max_tokens=max_tokens_i,
+                temperature=0.2,
+            )
+            msg = resp.choices[0].message
+            tool_calls = getattr(msg, "tool_calls", None) or []
+
+            if not tool_calls:
+                return (msg.content or "🤖 (empty response)").strip()
+
+            # Append assistant message with tool_calls
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ],
+            })
+
+            # Execute each tool
+            for tc in tool_calls:
+                name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except Exception:
+                    args = {}
+                try:
+                    impl = tool_impls.get(name)
+                    if impl is None:
+                        result = {"error": f"unknown tool {name}"}
+                    else:
+                        result = await impl(**args)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Groq tool %s failed", name)
+                    result = {"error": str(exc)}
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(result, default=str)[:8000],
+                })
+
+        return "🤖 Too many tool-call rounds. Try rephrasing."
+    except _ProviderQuotaError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if _is_quota_error(exc):
+            raise _ProviderQuotaError(str(exc)) from exc
+        logger.exception("Groq request failed")
+        return f"🤖 Groq error: <code>{str(exc)[:300]}</code>"

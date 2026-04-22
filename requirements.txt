@@ -12,9 +12,10 @@ uvloop>=0.19; sys_platform != "win32"
 fastapi>=0.110
 uvicorn[standard]>=0.27
 
-# AI assistant — one or both providers
+# AI assistant — any/all providers (auto-fallback on quota)
 anthropic>=0.40                 # Paid, best tool use
-google-generativeai>=0.8         # Free tier: 1M tokens/day, 15 RPM
+google-generativeai>=0.8         # Free tier: 1500 req/day (2.0-flash)
+groq>=0.11                       # Free tier: 14,400 req/day (llama-3.3-70b)
 
 # Storage
 redis[hiredis]>=5.0
