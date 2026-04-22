@@ -744,18 +744,20 @@ async def _answer_with_groq(
     ]
 
     try:
-        MAX_TOOL_ROUNDS = 3  # Keep low — force answer after 3 tool rounds
+        MAX_TOOL_ROUNDS = 3  # Force answer after 3 tool rounds
         for _round in range(MAX_TOOL_ROUNDS):
-            # On the last round, disable tool choice so the model MUST answer
-            tc = "none" if _round == MAX_TOOL_ROUNDS - 1 else "auto"
-            resp = await client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                tools=groq_tools if tc == "auto" else [],
-                tool_choice=tc if tc == "auto" else None,
-                max_tokens=max_tokens_i,
-                temperature=0.2,
-            )
+            # On the last round, strip tools entirely so the model must answer.
+            is_last_round = (_round == MAX_TOOL_ROUNDS - 1)
+            create_kwargs = {
+                "model": model_name,
+                "messages": messages,
+                "max_tokens": max_tokens_i,
+                "temperature": 0.2,
+            }
+            if not is_last_round:
+                create_kwargs["tools"] = groq_tools
+                create_kwargs["tool_choice"] = "auto"
+            resp = await client.chat.completions.create(**create_kwargs)
             msg = resp.choices[0].message
             tool_calls = getattr(msg, "tool_calls", None) or []
 
