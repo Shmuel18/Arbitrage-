@@ -138,7 +138,7 @@ const AnalyticsPanel: React.FC<AnalyticsPanelProps> = ({ pnl, pnlHours, onPnlHou
   // need actual color values, not var() references.
   const posColor = '#10b981';     // --color-profit
   const negColor = '#ef4444';     // --color-loss
-  const infoColor = '#3b82f6';    // --color-info
+  const infoColor = '#2DB8C4';    // --color-info
   const neutralColor = '#94a3b8'; // --text-secondary
 
   // Prepend zero-baseline point

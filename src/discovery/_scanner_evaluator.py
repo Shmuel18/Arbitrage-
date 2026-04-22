@@ -460,8 +460,11 @@ class _ScannerEvaluatorMixin:
                     _income_next_ts = long_next if pnl["long_is_income"] else short_next
                     _cost_next_ts = short_next if pnl["long_is_income"] else long_next
                     if _income_next_ts and _cost_next_ts:
-                        _cherry_gap_min = abs(_cost_next_ts - _income_next_ts) / 60_000
+                        # Directional gap (not abs): cost-before-income yields
+                        # negative value → always classified as NUTCRACKER.
+                        _cherry_gap_min = (_cost_next_ts - _income_next_ts) / 60_000
                         if _cherry_gap_min < _MIN_CHERRY_GAP_MINUTES:
+                            # Cost fires before or too close to income — treat as NUTCRACKER
                             mode = TradeMode.NUTCRACKER
                             emoji = "🔨🥜"
                             label = "NUTCRACKER"

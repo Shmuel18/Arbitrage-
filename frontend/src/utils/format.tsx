@@ -289,7 +289,7 @@ const _exitReasonMap: Record<string, ExitReasonBase> = {
   profit_target:          { emoji: '🎯', tKey: 'exitProfit',       fallback: 'Profit',       color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
   basis_recovery:         { emoji: '✅', tKey: 'exitRecovery',     fallback: 'Recovery',     color: '#22c55e', bg: 'rgba(34,197,94,0.10)' },
   spread_below_threshold: { emoji: '📉', tKey: 'exitLowSpread',    fallback: 'Low Spread',   color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
-  upgrade_exit:           { emoji: '⬆️', tKey: 'exitUpgrade',      fallback: 'Upgrade',      color: '#3b82f6', bg: 'rgba(59,130,246,0.10)' },
+  upgrade_exit:           { emoji: '⬆️', tKey: 'exitUpgrade',      fallback: 'Upgrade',      color: '#2DB8C4', bg: 'rgba(45,184,196,0.10)' },
   cherry_hard_stop:       { emoji: '🍒', tKey: 'exitCherryStop',   fallback: 'Cherry Stop',  color: '#f97316', bg: 'rgba(249,115,22,0.10)' },
   basis_hard_stop:        { emoji: '⏱️', tKey: 'exitBasisTimeout',  fallback: 'Basis Timeout', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
   negative_funding:       { emoji: '⚠️', tKey: 'exitNegFunding',   fallback: 'Neg. Funding',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },

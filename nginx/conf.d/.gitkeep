@@ -1,0 +1,2 @@
+# Rendered configs land here at deploy time (see scripts/init_ssl.sh).
+# Keep this directory tracked but its contents ignored.

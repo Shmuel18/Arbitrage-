@@ -91,6 +91,12 @@ frontend/npm-debug.log*
 frontend/yarn-debug.log*
 frontend/yarn-error.log*
 
+# Deployment artifacts (rendered/issued at deploy time, never commit)
+certbot/conf/
+certbot/www/
+nginx/conf.d/*.conf
+nginx/logs/
+
 # Claude Code local state
 .claude/worktrees/
 .claude/settings.local.json

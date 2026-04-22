@@ -20,9 +20,10 @@ if TYPE_CHECKING:
 
 logger = get_logger("sizer")
 
-# P3-4/P3-5: Module-level constants — never recreated per compute() call.
+# Module-level constants — never recreated per compute() call.
 _DEFAULT_LEVERAGE: int = 5          # fallback when exchange config omits leverage
-_MIN_BALANCE_USD: Decimal = Decimal("5")  # below this, entry risks immediate liquidation
+_MIN_BALANCE_USD: Decimal = Decimal("5")   # below this, entry risks immediate liquidation
+_MARGIN_SAFETY: Decimal = Decimal("0.90")  # never use more than 90% of free balance as margin
 _ZERO: Decimal = Decimal("0")
 _ONE: Decimal = Decimal("1")
 _FALLBACK_LOT: Decimal = Decimal("0.001")  # last-resort lot step when spec is missing
@@ -35,6 +36,8 @@ class PositionSizer:
     - Fetch free balances from both exchanges.
     - Apply ``position_size_pct × leverage`` to the *smaller* balance.
     - Round down qty to the coarsest lot step found across both exchanges.
+    - Validate that the computed margin does not exceed the available free balance
+      (guards against exchanges with non-standard initial margin rates).
     - Return the final quantity along with the instrument specs used.
 
     This class is *stateless between calls* — create one instance and reuse it.
@@ -56,7 +59,7 @@ class PositionSizer:
         long_bal, short_bal, _live_ticker = await asyncio.gather(
             long_adapter.get_balance(),
             short_adapter.get_balance(),
-            # P1-3: Fetch a live price in parallel with balances so qty is computed
+            # Fetch a live price in parallel with balances so qty is computed
             # against the CURRENT market price, not the scanner snapshot which can be
             # 300ms–60s stale.  Actual fill notional = qty × fill_price; using a stale
             # reference_price silently bypasses max_position_size_usd on fast-moving assets.
@@ -81,7 +84,7 @@ class PositionSizer:
         long_total = Decimal(str(long_bal.get("total") or long_free))
         short_total = Decimal(str(short_bal.get("total") or short_free))
 
-        # P1-3: Cross-margin amplification guard.
+        # Cross-margin amplification guard.
         # On cross-margin accounts (default for perp desks), opening a new position
         # increases maintenance margin for ALL positions non-linearly. Checking only
         # `free` balance misses the case where existing trades already consume most
@@ -123,7 +126,7 @@ class PositionSizer:
             return None
 
         min_balance = min(long_free, short_free)
-        notional = min_balance * position_pct * lev
+        notional = min_balance * position_pct * Decimal(str(lev))
 
         logger.info(
             f"{opp.symbol}: Sizing — "
@@ -146,8 +149,11 @@ class PositionSizer:
         long_lot_base = (Decimal(str(long_spec.lot_size)) * long_cs) if long_spec else _FALLBACK_LOT
         short_lot_base = (Decimal(str(short_spec.lot_size)) * short_cs) if short_spec else _FALLBACK_LOT
         lot = max(long_lot_base, short_lot_base)
+        if lot <= 0:
+            logger.warning(f"{opp.symbol}: lot_size resolved to zero, falling back to {_FALLBACK_LOT}")
+            lot = _FALLBACK_LOT
 
-        # P1-3: Use live ticker price when available; fall back to opp.reference_price
+        # Use live ticker price when available; fall back to opp.reference_price
         # if the ticker returned an empty or zero value (e.g. during exchange maintenance).
         _live_price = Decimal(str(_live_ticker.get("last", 0) or 0)) if _live_ticker else _ZERO
         _price_for_sizing = _live_price if _live_price > _ZERO else opp.reference_price
@@ -162,13 +168,42 @@ class PositionSizer:
                 f"{opp.short_exchange} to open 1 lot."
             )
             return None
+
         qty_rounded = Decimal(str(round(float(steps * lot), 8)))
         order_qty = qty_rounded
 
+        # Margin safety validation — some exchanges (e.g. GateIO) apply higher
+        # initial margin rates for volatile or illiquid tokens, meaning the actual
+        # margin required can exceed notional / leverage.  Guard against this by
+        # ensuring the estimated margin (qty × price / lev) stays within
+        # _MARGIN_SAFETY × the smaller free balance.  If it doesn't, scale down
+        # qty by one lot at a time until it fits (or bail if we fall below 1 lot).
+        _lev_dec = Decimal(str(lev))
+        _max_margin = min(long_free, short_free) * _MARGIN_SAFETY
+        _estimated_margin = order_qty * _price_for_sizing / _lev_dec
+        if _estimated_margin > _max_margin:
+            _safe_steps = int((_max_margin * _lev_dec / _price_for_sizing) / lot)
+            if _safe_steps == 0:
+                logger.warning(
+                    f"{opp.symbol}: Skipping — margin safety cap: estimated margin "
+                    f"${float(_estimated_margin):.2f} > safe limit ${float(_max_margin):.2f} "
+                    f"(free=${float(min(long_free, short_free)):.2f}, lev={lev}x). "
+                    f"Even 1 lot requires ${float(lot * _price_for_sizing / _lev_dec):.2f}."
+                )
+                return None
+            qty_rounded = Decimal(str(round(float(_safe_steps * lot), 8)))
+            order_qty = qty_rounded
+            notional = order_qty * _price_for_sizing
+            logger.warning(
+                f"{opp.symbol}: Qty scaled down to {order_qty} lots "
+                f"(margin safety cap: {float(_estimated_margin):.2f} > {float(_max_margin):.2f}). "
+                f"New notional=${float(notional):.2f}"
+            )
+
         logger.info(
             f"{opp.symbol}: Qty \u2014 "
-            f"notional=${notional:.2f} / ${_price_for_sizing:.4f} = "
-            f"{qty_raw:.4f} tokens, lot_base={lot} "
+            f"notional=${float(notional):.2f} / ${float(_price_for_sizing):.4f} = "
+            f"{float(qty_raw):.4f} tokens, lot_base={lot} "
             f"(L:{long_lot_base}/S:{short_lot_base}), "
             f"L_cs={long_cs} S_cs={short_cs}, order_qty={order_qty}"
         )

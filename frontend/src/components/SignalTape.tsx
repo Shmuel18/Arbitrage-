@@ -13,7 +13,7 @@ interface SignalTapeProps {
 const LEVEL_COLOR: Record<string, string> = {
   ERROR:   '#ef4444',
   WARNING: '#f59e0b',
-  INFO:    '#06b6d4',
+  INFO:    '#2DB8C4',
   DEBUG:   '#475569',
 };
 
