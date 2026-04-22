@@ -146,7 +146,18 @@ async def _tool_get_open_positions(redis: "RedisClient") -> List[Dict[str, Any]]
     ]
 
 
-async def _tool_get_recent_trades(redis: "RedisClient", limit: int = 10) -> List[Dict[str, Any]]:
+def _coerce_int(v, default):
+    """Some LLMs (Llama) return ints as strings. Be tolerant."""
+    if v is None or v == "":
+        return default
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+async def _tool_get_recent_trades(redis: "RedisClient", limit=10) -> List[Dict[str, Any]]:
+    limit = _coerce_int(limit, 10)
     limit = max(1, min(limit, 50))
     raws = await redis.lrange("trinity:trades:recent", 0, limit - 1)
     trades: List[Dict[str, Any]] = []
@@ -167,7 +178,8 @@ async def _tool_get_recent_trades(redis: "RedisClient", limit: int = 10) -> List
     return trades
 
 
-async def _tool_get_top_opportunities(redis: "RedisClient", limit: int = 5) -> List[Dict[str, Any]]:
+async def _tool_get_top_opportunities(redis: "RedisClient", limit=5) -> List[Dict[str, Any]]:
+    limit = _coerce_int(limit, 5)
     limit = max(1, min(limit, 20))
     raw = await redis.get("trinity:opportunities")
     data = json.loads(raw) if raw else {}
@@ -187,7 +199,8 @@ async def _tool_get_top_opportunities(redis: "RedisClient", limit: int = 5) -> L
     return trimmed
 
 
-async def _tool_get_pnl_summary(redis: "RedisClient", hours: int = 24) -> Dict[str, Any]:
+async def _tool_get_pnl_summary(redis: "RedisClient", hours=24) -> Dict[str, Any]:
+    hours = _coerce_int(hours, 24)
     hours = max(1, min(hours, 24 * 365))
     cutoff_ms = int((_dt.datetime.utcnow() - _dt.timedelta(hours=hours)).timestamp() * 1000)
 
@@ -473,9 +486,12 @@ async def _answer_with_gemini(
     system_instruction = (
         "You are the RateBridge trading bot's AI assistant. RateBridge is a "
         "delta-neutral funding-rate arbitrage engine running on Binance, "
-        "Bybit, KuCoin, Gate.io, and Bitget. It takes opposing positions "
-        "across exchanges to capture funding-rate differentials.\n\n"
-        "Always call a tool first before answering — never guess from memory. "
+        "Bybit, KuCoin, Gate.io, and Bitget.\n\n"
+        "Workflow:\n"
+        "1. Call ONE tool that answers the user's question.\n"
+        "2. READ the returned data.\n"
+        "3. Give a final answer in natural language. DO NOT call more tools.\n"
+        "4. Only call another tool if the first result is clearly missing what the user asked.\n\n"
         "Keep answers concise (2-5 short lines). Use $X.XX for money and "
         "X.XX% for percentages.\n\n"
         f"Respond in {'Hebrew (עברית)' if lang == 'he' else 'English'}. "
@@ -572,10 +588,17 @@ async def _answer_with_gemini(
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Gemini tool %s failed", name)
                     result = {"error": str(exc)}
+                # Normalize to dict — Gemini's FunctionResponse wants a map.
+                if isinstance(result, list):
+                    response_payload = {"items": result}
+                elif isinstance(result, dict):
+                    response_payload = result
+                else:
+                    response_payload = {"value": str(result)[:2000]}
                 fn_responses.append({
                     "function_response": {
                         "name": name,
-                        "response": {"result": json.loads(json.dumps(result, default=str))[:20] if isinstance(result, str) else result},
+                        "response": response_payload,
                     }
                 })
 
