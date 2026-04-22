@@ -256,9 +256,11 @@ def _provider_chain() -> List[str]:
     has_gemini = bool(os.getenv("GEMINI_API_KEY", "").strip())
     has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
 
+    # Priority: Groq first (most reliable tool use with Llama 3.3), then
+    # Gemini (sometimes loops on tool calls), then Anthropic (paid).
     default_order = []
-    if has_gemini:    default_order.append("gemini")
     if has_groq:      default_order.append("groq")
+    if has_gemini:    default_order.append("gemini")
     if has_anthropic: default_order.append("anthropic")
 
     primary = os.getenv("AI_PROVIDER", "auto").strip().lower()
@@ -517,6 +519,17 @@ async def _answer_with_gemini(
     # Start a chat so history persists across tool calls.
     chat = gmodel.start_chat(enable_automatic_function_calling=False)
 
+    # Model that forbids further tool calls — used as a forced-answer fallback
+    # after 2 tool rounds, so we never return "Too many tool-call rounds".
+    gmodel_no_tools = genai.GenerativeModel(
+        model_name=model_name,
+        system_instruction=(
+            system_instruction
+            + "\n\nIMPORTANT: You MUST answer in text now. Do not request any more tools."
+        ),
+        generation_config={"max_output_tokens": max_tokens_i, "temperature": 0.2},
+    )
+
     # List of fallback models (try in order on 429/quota errors).
     fallback_models = [
         model_name,
@@ -609,7 +622,29 @@ async def _answer_with_gemini(
                     raise _ProviderQuotaError(str(exc)) from exc
                 raise
 
-        return "🤖 Too many tool-call rounds. Try rephrasing."
+        # Forced-answer fallback: if we ran out of tool rounds, ask the
+        # model to summarize what it knows so far, with tools disabled.
+        try:
+            # Gather the tool data seen in this conversation
+            tool_data_summary = json.dumps(
+                [{"tool": fc.name, "args": dict(fc.args) if fc.args else {}} for fc in fc_calls],
+                default=str,
+            )[:4000]
+            forced_prompt = (
+                f"The user asked: {question}\n\n"
+                f"You already have this data from tools: {tool_data_summary}\n\n"
+                "Give your FINAL answer now in natural language. Do not ask for more data."
+            )
+            forced_resp = await asyncio.to_thread(
+                gmodel_no_tools.generate_content, forced_prompt
+            )
+            text = forced_resp.text if hasattr(forced_resp, "text") else ""
+            if text and text.strip():
+                return text.strip()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Gemini forced-answer fallback failed: %s", exc)
+
+        return "🤖 Couldn't produce a short answer — try asking more specifically."
     except _ProviderQuotaError:
         # Let the outer dispatcher fall through to the next provider
         raise
