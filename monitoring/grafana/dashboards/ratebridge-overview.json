@@ -1,0 +1,155 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Bot Container Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "avg_over_time(container_last_seen{name=\"trinity-bot\"}[1m]) != bool 0",
+          "legendFormat": "trinity-bot",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" }
+        }
+      }
+    },
+    {
+      "title": "Redis Container Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "avg_over_time(container_last_seen{name=\"trinity-redis\"}[1m]) != bool 0",
+          "legendFormat": "trinity-redis",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } }
+          ],
+          "color": { "mode": "thresholds" }
+        }
+      }
+    },
+    {
+      "title": "Server Uptime",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [ { "expr": "node_time_seconds - node_boot_time_seconds", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "thresholds" } } }
+    },
+    {
+      "title": "Load Avg (1m)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [ { "expr": "node_load1", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "decimals": 2 } }
+    },
+    {
+      "title": "CPU Usage (all cores)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])) * 100)",
+          "legendFormat": "CPU %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 } }
+    },
+    {
+      "title": "Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes)",
+          "legendFormat": "used",
+          "refId": "A"
+        },
+        { "expr": "node_memory_MemTotal_bytes", "legendFormat": "total", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "title": "Bot Container CPU",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "rate(container_cpu_usage_seconds_total{name=\"trinity-bot\"}[1m]) * 100",
+          "legendFormat": "bot CPU %",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" } }
+    },
+    {
+      "title": "Bot Container Memory",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "container_memory_usage_bytes{name=\"trinity-bot\"}",
+          "legendFormat": "bot memory",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "title": "Disk Usage (/)",
+      "type": "gauge",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "100 - ((node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}) * 100)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": 0 }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 } ] }
+        }
+      }
+    },
+    {
+      "title": "Network Traffic",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 16, "x": 8, "y": 20 },
+      "targets": [
+        { "expr": "rate(node_network_receive_bytes_total{device=\"enp1s0\"}[1m])", "legendFormat": "rx", "refId": "A" },
+        { "expr": "rate(node_network_transmit_bytes_total{device=\"enp1s0\"}[1m])", "legendFormat": "tx", "refId": "B" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "Bps" } }
+    }
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "tags": ["ratebridge"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "Asia/Jerusalem",
+  "title": "RateBridge Overview",
+  "uid": "ratebridge-overview",
+  "version": 1
+}
