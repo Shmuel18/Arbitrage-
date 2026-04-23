@@ -67,15 +67,21 @@ jobs:
             docker compose up -d --force-recreate bot
 
             echo "=== wait for /openapi.json (up to 10 min) ==="
+            # Disable errexit inside the retry loop — curl exits non-zero
+            # on connection refused while the bot is still warming up, and
+            # set -e would kill the script on the first probe.
+            set +e
+            code=000
             for i in $(seq 1 120); do
-              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/openapi.json)
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8000/openapi.json 2>/dev/null)
               if [ "$code" = "200" ]; then
                 echo "FastAPI is up after ${i} × 5 s."
                 break
               fi
               sleep 5
             done
-            if [ "${code:-000}" != "200" ]; then
+            set -e
+            if [ "$code" != "200" ]; then
               echo "::error::FastAPI never came up — check 'docker logs trinity-bot'."
               exit 1
             fi
