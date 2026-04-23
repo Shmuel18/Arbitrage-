@@ -4,3 +4,5 @@
 #   pip install -r requirements.txt -r requirements-backtest.txt
 pandas>=2.1
 pyarrow>=14.0
+# HTML report with an interactive equity curve.
+plotly>=5.17

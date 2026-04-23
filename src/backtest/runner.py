@@ -13,8 +13,10 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 
 from .engine import BacktestConfig, run_backtest
+from .report import compute_metrics, write_html, write_json
 
 
 def _fmt_ts(ms: int | None) -> str:
@@ -36,6 +38,8 @@ def main() -> None:
     ap.add_argument("--max-collections", type=int, default=6)
     ap.add_argument("--slippage-bps", type=float, default=5.0)
     ap.add_argument("--funding-interval", type=int, default=8, help="funding interval hours (default 8)")
+    ap.add_argument("--out-json", type=Path, default=None, help="write a JSON report to this path")
+    ap.add_argument("--out-html", type=Path, default=None, help="write a standalone HTML report to this path")
     args = ap.parse_args()
 
     exchanges = [e.strip() for e in args.pair.split(",")]
@@ -54,6 +58,7 @@ def main() -> None:
         slippage_bps=Decimal(str(args.slippage_bps)),
     )
     result = run_backtest(cfg)
+    metrics = compute_metrics(result)
 
     print(f"\n=== Backtest: {cfg.symbol}   {cfg.exchange_a} ↔ {cfg.exchange_b} ===")
     print(f"notional per trade : ${cfg.notional_usd}")
@@ -66,6 +71,12 @@ def main() -> None:
     print(f"  funding          : ${result.total_funding_usd:+.4f}")
     print(f"  basis            : ${result.total_basis_usd:+.4f}")
     print(f"  fees + slippage  : ${result.total_fees_usd:+.4f}")
+    print(f"avg trade P&L      : ${metrics.avg_trade_pnl_usd:+.4f}")
+    print(f"avg hold           : {metrics.avg_hold_hours:.1f} h")
+    print(f"best / worst trade : ${metrics.best_trade_usd:+.4f} / ${metrics.worst_trade_usd:+.4f}")
+    print(f"max drawdown       : ${metrics.max_drawdown_usd:+.4f}")
+    print(f"Sharpe (per-trade) : {metrics.sharpe_ratio_per_trade:.3f}")
+    print(f"Sharpe (annualized): {metrics.sharpe_ratio_annualized:.3f}")
 
     if result.trades:
         print("\n── per-trade ─────────────────────────────────────────────────")
@@ -77,6 +88,13 @@ def main() -> None:
                 f"| net ${t.net_pnl_usd:+7.4f}  "
                 f"| {t.exit_reason}"
             )
+
+    if args.out_json:
+        write_json(args.out_json, result, metrics)
+        print(f"\nJSON report → {args.out_json}")
+    if args.out_html:
+        write_html(args.out_html, result, metrics)
+        print(f"HTML report → {args.out_html}")
 
 
 if __name__ == "__main__":
