@@ -37,6 +37,13 @@ const IconLogs = () => (
     <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" />
   </svg>
 );
+const IconBacktest = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" />
+    <polyline points="12 7 12 12 15 14" />
+    <path d="M4 8 L7 8" /><path d="M17 8 L20 8" />
+  </svg>
+);
 const IconClose = () => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
@@ -60,6 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate, mobileOpen
     { id: SECTION_IDS.trades,        icon: <IconTrades />,        label: t.last10Trades },
     { id: SECTION_IDS.balances,      icon: <IconPortfolio />,     label: t.exchangePortfolio },
     { id: SECTION_IDS.logs,          icon: <IconLogs />,          label: t.systemLogs },
+    { id: SECTION_IDS.backtests,     icon: <IconBacktest />,      label: t.backtests },
   ];
 
   // Close drawer on ESC

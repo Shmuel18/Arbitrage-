@@ -1,0 +1,156 @@
+/* Backtest reports page — matches the card/table aesthetic used elsewhere. */
+
+.bt-page {
+  padding: 1rem 1.25rem;
+  color: var(--nx-text, #e5e7eb);
+}
+
+.bt-page-title {
+  margin: 0 0 1rem 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.bt-empty {
+  padding: 2rem;
+  border: 1px dashed var(--nx-border, #2a2f3a);
+  border-radius: 0.75rem;
+  color: var(--nx-text-dim, #9ca3af);
+  text-align: center;
+}
+
+.bt-hint {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--nx-surface-2, #141820);
+  border-radius: 0.4rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--nx-text-dim, #9ca3af);
+  white-space: pre-wrap;
+  word-break: break-word;
+  text-align: start;
+}
+
+.bt-error {
+  padding: 0.8rem 1rem;
+  border: 1px solid #7f1d1d;
+  background: rgba(127, 29, 29, 0.15);
+  color: #fca5a5;
+  border-radius: 0.5rem;
+}
+
+.bt-list {
+  overflow-x: auto;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.75rem;
+  background: var(--nx-surface, #0f141b);
+}
+
+.bt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.bt-table thead th {
+  text-align: start;
+  padding: 0.6rem 0.8rem;
+  color: var(--nx-text-dim, #9ca3af);
+  font-weight: 500;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--nx-border, #2a2f3a);
+  background: var(--nx-surface-2, #141820);
+}
+
+.bt-table tbody td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--nx-border-faint, #1c2029);
+}
+
+.bt-row:hover {
+  background: var(--nx-surface-hover, rgba(255, 255, 255, 0.03));
+}
+
+.bt-row.active {
+  background: var(--nx-surface-active, rgba(59, 130, 246, 0.08));
+}
+
+.bt-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--nx-text-dim, #9ca3af);
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-pnl-pos { color: #22c55e; }
+.bt-pnl-neg { color: #ef4444; }
+
+.bt-view-btn {
+  padding: 0.28rem 0.7rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  background: var(--nx-surface-2, #141820);
+  color: var(--nx-text, #e5e7eb);
+  border-radius: 0.35rem;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.bt-view-btn:hover {
+  background: var(--nx-surface-hover, rgba(255, 255, 255, 0.06));
+  border-color: var(--nx-border-strong, #3a414f);
+}
+
+.bt-viewer {
+  margin-top: 1.25rem;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: var(--nx-surface, #0f141b);
+}
+
+.bt-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--nx-surface-2, #141820);
+  border-bottom: 1px solid var(--nx-border, #2a2f3a);
+}
+
+.bt-viewer-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--nx-text-dim, #9ca3af);
+}
+
+.bt-close-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  line-height: 1;
+  font-size: 1.2rem;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  background: transparent;
+  color: var(--nx-text-dim, #9ca3af);
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+.bt-close-btn:hover {
+  color: var(--nx-text, #e5e7eb);
+  border-color: var(--nx-border-strong, #3a414f);
+}
+
+.bt-iframe {
+  display: block;
+  width: 100%;
+  min-height: 760px;
+  border: 0;
+  background: #ffffff;  /* the plotly HTML uses a light template */
+}

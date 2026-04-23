@@ -40,11 +40,31 @@ def main() -> None:
     ap.add_argument("--funding-interval", type=int, default=8, help="funding interval hours (default 8)")
     ap.add_argument("--out-json", type=Path, default=None, help="write a JSON report to this path")
     ap.add_argument("--out-html", type=Path, default=None, help="write a standalone HTML report to this path")
+    ap.add_argument(
+        "--save",
+        action="store_true",
+        help="save timestamped JSON+HTML under data/backtest-reports/ "
+        "(picked up by the dashboard Reports page)",
+    )
     args = ap.parse_args()
 
     exchanges = [e.strip() for e in args.pair.split(",")]
     if len(exchanges) != 2:
         ap.error("--pair must be exactly two exchange ids, comma-separated")
+
+    # --save expands to paths under data/backtest-reports/ so the web UI
+    # can list them. Explicit --out-json / --out-html still win.
+    if args.save:
+        reports_dir = Path(__file__).resolve().parents[2] / "data" / "backtest-reports"
+        stem = (
+            f"{exchanges[0]}-{exchanges[1]}_"
+            f"{args.symbol.replace('/', '_').replace(':', '-')}_"
+            f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
+        )
+        if args.out_json is None:
+            args.out_json = reports_dir / f"{stem}.json"
+        if args.out_html is None:
+            args.out_html = reports_dir / f"{stem}.html"
 
     cfg = BacktestConfig(
         symbol=args.symbol,

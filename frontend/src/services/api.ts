@@ -155,4 +155,51 @@ export const getLogs = async (limit = 50, signal?: AbortSignal): Promise<LogsRes
   return response.data;
 };
 
+/* ── Backtest reports ──────────────────────────────────────────── */
+
+export interface BacktestReportSummary {
+  name: string;
+  created_at: string;
+  size_bytes: number;
+  has_json: boolean;
+  symbol: string | null;
+  exchange_a: string | null;
+  exchange_b: string | null;
+  notional_usd: number | null;
+  min_funding_spread_pct: number | null;
+  trade_count: number | null;
+  win_rate: number | null;
+  total_pnl_usd: number | null;
+  sharpe_ratio_annualized: number | null;
+}
+
+export interface BacktestReportsResponse {
+  reports: BacktestReportSummary[];
+}
+
+export const getBacktestReports = async (
+  signal?: AbortSignal,
+): Promise<BacktestReportsResponse> => {
+  const response = await api.get('/backtest/reports', { signal });
+  return response.data;
+};
+
+/**
+ * Fetch a single backtest report's HTML so it can be injected via iframe
+ * srcdoc. We can't use a naked `<iframe src>` because the endpoint is
+ * behind the read-token header — only axios with its default headers
+ * can authenticate.
+ */
+export const getBacktestReportHtml = async (
+  name: string,
+  signal?: AbortSignal,
+): Promise<string> => {
+  const response = await api.get(`/backtest/reports/${encodeURIComponent(name)}`, {
+    signal,
+    responseType: 'text',
+    transformResponse: [(data) => data],  // keep as raw string, don't try to JSON.parse
+  });
+  return response.data as string;
+};
+
 export default api;

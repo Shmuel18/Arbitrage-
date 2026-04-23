@@ -7,6 +7,7 @@ import { useSettings } from './context/SettingsContext';
 import { translations, Lang } from './i18n/translations';
 import './App.css';
 import './styles/ai-chat.css';
+import './styles/backtest.css';
 // import './styles/memorial.css';  // re-enable for next holiday
 
 /**

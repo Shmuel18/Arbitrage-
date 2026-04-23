@@ -14,9 +14,10 @@ import { useToast } from '../context/ToastContext';
 import { useTelegram } from '../context/TelegramContext';
 
 // Below-the-fold components — lazy-loaded to shrink initial bundle
-const AnalyticsPanel    = lazy(() => import('./AnalyticsPanel'));
-const RecentTradesPanel = lazy(() => import('./RecentTradesPanel'));
-const SystemLogs        = lazy(() => import('./SystemLogs'));
+const AnalyticsPanel       = lazy(() => import('./AnalyticsPanel'));
+const RecentTradesPanel    = lazy(() => import('./RecentTradesPanel'));
+const SystemLogs           = lazy(() => import('./SystemLogs'));
+const BacktestReportsPage  = lazy(() => import('./BacktestReportsPage'));
 
 /** Fallback placeholder while a chunk is loading — preserves layout */
 const LazyFallback: React.FC<{ minHeight?: number }> = ({ minHeight = 200 }) => (
@@ -37,6 +38,7 @@ export const SECTION_IDS = {
   trades: 'section-trades',
   balances: 'section-balances',
   logs: 'section-logs',
+  backtests: 'section-backtests',
 } as const;
 
 export type SectionId = typeof SECTION_IDS[keyof typeof SECTION_IDS];
@@ -200,6 +202,12 @@ const Dashboard: React.FC<DashboardProps> = ({
             <div id={SECTION_IDS.logs}>
               <Suspense fallback={<LazyFallback minHeight={240} />}>
                 <SystemLogs logs={data.logs} summary={data.summary} />
+              </Suspense>
+            </div>
+
+            <div id={SECTION_IDS.backtests}>
+              <Suspense fallback={<LazyFallback minHeight={320} />}>
+                <BacktestReportsPage />
               </Suspense>
             </div>
           </div>

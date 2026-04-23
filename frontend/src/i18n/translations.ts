@@ -98,6 +98,13 @@ export interface Translations {
   winRate: string;
   waitingLogs: string;
 
+  // Backtest reports
+  backtests: string;
+  backtestReports: string;
+  noReportsYet: string;
+  viewReport: string;
+  backtestRunHint: string;
+
   // New stats / columns
   avgPnlStat: string;
   allTimePnl: string;
@@ -423,6 +430,12 @@ const en: Translations = {
   winRate: 'Win Rate',
   waitingLogs: 'Waiting for log data...',
 
+  backtests: 'Backtests',
+  backtestReports: 'Backtest reports',
+  noReportsYet: 'No backtest reports yet.',
+  viewReport: 'View report',
+  backtestRunHint: 'Run a backtest from the server shell:  python -m src.backtest.runner --symbol <SYM> --pair <A>,<B> --save',
+
   avgPnlStat: 'AVG P&L / TRADE',
   allTimePnl: 'ALL-TIME PNL',
   netPnl: 'Net P&L',
@@ -743,6 +756,12 @@ const he: Translations = {
   totalTradesLabel: 'סה״כ עסקאות',
   winRate: 'אחוז הצלחה',
   waitingLogs: 'ממתין לנתוני יומן...',
+
+  backtests: 'בדיקות רטרו',
+  backtestReports: 'דוחות בדיקות רטרו',
+  noReportsYet: 'עדיין לא נוצרו דוחות בדיקה.',
+  viewReport: 'הצג דוח',
+  backtestRunHint: 'הרצת בדיקה רטרו דרך ה-shell בשרת:  python -m src.backtest.runner --symbol <SYM> --pair <A>,<B> --save',
 
   avgPnlStat: 'ממוצע לעסקה',
   allTimePnl: 'רווח כולל',
