@@ -21,7 +21,10 @@ RUN apt-get update \
 
 COPY requirements.txt ./
 COPY api/requirements.txt ./api-requirements.txt
-RUN pip install -r requirements.txt -r api-requirements.txt
+# requirements-backtest.txt ships pandas/pyarrow/plotly so the API can spawn
+# backtest subprocesses in-container (the /api/backtest/run endpoint).
+COPY requirements-backtest.txt ./requirements-backtest.txt
+RUN pip install -r requirements.txt -r api-requirements.txt -r requirements-backtest.txt
 
 COPY . .
 COPY --from=frontend-build /frontend/build ./frontend/build

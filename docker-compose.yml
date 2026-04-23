@@ -57,9 +57,10 @@ services:
       - ./logs:/app/logs
       - ./config.yaml:/app/config.yaml:ro
       - ./frontend/build:/app/frontend/build:ro
-      # Backtest reports are produced by the host-side venv (see
-      # requirements-backtest.txt) and served read-only via /api/backtest/reports.
-      - ./data:/app/data:ro
+      # Backtest data + reports. Writable because /api/backtest/fetch and
+      # /api/backtest/run now spawn subprocesses inside the container that
+      # write parquets + HTML/JSON reports under data/.
+      - ./data:/app/data
     restart: unless-stopped
     logging: *default-logging
     networks: [trinity-net]
