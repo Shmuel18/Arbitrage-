@@ -7,7 +7,6 @@ import StatsCards from './StatsCards';
 import PositionsTable from './PositionsTable';
 import ExchangeBalances from './ExchangeBalances';
 import RightPanel from './RightPanel';
-import SignalTape from './SignalTape';
 import KeyboardShortcuts from './KeyboardShortcuts';
 import { useSettings } from '../context/SettingsContext';
 import { useToast } from '../context/ToastContext';
@@ -151,7 +150,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           lastWsMessageAt={lastWsMessageAt}
           onMobileMenuToggle={() => setMobileMenuOpen((o) => !o)}
         />
-        <SignalTape logs={data.logs} />
 
         <main className="content-area" ref={contentRef} id="main-content" aria-label="Dashboard main content">
           <div className="logo-watermark" style={{ backgroundImage: "url('/logo.png')" }} />
