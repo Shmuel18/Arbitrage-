@@ -3,7 +3,7 @@
 Example:
     python -m src.backtest.runner \\
         --symbol 'BTC/USDT:USDT' --pair binance,bybit \\
-        --notional 100 --min-net-pct 0.003
+        --notional 100 --min-spread 0.003
 
 Prints a summary and a per-trade breakdown to stdout. Phase 3 will add
 equity curves, Sharpe, max drawdown, and HTML output.
@@ -28,7 +28,10 @@ def main() -> None:
     ap.add_argument("--symbol", required=True, help="e.g. 'BTC/USDT:USDT'")
     ap.add_argument("--pair", required=True, help="two exchange ids, comma-separated, e.g. binance,bybit")
     ap.add_argument("--notional", type=float, default=100.0, help="USD notional per trade (default 100)")
-    ap.add_argument("--min-net-pct", type=float, default=0.003, help="min net %% to enter (default 0.003)")
+    ap.add_argument(
+        "--min-spread", type=float, default=0.003,
+        help="min gross funding-rate spread per interval to enter (default 0.003 = 0.3%%)",
+    )
     ap.add_argument("--max-hold-hours", type=int, default=72)
     ap.add_argument("--max-collections", type=int, default=6)
     ap.add_argument("--slippage-bps", type=float, default=5.0)
@@ -45,7 +48,7 @@ def main() -> None:
         exchange_b=exchanges[1],
         funding_interval_hours=args.funding_interval,
         notional_usd=Decimal(str(args.notional)),
-        min_net_pct=Decimal(str(args.min_net_pct)),
+        min_funding_spread_pct=Decimal(str(args.min_spread)),
         max_hold_hours=args.max_hold_hours,
         max_collections=args.max_collections,
         slippage_bps=Decimal(str(args.slippage_bps)),
@@ -54,7 +57,7 @@ def main() -> None:
 
     print(f"\n=== Backtest: {cfg.symbol}   {cfg.exchange_a} ↔ {cfg.exchange_b} ===")
     print(f"notional per trade : ${cfg.notional_usd}")
-    print(f"min net %          : {cfg.min_net_pct * 100:.3f}%")
+    print(f"min gross spread   : {cfg.min_funding_spread_pct * 100:.3f}%")
     print(f"round-trip cost    : {cfg.round_trip_cost_pct() * 100:.3f}% (fees + slippage)")
     print()
     print(f"trades             : {result.trade_count}")

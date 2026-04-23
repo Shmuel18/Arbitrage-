@@ -49,9 +49,13 @@ class BacktestConfig:
     exchange_b: str
     funding_interval_hours: int = 8
     notional_usd: Decimal = Decimal("100")
-    # Minimum net % AFTER round-trip fees + slippage to bother entering.
-    # Mirrors config.yaml trading_params.min_funding_spread (0.3% → 0.003).
-    min_net_pct: Decimal = Decimal("0.003")
+    # Minimum GROSS funding-rate spread per interval to bother entering —
+    # i.e. ``rate_short_leg - rate_long_leg`` at the event. Mirrors
+    # config.yaml ``trading_params.min_funding_spread`` (0.3% → 0.003).
+    # Fees + slippage are *not* deducted from this threshold because they
+    # amortize over N funding collections; net profitability is recorded
+    # in the per-trade P&L instead.
+    min_funding_spread_pct: Decimal = Decimal("0.003")
     max_hold_hours: int = 72
     max_collections: int = 6
     # One-way slippage per leg in basis points; doubled for round-trip,
@@ -106,12 +110,12 @@ class BacktestResult:
 def _pick_direction(
     ev: FundingEvent, cfg: BacktestConfig
 ) -> tuple[str, str, Decimal] | None:
-    """Return ``(long_exchange, short_exchange, net_pct_after_costs)`` or None.
+    """Return ``(long_exchange, short_exchange, gross_spread)`` or None.
 
     Captures funding by going **long** on the exchange with the more negative
     rate (shorts paying us) and **short** on the exchange with the more
-    positive rate (longs paying us). Skips the event if we don't clear
-    ``min_net_pct`` after round-trip fees + slippage.
+    positive rate (longs paying us). Qualifies if the *gross* per-interval
+    spread clears ``min_funding_spread_pct`` — matches the live bot's logic.
     """
     r_a = ev.rates.get(cfg.exchange_a)
     r_b = ev.rates.get(cfg.exchange_b)
@@ -120,10 +124,9 @@ def _pick_direction(
 
     long_ex, short_ex = (cfg.exchange_a, cfg.exchange_b) if r_a < r_b else (cfg.exchange_b, cfg.exchange_a)
     gross = Decimal(str(ev.rates[short_ex] - ev.rates[long_ex]))
-    net = gross - cfg.round_trip_cost_pct()
-    if net < cfg.min_net_pct:
+    if gross < cfg.min_funding_spread_pct:
         return None
-    return long_ex, short_ex, net
+    return long_ex, short_ex, gross
 
 
 def _credit_funding(trade: Trade, ev: FundingEvent) -> bool:
