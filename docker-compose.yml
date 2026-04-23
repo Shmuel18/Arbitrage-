@@ -9,6 +9,14 @@ version: "3.8"
 #   /api/*, /ws → 127.0.0.1:8000  (the bot container, mapped to host)
 # Redis is bound to 127.0.0.1:6379 so only local processes can reach it.
 
+# Cap container stdout/stderr so /var/lib/docker/containers/*-json.log
+# can't fill the disk. 10 MB × 5 files = 50 MB ceiling per container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   redis:
     image: redis:7-alpine
@@ -24,6 +32,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
   bot:
@@ -49,6 +58,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ./frontend/build:/app/frontend/build:ro
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
     # Higher priority + resource ceilings
     deploy:
@@ -72,6 +82,7 @@ services:
     ports:
       - "127.0.0.1:9090:9090"
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
   node_exporter:
@@ -86,6 +97,7 @@ services:
     expose:
       - "9100"
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
   cadvisor:
@@ -103,6 +115,7 @@ services:
     expose:
       - "8080"
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
   redis_exporter:
@@ -114,6 +127,7 @@ services:
       - "9121"
     depends_on: [redis]
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
   grafana:
@@ -133,6 +147,7 @@ services:
       - "127.0.0.1:3000:3000"
     depends_on: [prometheus]
     restart: unless-stopped
+    logging: *default-logging
     networks: [trinity-net]
 
 volumes:
