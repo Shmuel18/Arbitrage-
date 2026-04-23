@@ -821,6 +821,8 @@ async def _answer_with_groq(
                     args = json.loads(tc.function.arguments or "{}")
                 except Exception:
                     args = {}
+                if not isinstance(args, dict):
+                    args = {}
                 try:
                     impl = tool_impls.get(name)
                     if impl is None:
