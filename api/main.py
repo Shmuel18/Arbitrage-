@@ -10,7 +10,7 @@ _load_dotenv()
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -25,6 +25,7 @@ from threading import Lock
 
 from .auth import require_read_token
 from .broadcast_service import BroadcastService
+from .metrics import render_metrics
 from .routes import positions, trades, controls, analytics, alerts, ai
 from .websocket_manager import ConnectionManager
 from src.storage.redis_client import RedisClient
@@ -301,6 +302,24 @@ async def get_metrics(
     }
 
 
+@app.get("/metrics")
+async def prometheus_metrics(request: Request):
+    """Prometheus scrape endpoint (plaintext format).
+
+    Unauthenticated by design — the bot port is bound to 127.0.0.1, so
+    only processes inside the Docker network (i.e. Prometheus) can reach
+    it. Exposing this through nginx would require adding auth.
+    """
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        return Response(
+            content=b"# HELP redis not ready\n",
+            media_type="text/plain; version=0.0.4",
+        )
+    body, content_type = await render_metrics(redis_client)
+    return Response(content=body, media_type=content_type)
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates.
@@ -365,8 +384,13 @@ if os.path.exists(_build_dir):
         directory before serving.  This prevents path-traversal attacks such
         as ``GET /../../etc/passwd``.
         """
-        # Never intercept API or WebSocket routes.
-        if full_path == "api" or full_path.startswith("api/") or full_path.startswith("ws"):
+        # Never intercept API, WebSocket, or Prometheus scrape routes.
+        if (
+            full_path == "api"
+            or full_path.startswith("api/")
+            or full_path.startswith("ws")
+            or full_path == "metrics"
+        ):
             raise HTTPException(status_code=404, detail="Not found")
 
         # Normalise and jail to build dir.

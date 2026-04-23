@@ -20,6 +20,9 @@ groq>=0.11                       # Free tier: 14,400 req/day (llama-3.3-70b)
 # Storage
 redis[hiredis]>=5.0
 
+# Observability — /metrics endpoint scraped by Prometheus
+prometheus_client>=0.19
+
 # Config & validation
 pydantic>=2.5
 pydantic-settings>=2.1
