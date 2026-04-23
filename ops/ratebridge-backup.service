@@ -1,0 +1,14 @@
+[Unit]
+Description=RateBridge nightly backup (Redis + .env)
+Wants=ratebridge-backup.timer
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ratebridge/ops/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal

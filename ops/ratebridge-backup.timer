@@ -1,0 +1,15 @@
+[Unit]
+Description=RateBridge nightly backup timer
+Requires=ratebridge-backup.service
+
+[Timer]
+# 18:00 UTC = 03:00 JST (server TZ) — runs during the low-activity window.
+OnCalendar=*-*-* 18:00:00
+# If the machine was off at fire time, run as soon as it comes back.
+Persistent=true
+# Jitter up to 15 min so multiple machines don't all hammer at once
+# (harmless here, but good hygiene).
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
