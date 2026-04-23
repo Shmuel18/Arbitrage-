@@ -1,0 +1,84 @@
+name: Deploy to production
+
+# Manual-only trigger. We intentionally do NOT deploy on push-to-main —
+# this bot runs live trading, so every deploy should be a deliberate
+# click, not a side-effect of a merge. If we ever want push-to-main
+# deploys they should be gated by CI (tests green + linters clean).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or commit SHA to deploy (defaults to main)"
+        required: false
+        default: "main"
+      confirm:
+        description: 'Type "deploy" to confirm'
+        required: true
+        default: ""
+
+# Never allow two deploys to run at the same time. cancel-in-progress is
+# false so we don't interrupt an in-flight deploy with a later click.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Pull, build, restart bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    steps:
+      - name: Verify confirm input
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "deploy" ]; then
+            echo "::error::You must type 'deploy' in the Confirm field."
+            exit 1
+          fi
+          echo "Deploying ref: ${{ github.event.inputs.ref }}"
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+            cd /opt/ratebridge
+
+            echo "=== git fetch ==="
+            git fetch origin
+
+            echo "=== checkout ${{ github.event.inputs.ref }} ==="
+            git checkout "${{ github.event.inputs.ref }}"
+            git pull origin "${{ github.event.inputs.ref }}" --ff-only || true
+
+            echo "=== commit being deployed ==="
+            git log -1 --oneline
+
+            echo "=== build bot image ==="
+            docker compose build bot
+
+            echo "=== recreate bot container ==="
+            docker compose up -d --force-recreate bot
+
+            echo "=== wait for /openapi.json (up to 10 min) ==="
+            for i in $(seq 1 120); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/openapi.json)
+              if [ "$code" = "200" ]; then
+                echo "FastAPI is up after ${i} × 5 s."
+                break
+              fi
+              sleep 5
+            done
+            if [ "${code:-000}" != "200" ]; then
+              echo "::error::FastAPI never came up — check 'docker logs trinity-bot'."
+              exit 1
+            fi
+
+            echo "=== last 5 log lines ==="
+            docker logs trinity-bot --tail 5
