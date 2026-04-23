@@ -1,5 +1,7 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
+import BacktestPage from './components/BacktestPage';
 import AIChatWidget from './components/AIChatWidget';
 // import HolidayBanner from './components/HolidayBanner';  // re-enable for next holiday
 import { useMarketData } from './hooks/useMarketData';
@@ -84,7 +86,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
 }
 
-function AppShell() {
+function DashboardShell() {
   const { data, pnlHours, handlePnlHoursChange, wsConnection, lastWsMessageAt } = useMarketData();
   const { t } = useSettings();
 
@@ -115,7 +117,12 @@ function AppShell() {
 function App() {
   return (
     <ErrorBoundary>
-      <AppShell />
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<DashboardShell />} />
+          <Route path="/backtest" element={<BacktestPage />} />
+        </Routes>
+      </BrowserRouter>
     </ErrorBoundary>
   );
 }

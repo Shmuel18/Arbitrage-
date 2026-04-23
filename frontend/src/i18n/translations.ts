@@ -104,6 +104,28 @@ export interface Translations {
   noReportsYet: string;
   viewReport: string;
   backtestRunHint: string;
+  backtestFetchTab: string;
+  backtestRunTab: string;
+  backToDashboard: string;
+  backtestFetchTitle: string;
+  backtestRunTitle: string;
+  backtestExchange: string;
+  backtestSymbol: string;
+  backtestDays: string;
+  backtestKind: string;
+  backtestNotional: string;
+  backtestMinSpread: string;
+  backtestMaxHold: string;
+  backtestMaxCollections: string;
+  backtestSlippage: string;
+  backtestFundingInterval: string;
+  backtestExchangeA: string;
+  backtestExchangeB: string;
+  backtestSubmit: string;
+  backtestRunning: string;
+  backtestJobSucceeded: string;
+  backtestJobFailed: string;
+  backtestComingSoon: string;
 
   // New stats / columns
   avgPnlStat: string;
@@ -431,10 +453,32 @@ const en: Translations = {
   waitingLogs: 'Waiting for log data...',
 
   backtests: 'Backtests',
-  backtestReports: 'Backtest reports',
+  backtestReports: 'Reports',
   noReportsYet: 'No backtest reports yet.',
-  viewReport: 'View report',
+  viewReport: 'View',
   backtestRunHint: 'Run a backtest from the server shell:  python -m src.backtest.runner --symbol <SYM> --pair <A>,<B> --save',
+  backtestFetchTab: 'Fetch data',
+  backtestRunTab: 'Run backtest',
+  backToDashboard: 'Back to dashboard',
+  backtestFetchTitle: 'Fetch historical data',
+  backtestRunTitle: 'Run a new backtest',
+  backtestExchange: 'Exchange',
+  backtestSymbol: 'Symbol',
+  backtestDays: 'Days of history',
+  backtestKind: 'Dataset',
+  backtestNotional: 'Notional (USD)',
+  backtestMinSpread: 'Min funding spread',
+  backtestMaxHold: 'Max hold (hours)',
+  backtestMaxCollections: 'Max collections',
+  backtestSlippage: 'Slippage (bps)',
+  backtestFundingInterval: 'Funding interval (hours)',
+  backtestExchangeA: 'Exchange A',
+  backtestExchangeB: 'Exchange B',
+  backtestSubmit: 'Start',
+  backtestRunning: 'Running…',
+  backtestJobSucceeded: 'Completed',
+  backtestJobFailed: 'Failed',
+  backtestComingSoon: 'Coming in the next commit — backend job endpoints are next.',
 
   avgPnlStat: 'AVG P&L / TRADE',
   allTimePnl: 'ALL-TIME PNL',
@@ -758,10 +802,32 @@ const he: Translations = {
   waitingLogs: 'ממתין לנתוני יומן...',
 
   backtests: 'בדיקות רטרו',
-  backtestReports: 'דוחות בדיקות רטרו',
+  backtestReports: 'דוחות',
   noReportsYet: 'עדיין לא נוצרו דוחות בדיקה.',
-  viewReport: 'הצג דוח',
+  viewReport: 'הצג',
   backtestRunHint: 'הרצת בדיקה רטרו דרך ה-shell בשרת:  python -m src.backtest.runner --symbol <SYM> --pair <A>,<B> --save',
+  backtestFetchTab: 'הורדת נתונים',
+  backtestRunTab: 'הרצת בדיקה',
+  backToDashboard: 'חזרה לדשבורד',
+  backtestFetchTitle: 'הורדת נתוני עבר',
+  backtestRunTitle: 'הרצת בדיקה רטרו חדשה',
+  backtestExchange: 'בורסה',
+  backtestSymbol: 'מטבע',
+  backtestDays: 'כמה ימים אחורה',
+  backtestKind: 'סוג דאטה',
+  backtestNotional: 'נומינלי (USD)',
+  backtestMinSpread: 'פער מינימלי',
+  backtestMaxHold: 'זמן החזקה מקסימלי (שעות)',
+  backtestMaxCollections: 'מספר תשלומים מקסימלי',
+  backtestSlippage: 'החלקה (bps)',
+  backtestFundingInterval: 'מחזור מימון (שעות)',
+  backtestExchangeA: 'בורסה א׳',
+  backtestExchangeB: 'בורסה ב׳',
+  backtestSubmit: 'התחל',
+  backtestRunning: 'רץ…',
+  backtestJobSucceeded: 'הסתיים בהצלחה',
+  backtestJobFailed: 'נכשל',
+  backtestComingSoon: 'יגיע בcommit הבא — endpoint-ים ל-job management בצד הבקאנד.',
 
   avgPnlStat: 'ממוצע לעסקה',
   allTimePnl: 'רווח כולל',

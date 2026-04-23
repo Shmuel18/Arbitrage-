@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useSettings } from '../context/SettingsContext';
 import { SECTION_IDS, SectionId } from './Dashboard';
 
@@ -67,7 +68,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate, mobileOpen
     { id: SECTION_IDS.trades,        icon: <IconTrades />,        label: t.last10Trades },
     { id: SECTION_IDS.balances,      icon: <IconPortfolio />,     label: t.exchangePortfolio },
     { id: SECTION_IDS.logs,          icon: <IconLogs />,          label: t.systemLogs },
-    { id: SECTION_IDS.backtests,     icon: <IconBacktest />,      label: t.backtests },
   ];
 
   // Close drawer on ESC
@@ -132,6 +132,18 @@ const Sidebar: React.FC<SidebarProps> = ({ activeSection, onNavigate, mobileOpen
               <span>{item.label}</span>
             </button>
           ))}
+
+          {/* Cross-page link — /backtest is a fully separate page, not a
+              section inside the dashboard. Using a react-router <Link> so
+              navigation is client-side (no full reload). */}
+          <Link
+            to="/backtest"
+            className="sidebar-nav-item nx-nav-item"
+            onClick={onMobileClose}
+          >
+            <span className="nav-icon"><IconBacktest /></span>
+            <span>{t.backtests}</span>
+          </Link>
         </nav>
 
         <div className="sidebar-footer nx-sidebar-footer">

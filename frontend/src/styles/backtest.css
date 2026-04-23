@@ -1,3 +1,83 @@
+/* Full-page backtest experience — separate from the dashboard. */
+
+.bt-app {
+  min-height: 100vh;
+  background: var(--nx-bg, #0a0d12);
+  color: var(--nx-text, #e5e7eb);
+  display: flex;
+  flex-direction: column;
+}
+
+.bt-app-header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.9rem 1.5rem;
+  border-bottom: 1px solid var(--nx-border, #2a2f3a);
+  background: var(--nx-surface, #0f141b);
+}
+
+.bt-back-link {
+  color: var(--nx-text-dim, #9ca3af);
+  text-decoration: none;
+  font-size: 0.88rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.4rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.bt-back-link:hover {
+  background: var(--nx-surface-hover, rgba(255, 255, 255, 0.05));
+  color: var(--nx-text, #e5e7eb);
+}
+
+.bt-app-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.bt-app-spacer { flex: 1; }
+
+.bt-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem 0;
+  border-bottom: 1px solid var(--nx-border, #2a2f3a);
+  background: var(--nx-surface-2, #141820);
+}
+
+.bt-tab {
+  padding: 0.55rem 1rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--nx-text-dim, #9ca3af);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.bt-tab:hover { color: var(--nx-text, #e5e7eb); }
+.bt-tab.active {
+  color: var(--nx-text, #e5e7eb);
+  border-bottom-color: #3b82f6;
+}
+
+.bt-app-main {
+  flex: 1;
+  padding: 0.5rem 1rem 2rem;
+}
+
+.bt-placeholder {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--nx-text-dim, #9ca3af);
+  border: 1px dashed var(--nx-border, #2a2f3a);
+  border-radius: 0.75rem;
+  margin-top: 1rem;
+}
+.bt-placeholder h3 { margin: 0 0 0.5rem 0; color: var(--nx-text, #e5e7eb); }
+
 /* Backtest reports page — matches the card/table aesthetic used elsewhere. */
 
 .bt-page {
