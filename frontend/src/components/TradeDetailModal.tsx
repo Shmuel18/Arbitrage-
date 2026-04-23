@@ -4,6 +4,7 @@ import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
 import {
   formatUsd,
+  formatUsdCompact,
   formatFundingRateN,
   formatDate,
   formatDuration,
@@ -239,6 +240,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={valueStyle}>{formatFundingRateN(trade.long_funding_rate, 4)}</span>
             </div>
             <div style={rowStyle}>
+              <span style={labelStyle}>{t.volume24hAtEntry}</span>
+              <span style={valueStyle}>{formatUsdCompact(trade.long_24h_volume_usd)}</span>
+            </div>
+            <div style={rowStyle}>
               <span style={labelStyle}>{t.exitPriceLong}</span>
               <span style={valueStyle}>{formatUsd(trade.exit_price_long, 5)}</span>
             </div>
@@ -258,6 +263,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             <div style={rowStyle}>
               <span style={labelStyle}>{t.fundingAtEntry}</span>
               <span style={valueStyle}>{formatFundingRateN(trade.short_funding_rate, 4)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.volume24hAtEntry}</span>
+              <span style={valueStyle}>{formatUsdCompact(trade.short_24h_volume_usd)}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.exitPriceShort}</span>

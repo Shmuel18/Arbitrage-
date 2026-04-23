@@ -170,6 +170,19 @@ export const formatUsd = (value?: string | number | null, fractions = 2): string
   return _getUsdFmt(fractions).format(n);
 };
 
+/* ── Compact USD formatter ($1.2K / $3.4M / $5.6B) ───────────────── */
+export const formatUsdCompact = (value?: string | number | null): string => {
+  if (value == null || value === '') return '--';
+  const n = Number(value);
+  if (Number.isNaN(n)) return '--';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+};
+
 /* ── Price formatter (auto-precision based on magnitude) ────────── */
 export const formatPrice = (v?: string | number | null): string => {
   const n = parseNum(typeof v === 'number' ? String(v) : v);

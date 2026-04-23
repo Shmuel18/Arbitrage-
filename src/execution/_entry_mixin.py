@@ -614,6 +614,30 @@ class _EntryMixin:
                 )
                 return
 
+            # ── Snapshot 24h quote volume on both legs ────────────────
+            # Recorded at entry so the trade card can show liquidity context.
+            # Failures here must not block the trade — use None on error.
+            long_vol_usd: Optional[Decimal] = None
+            short_vol_usd: Optional[Decimal] = None
+            try:
+                _vol_tickers = await asyncio.gather(
+                    long_adapter.get_ticker(opp.symbol),
+                    short_adapter.get_ticker(opp.symbol),
+                    return_exceptions=True,
+                )
+                if isinstance(_vol_tickers[0], dict):
+                    _lv = _vol_tickers[0].get("quoteVolume")
+                    if _lv is not None:
+                        long_vol_usd = Decimal(str(_lv))
+                if isinstance(_vol_tickers[1], dict):
+                    _sv = _vol_tickers[1].get("quoteVolume")
+                    if _sv is not None:
+                        short_vol_usd = Decimal(str(_sv))
+            except Exception as _vol_err:
+                logger.debug(
+                    f"[{opp.symbol}] 24h volume snapshot failed: {_vol_err}"
+                )
+
             trade = TradeRecord(
                 trade_id=trade_id,
                 symbol=opp.symbol,
@@ -636,6 +660,8 @@ class _EntryMixin:
                 exit_before=opp.exit_before,
                 entry_tier=opp.entry_tier,
                 price_spread_pct=opp.price_spread_pct,
+                long_24h_volume_usd=long_vol_usd,
+                short_24h_volume_usd=short_vol_usd,
             )
             self._register_trade(trade)
             await self._persist_trade(trade)

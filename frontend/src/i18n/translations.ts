@@ -155,6 +155,7 @@ export interface Translations {
   entryEdge: string;
   entryBasis: string;
   fundingAtEntry: string;
+  volume24hAtEntry: string;
   exitReasonLabel: string;
   openedAt: string;
   closedAt: string;
@@ -507,6 +508,7 @@ const en: Translations = {
   entryEdge: 'Entry Edge',
   entryBasis: 'Price Spread',
   fundingAtEntry: 'Funding at Entry',
+  volume24hAtEntry: '24h Volume',
   exitReasonLabel: 'Exit Reason',
   openedAt: 'Opened',
   closedAt: 'Closed',
@@ -856,6 +858,7 @@ const he: Translations = {
   entryEdge: 'יתרון כניסה',
   entryBasis: 'מרווח מחירים בכניסה',
   fundingAtEntry: 'מימון בכניסה',
+  volume24hAtEntry: 'מחזור 24 שעות',
   exitReasonLabel: 'סיבת יציאה',
   openedAt: 'נפתחה',
   closedAt: 'נסגרה',

@@ -84,6 +84,8 @@ async def get_trades(
                 'entry_tier':             t.get('entry_tier'),
                 'funding_collections':    int(t.get('funding_collections') or 0),
                 'funding_collected_usd':  float(t.get('funding_collected_usd') or 0),
+                'long_24h_volume_usd':    float(t['long_24h_volume_usd']) if t.get('long_24h_volume_usd') is not None else None,
+                'short_24h_volume_usd':   float(t['short_24h_volume_usd']) if t.get('short_24h_volume_usd') is not None else None,
             }
         
         trades = [normalize(t) for t in trades]

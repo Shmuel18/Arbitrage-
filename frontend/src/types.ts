@@ -70,6 +70,9 @@ export interface Trade {
   // basis
   entry_basis_pct?: string | number | null;
   price_spread_pct?: string | number | null;
+  // 24h quote volume (USD) snapshot at entry — per leg
+  long_24h_volume_usd?: number | null;
+  short_24h_volume_usd?: number | null;
   // exit metadata
   exit_reason?: string | null;
   entry_tier?: string | null;

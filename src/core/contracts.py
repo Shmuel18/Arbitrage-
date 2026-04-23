@@ -182,6 +182,9 @@ class TradeRecord:
     # Tier-based entry classification
     entry_tier: Optional[str] = None       # TOP / MEDIUM / WEAK (see EntryTier)
     price_spread_pct: Optional[Decimal] = None  # cross-exchange price spread at entry
+    # 24h quote volume (USD) on each leg at entry — for liquidity context in the UI
+    long_24h_volume_usd: Optional[Decimal] = None
+    short_24h_volume_usd: Optional[Decimal] = None
 
     # ── Serialization ────────────────────────────────────────────
 
@@ -190,6 +193,7 @@ class TradeRecord:
         "long_funding_rate", "short_funding_rate", "long_taker_fee",
         "short_taker_fee", "entry_price_long", "entry_price_short",
         "fees_paid_total", "funding_collected_usd", "price_spread_pct",
+        "long_24h_volume_usd", "short_24h_volume_usd",
         # Per-side funding tracked by bot at collection time (persisted for reconciliation).
         "_funding_tracked_long", "_funding_tracked_short",
         # Running totals from exchange history — must be persisted so crash-recovery
