@@ -1,0 +1,6 @@
+# Optional deps for the backtest framework only — not needed to run the bot.
+# Installed alongside the main requirements.txt when working on backtests.
+#
+#   pip install -r requirements.txt -r requirements-backtest.txt
+pandas>=2.1
+pyarrow>=14.0
