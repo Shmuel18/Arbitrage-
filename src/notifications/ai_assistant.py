@@ -202,22 +202,24 @@ async def _tool_get_top_opportunities(redis: "RedisClient", limit=5) -> List[Dic
 async def _tool_get_pnl_summary(redis: "RedisClient", hours=24) -> Dict[str, Any]:
     hours = _coerce_int(hours, 24)
     hours = max(1, min(hours, 24 * 365))
-    cutoff_ms = int((_dt.datetime.utcnow() - _dt.timedelta(hours=hours)).timestamp() * 1000)
+    cutoff_sec = (
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=hours)
+    ).timestamp()
 
-    # Try using the timeseries list if available
-    raws = await redis.lrange("trinity:pnl:timeseries", 0, 1000)
+    # trinity:pnl:timeseries is a sorted set: score = unix seconds at trade close,
+    # member = JSON {"trade_id": str, "pnl": float}. See _close_finalize_mixin.py.
+    entries = await redis.zrangebyscore(
+        "trinity:pnl:timeseries", cutoff_sec, float("inf"),
+    )
     total_pnl = 0.0
     trade_count = 0
     wins = 0
-    for r in raws:
+    for raw in entries:
         try:
-            t = json.loads(r) if isinstance(r, (str, bytes)) else r
+            t = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
         except Exception:
             continue
-        ts = t.get("closed_at_ms") or t.get("timestamp_ms") or 0
-        if ts < cutoff_ms:
-            continue
-        pnl = float(t.get("net_profit_usd") or 0)
+        pnl = float(t.get("pnl") or t.get("net_profit_usd") or 0)
         total_pnl += pnl
         trade_count += 1
         if pnl > 0:
