@@ -202,4 +202,65 @@ export const getBacktestReportHtml = async (
   return response.data as string;
 };
 
+/* ── Backtest jobs (fetch + run) ─────────────────────────────── */
+
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+export type JobKind = 'fetch' | 'run';
+
+export interface BacktestJob {
+  id: string;
+  kind: JobKind;
+  status: JobStatus;
+  params: Record<string, unknown>;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  exit_code: number | null;
+  stdout_tail: string;
+  stderr_tail: string;
+  report_name: string | null;
+  error?: string;
+}
+
+export interface FetchJobParams {
+  exchange: string;
+  symbol: string;
+  days: number;
+  kind: 'funding' | 'ohlcv-1d' | 'both';
+}
+
+export interface RunJobParams {
+  symbol: string;
+  exchange_a: string;
+  exchange_b: string;
+  notional_usd: number;
+  min_funding_spread: number;
+  max_hold_hours: number;
+  max_collections: number;
+  slippage_bps: number;
+  funding_interval_hours: number;
+}
+
+export const startBacktestFetch = async (
+  params: FetchJobParams,
+): Promise<{ job_id: string }> => {
+  const response = await api.post('/backtest/fetch', params);
+  return response.data;
+};
+
+export const startBacktestRun = async (
+  params: RunJobParams,
+): Promise<{ job_id: string }> => {
+  const response = await api.post('/backtest/run', params);
+  return response.data;
+};
+
+export const getBacktestJob = async (
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<BacktestJob> => {
+  const response = await api.get(`/backtest/jobs/${encodeURIComponent(jobId)}`, { signal });
+  return response.data;
+};
+
 export default api;

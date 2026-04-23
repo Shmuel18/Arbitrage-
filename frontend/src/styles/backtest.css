@@ -78,6 +78,168 @@
 }
 .bt-placeholder h3 { margin: 0 0 0.5rem 0; color: var(--nx-text, #e5e7eb); }
 
+/* ── forms ─────────────────────────────────────────────────── */
+
+.bt-form-page {
+  padding: 1rem 0.25rem;
+}
+.bt-form-title {
+  margin: 0.25rem 0 1rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.bt-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: 0.9rem 1.25rem;
+  max-width: 640px;
+  padding: 1.1rem;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.75rem;
+  background: var(--nx-surface, #0f141b);
+}
+.bt-form-wide {
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  max-width: 900px;
+}
+.bt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+}
+.bt-field-wide { grid-column: 1 / -1; }
+.bt-field > span {
+  color: var(--nx-text-dim, #9ca3af);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.bt-field input,
+.bt-field select {
+  padding: 0.5rem 0.65rem;
+  font-size: 0.92rem;
+  background: var(--nx-surface-2, #141820);
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.4rem;
+  color: var(--nx-text, #e5e7eb);
+  font-family: inherit;
+}
+.bt-field input:focus,
+.bt-field select:focus {
+  outline: 0;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+
+.bt-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.6rem;
+  margin-top: 0.3rem;
+}
+
+.bt-primary-btn {
+  padding: 0.55rem 1.4rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: #3b82f6;
+  color: #fff;
+  border: 0;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.bt-primary-btn:hover { background: #2563eb; }
+.bt-primary-btn:disabled {
+  background: var(--nx-surface-2, #141820);
+  color: var(--nx-text-dim, #9ca3af);
+  cursor: not-allowed;
+}
+
+.bt-form-error {
+  margin-top: 1rem;
+  max-width: 900px;
+}
+
+/* ── job status panel ─────────────────────────────────────── */
+
+.bt-job {
+  margin-top: 1.25rem;
+  max-width: 900px;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.6rem;
+  background: var(--nx-surface, #0f141b);
+}
+.bt-job-running { border-color: rgba(59, 130, 246, 0.5); }
+.bt-job-success { border-color: rgba(34, 197, 94, 0.5); }
+.bt-job-fail    { border-color: rgba(239, 68, 68, 0.5); }
+
+.bt-job-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.7rem;
+  font-size: 0.88rem;
+}
+.bt-job-badge {
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  background: var(--nx-surface-2, #141820);
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.bt-job-running .bt-job-badge { color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.bt-job-success .bt-job-badge { color: #22c55e; background: rgba(34, 197, 94, 0.12); }
+.bt-job-fail    .bt-job-badge { color: #ef4444; background: rgba(239, 68, 68, 0.12); }
+
+.bt-job-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--nx-text-dim, #9ca3af);
+  font-size: 0.8rem;
+}
+.bt-job-report-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #60a5fa;
+  font-size: 0.8rem;
+}
+
+.bt-job-logs {
+  margin-top: 0.8rem;
+}
+.bt-job-logs summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--nx-text-dim, #9ca3af);
+  user-select: none;
+}
+.bt-job-log-label {
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  color: var(--nx-text-dim, #9ca3af);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.bt-job-log {
+  margin: 0.2rem 0 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--nx-surface-2, #141820);
+  border: 1px solid var(--nx-border, #2a2f3a);
+  border-radius: 0.35rem;
+  color: var(--nx-text, #e5e7eb);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 /* Backtest reports page — matches the card/table aesthetic used elsewhere. */
 
 .bt-page {
