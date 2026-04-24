@@ -29,6 +29,12 @@ class TradingParams(BaseModel):
     min_funding_spread: Decimal = Decimal("0.3")  # min spread of next imminent payment (%) — no 8h normalization
     slippage_buffer_pct: Decimal = Decimal("0.015")  # Estimated slippage on entry/exit
     safety_buffer_pct: Decimal = Decimal("0.02")     # General safety margin
+    # Liquidity filter — protects against thin-market basis divergence (root cause of the
+    # NTRN -$14 trade: low min(leg_vol) → basis divergence overwhelms funding edge).
+    # Both legs must have at least this much 24h quote volume in USD; otherwise reject.
+    # Set to 0 to disable.
+    min_24h_volume_usd: Decimal = Decimal("500000")  # $500k floor; raise/lower per appetite
+    volume_cache_ttl_sec: int = 300  # 5min — 24h volume changes slowly, cache aggressively
     max_market_data_age_ms: int = 2000  # Require bid/ask data newer than this before qualifying an entry
     cooldown_after_orphan_hours: int = 2
     cooldown_after_close_seconds: int = 120  # Block re-entry into same symbol after any close

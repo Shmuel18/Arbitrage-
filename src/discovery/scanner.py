@@ -120,6 +120,10 @@ class Scanner(_ScannerEvaluatorMixin):
         # Per-opportunity INFO log throttle cache to avoid repeated log spam when
         # scanner cycles evaluate the same stale candidate continuously.
         self._opp_log_last_fire: Dict[str, float] = {}
+        # 24h volume cache (USD) keyed by f"{exchange_id}:{symbol}" → (volume_usd, cached_at_ts).
+        # Backs the liquidity filter in _evaluate_direction; TTL set via config to
+        # avoid hammering REST every scan cycle (volume changes slowly).
+        self._volume_cache: Dict[str, tuple[Decimal, float]] = {}
         self._opp_log_signature: Dict[str, str] = {}
         # P2-2: Circuit breaker per exchange.  After _CB_MAX_ERRORS consecutive
         # maybe_reload_markets failures the exchange is skipped for _CB_BACKOFF_SEC

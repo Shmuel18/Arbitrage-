@@ -70,6 +70,44 @@ def _classify_tier(
 class _ScannerEvaluatorMixin:
     """Mixin providing pair evaluation logic for Scanner."""
 
+    # ── 24h volume helper ────────────────────────────────────────
+    async def _get_24h_volume_usd(
+        self,
+        eid: str,
+        symbol: str,
+        adapter: "ExchangeAdapter",
+    ) -> Optional[Decimal]:
+        """Return cached 24h quote volume (USD) for (exchange, symbol).
+
+        Uses a TTL-bounded in-memory cache (`self._volume_cache`). On cache
+        miss/expiry, fetches the ticker via REST and pulls `quoteVolume`.
+        Returns ``None`` if the ticker fetch fails or the field is absent —
+        callers must treat ``None`` as "unknown" and decide policy.
+        """
+        cache_key = f"{eid}:{symbol}"
+        ttl = float(getattr(self._cfg.trading_params, "volume_cache_ttl_sec", 300))
+        cached = self._volume_cache.get(cache_key)
+        now = time.time()
+        if cached is not None and (now - cached[1]) < ttl:
+            return cached[0]
+        try:
+            ticker = await adapter.get_ticker(symbol)
+        except Exception as e:
+            logger.debug(
+                f"[VOL] {eid}:{symbol} ticker fetch failed: {e}",
+                extra={"exchange": eid, "symbol": symbol, "action": "volume_fetch_failed"},
+            )
+            return None
+        raw = (ticker or {}).get("quoteVolume")
+        if raw is None:
+            return None
+        try:
+            vol = Decimal(str(raw))
+        except Exception:
+            return None
+        self._volume_cache[cache_key] = (vol, now)
+        return vol
+
     # ── Evaluate a single pair ───────────────────────────────────
 
     async def _evaluate_pair(
@@ -590,6 +628,37 @@ class _ScannerEvaluatorMixin:
         # ── Force disqualify if price spread is too adverse for any tier ──
         if _tier_too_adverse or _adverse_price_gate:
             qualified = False
+
+        # ── Liquidity filter: reject thin-market opportunities ───
+        # Root cause of the NTRN -$14 trade was basis divergence on a low-volume
+        # token. We require both legs to clear `min_24h_volume_usd`. If volume
+        # data is unavailable for either leg we treat that as failure (fail-closed):
+        # without volume context we can't certify the trade as safe.
+        min_vol_floor = Decimal(str(getattr(
+            self._cfg.trading_params, "min_24h_volume_usd", Decimal("0")
+        )))
+        _vol_reject = False
+        if qualified and min_vol_floor > 0:
+            long_vol = await self._get_24h_volume_usd(long_eid, symbol, adapters[long_eid])
+            short_vol = await self._get_24h_volume_usd(short_eid, symbol, adapters[short_eid])
+            if long_vol is None or short_vol is None:
+                qualified = False
+                _vol_reject = True
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info(
+                        f"🚫 [{symbol}] REJECT: VOL_UNKNOWN "
+                        f"({long_eid}={long_vol}, {short_eid}={short_vol}) — fail-closed"
+                    )
+            else:
+                weakest = min(long_vol, short_vol)
+                if weakest < min_vol_floor:
+                    qualified = False
+                    _vol_reject = True
+                    if logger.isEnabledFor(logging.INFO):
+                        logger.info(
+                            f"🚫 [{symbol}] REJECT: LOW_VOL "
+                            f"min(L={long_vol:.0f}, S={short_vol:.0f}) < {min_vol_floor:.0f} USD"
+                        )
 
         # ── Skip truly uninteresting candidates (no positive spread) ──
         if not qualified and immediate_spread <= Decimal("0"):
