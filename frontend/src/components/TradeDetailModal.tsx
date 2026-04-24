@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSettings } from '../context/SettingsContext';
 import { Trade } from '../types';
@@ -8,6 +8,7 @@ import {
   formatFundingRateN,
   formatDate,
   formatDuration,
+  formatQty,
   pnlColor,
   ModeBadge,
   TierBadge,
@@ -59,6 +60,29 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
   const fundingNet = trade.funding_net ?? null;
   const totalPnl  = trade.total_pnl ?? null;
   const fillBasis    = trade.entry_basis_pct != null ? Number(trade.entry_basis_pct) : null;
+
+  // ── Per-leg notionals (qty × price) for both entry and exit ─────
+  // Returns null when either qty or price is missing/invalid so the
+  // formatter shows '--' instead of "$0.00".
+  const { notionalLongEntry, notionalLongExit, notionalShortEntry, notionalShortExit } = useMemo(() => {
+    const calc = (qty?: string | null, price?: string | null): number | null => {
+      if (qty == null || price == null) return null;
+      const q = Number(qty);
+      const p = Number(price);
+      if (!Number.isFinite(q) || !Number.isFinite(p)) return null;
+      return q * p;
+    };
+    return {
+      notionalLongEntry:  calc(trade.long_qty,  trade.entry_price_long),
+      notionalLongExit:   calc(trade.long_qty,  trade.exit_price_long),
+      notionalShortEntry: calc(trade.short_qty, trade.entry_price_short),
+      notionalShortExit:  calc(trade.short_qty, trade.exit_price_short),
+    };
+  }, [
+    trade.long_qty, trade.short_qty,
+    trade.entry_price_long, trade.exit_price_long,
+    trade.entry_price_short, trade.exit_price_short,
+  ]);
   const scannerSpread = trade.price_spread_pct != null ? Number(trade.price_spread_pct) : null;
   const basisSlippage = fillBasis != null && scannerSpread != null ? fillBasis - scannerSpread : null;
 
@@ -232,8 +256,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
           <div>
             <p style={sectionTitle}>{trade.long_exchange?.toUpperCase()} ({t.long})</p>
             <div style={rowStyle}>
+              <span style={labelStyle}>{t.qtyLabel}</span>
+              <span style={valueStyle}>{formatQty(trade.long_qty)}</span>
+            </div>
+            <div style={rowStyle}>
               <span style={labelStyle}>{t.entryPriceLong}</span>
               <span style={valueStyle}>{formatUsd(trade.entry_price_long, 5)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.notionalEntry}</span>
+              <span style={valueStyle}>{formatUsd(notionalLongEntry)}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.fundingAtEntry}</span>
@@ -247,6 +279,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
               <span style={labelStyle}>{t.exitPriceLong}</span>
               <span style={valueStyle}>{formatUsd(trade.exit_price_long, 5)}</span>
             </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.notionalExit}</span>
+              <span style={valueStyle}>{formatUsd(notionalLongExit)}</span>
+            </div>
             <div style={{ ...rowStyle, borderBottom: 'none' }}>
               <span style={labelStyle}>{t.openedAt}</span>
               <span style={{ ...valueStyle, fontWeight: 400 }}>{formatDate(trade.opened_at || trade.open_time)}</span>
@@ -257,8 +293,16 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
           <div>
             <p style={sectionTitle}>{trade.short_exchange?.toUpperCase()} ({t.short})</p>
             <div style={rowStyle}>
+              <span style={labelStyle}>{t.qtyLabel}</span>
+              <span style={valueStyle}>{formatQty(trade.short_qty)}</span>
+            </div>
+            <div style={rowStyle}>
               <span style={labelStyle}>{t.entryPriceShort}</span>
               <span style={valueStyle}>{formatUsd(trade.entry_price_short, 5)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.notionalEntry}</span>
+              <span style={valueStyle}>{formatUsd(notionalShortEntry)}</span>
             </div>
             <div style={rowStyle}>
               <span style={labelStyle}>{t.fundingAtEntry}</span>
@@ -271,6 +315,10 @@ const TradeDetailModal: React.FC<TradeDetailModalProps> = ({ trade, onClose }) =
             <div style={rowStyle}>
               <span style={labelStyle}>{t.exitPriceShort}</span>
               <span style={valueStyle}>{formatUsd(trade.exit_price_short, 5)}</span>
+            </div>
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t.notionalExit}</span>
+              <span style={valueStyle}>{formatUsd(notionalShortExit)}</span>
             </div>
             <div style={{ ...rowStyle, borderBottom: 'none' }}>
               <span style={labelStyle}>{t.closedAt}</span>

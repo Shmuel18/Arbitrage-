@@ -156,6 +156,9 @@ export interface Translations {
   entryBasis: string;
   fundingAtEntry: string;
   volume24hAtEntry: string;
+  qtyLabel: string;
+  notionalEntry: string;
+  notionalExit: string;
   exitReasonLabel: string;
   openedAt: string;
   closedAt: string;
@@ -217,6 +220,8 @@ export interface Translations {
   pdCollections: string;
   pdTargetReached: string;
   pdToTarget: string;
+  pdSize: string;
+  pdNotional: string;
 
   // Risk Radar
   rrTitle: string;
@@ -509,6 +514,9 @@ const en: Translations = {
   entryBasis: 'Price Spread',
   fundingAtEntry: 'Funding at Entry',
   volume24hAtEntry: '24h Volume',
+  qtyLabel: 'Quantity',
+  notionalEntry: 'Notional (Entry)',
+  notionalExit: 'Notional (Exit)',
   exitReasonLabel: 'Exit Reason',
   openedAt: 'Opened',
   closedAt: 'Closed',
@@ -566,6 +574,8 @@ const en: Translations = {
   pdEntrySpread: 'Entry Spread',
   pdLiveSpread: 'Live Spread',
   pdCollections: 'Collections',
+  pdSize: 'Size',
+  pdNotional: 'Notional',
   pdTargetReached: 'Reached!',
   pdToTarget: 'to target',
 
@@ -859,6 +869,9 @@ const he: Translations = {
   entryBasis: 'מרווח מחירים בכניסה',
   fundingAtEntry: 'מימון בכניסה',
   volume24hAtEntry: 'מחזור 24 שעות',
+  qtyLabel: 'כמות',
+  notionalEntry: 'שווי בכניסה',
+  notionalExit: 'שווי ביציאה',
   exitReasonLabel: 'סיבת יציאה',
   openedAt: 'נפתחה',
   closedAt: 'נסגרה',
@@ -916,6 +929,8 @@ const he: Translations = {
   pdEntrySpread: 'ספרד כניסה',
   pdLiveSpread: 'ספרד נוכחי',
   pdCollections: 'גביות',
+  pdSize: 'גודל פוזיציה',
+  pdNotional: 'שווי',
   pdTargetReached: 'הושג!',
   pdToTarget: 'ליעד',
 

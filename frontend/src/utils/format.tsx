@@ -192,6 +192,19 @@ export const formatPrice = (v?: string | number | null): string => {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 };
 
+/* ── Quantity formatter (token units, locale-grouped) ─────────────
+   Trims unnecessary fraction digits so 25090.0 renders as "25,090"
+   while 0.0125 stays "0.0125". Handles string|number|null safely. */
+export const formatQty = (v?: string | number | null): string => {
+  if (v == null || v === '') return '--';
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return '--';
+  const abs = Math.abs(n);
+  if (abs >= 1) return n.toLocaleString('en-US', { maximumFractionDigits: 4 });
+  if (abs >= 0.0001) return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+  return n.toPrecision(3);
+};
+
 /* ── Date/time formatter (Israel time) ────────────────────────────── */
 const TZ = 'Asia/Jerusalem';
 

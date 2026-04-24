@@ -6,6 +6,7 @@ import {
   formatFundingRateN,
   formatUsd,
   formatPrice,
+  formatQty,
   formatDate,
   formatCountdown,
   pnlColor,
@@ -13,6 +14,9 @@ import {
 import ExecutionTimeline, { TimelineEvent } from './ExecutionTimeline';
 
 export interface PositionDetail {
+  // Quantity per leg (token units)
+  long_qty?: string | null;
+  short_qty?: string | null;
   // Entry prices
   entry_price_long?: string | null;
   entry_price_short?: string | null;
@@ -226,6 +230,43 @@ const PositionDetailCard: React.FC<PositionDetailCardProps> = ({ position, onClo
           </span>
         )}
       </div>
+
+      {/* ── Size Section: qty + USD notional per leg ── */}
+      {(position.long_qty != null || position.short_qty != null) && (() => {
+        const calc = (qty?: string | null, price?: string | null): number | null => {
+          if (qty == null || price == null) return null;
+          const q = Number(qty);
+          const p = Number(price);
+          if (!Number.isFinite(q) || !Number.isFinite(p)) return null;
+          return q * p;
+        };
+        const lQty = position.long_qty;
+        const sQty = position.short_qty;
+        const lEntryNot = calc(lQty, position.entry_price_long);
+        const sEntryNot = calc(sQty, position.entry_price_short);
+        const lLiveNot  = calc(lQty, position.live_price_long ?? position.entry_price_long);
+        const sLiveNot  = calc(sQty, position.live_price_short ?? position.entry_price_short);
+        return (
+          <div style={sectionStyle}>
+            <div style={sectionTitleStyle}>🪙 {t.pdSize}</div>
+            <div style={gridStyle}>
+              <div style={headerCellStyle}>{t.qtyLabel}</div>
+              <div style={headerCellStyle}>{t.notionalEntry}</div>
+              <div style={headerCellStyle}>{t.notionalExit /* live notional reuses 'exit' label as "current" */}</div>
+
+              {/* Long row */}
+              <div style={valueCellStyle}>L: {formatQty(lQty)}</div>
+              <div style={valueCellStyle}>L: {formatUsd(lEntryNot)}</div>
+              <div style={valueCellStyle}>L: {formatUsd(lLiveNot)}</div>
+
+              {/* Short row */}
+              <div style={valueCellStyle}>S: {formatQty(sQty)}</div>
+              <div style={valueCellStyle}>S: {formatUsd(sEntryNot)}</div>
+              <div style={valueCellStyle}>S: {formatUsd(sLiveNot)}</div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Prices Section ── */}
       <div style={sectionStyle}>
