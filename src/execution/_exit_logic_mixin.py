@@ -403,6 +403,12 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         _min_basis_exit_pnl = tp.min_basis_exit_pnl_pct
         _basis_favorable = _current_basis >= _basis_target
         _basis_exit_pnl_ok = _adjusted_basis_exit_pnl >= _min_basis_exit_pnl
+        # The percentage-basis check above can be satisfied even when the
+        # underlying price moved against us, because (l-s)/s grows when s
+        # shrinks even if the absolute USD spread (l-s)*qty contracted.
+        # Require the price legs themselves to be net-non-negative so the
+        # funding profit isn't eaten by an adverse USD basis on the legs.
+        _price_pnl_ok = price_pnl_pct >= _ZERO
 
         if _current_basis >= (_entry_basis - _tolerance) and not _basis_favorable:
             logger.info(
@@ -420,7 +426,14 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_pnl_wait"},
             )
 
-        if _basis_favorable and _basis_exit_pnl_ok:
+        if _basis_favorable and _basis_exit_pnl_ok and not _price_pnl_ok:
+            logger.info(
+                f"[{trade.symbol}] Basis %-recovered but USD price PnL still negative: "
+                f"price_pnl={float(price_pnl_pct):+.4f}% — holding for true basis recovery",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_price_wait"},
+            )
+
+        if _basis_favorable and _basis_exit_pnl_ok and _price_pnl_ok:
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
             logger.info(
                 f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "
