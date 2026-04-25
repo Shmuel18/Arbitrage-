@@ -41,45 +41,188 @@ _MAX_MESSAGE_CHARS = 4096  # Telegram hard limit
 
 # ── Formatter ────────────────────────────────────────────────────
 
-def format_alert(alert: Dict[str, Any]) -> str:
-    """Render an alert dict to an HTML-safe Telegram message string.
+# Format helpers — kept tiny and pure so they're trivially testable.
+def _fmt_money(v: Any, dp: int = 2, signed: bool = False) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    if f < 0:
+        return f"-${abs(f):,.{dp}f}"
+    sign = "+" if signed else ""
+    return f"{sign}${f:,.{dp}f}"
 
-    The *existing* in-app messages already start with emoji headers
-    (e.g. "🟢 Trade opened: …"), so we preserve them verbatim and only
-    add lightweight HTML structure: a bold title line + monospace body
-    for the key/value pairs.
 
-    Args:
-        alert: The dict published to ``trinity:alerts`` — fields
-            id, timestamp, severity, type, message, symbol, exchange.
+def _fmt_pct(v: Any, dp: int = 4, signed: bool = True) -> str:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    sign = "+" if signed and f >= 0 else ""
+    return f"{sign}{f:.{dp}f}%"
 
-    Returns:
-        An HTML-escaped, Telegram-formatted message (parse_mode=HTML).
-    """
+
+def _fmt_price(v: Any, dp: int = 6) -> str:
+    try:
+        return f"${float(v):,.{dp}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_hold(minutes: Any) -> str:
+    try:
+        m = float(minutes)
+    except (TypeError, ValueError):
+        return "—"
+    if m < 60:
+        return f"{m:.0f}m"
+    h = int(m // 60)
+    rem = int(round(m - h * 60))
+    return f"{h}h {rem:02d}m"
+
+
+def _format_trade_open(p: Dict[str, Any], symbol: str) -> str:
+    """Render a trade_open payload into a Telegram HTML card."""
+    long_ex = str(p.get("long_exchange") or "—").upper()
+    short_ex = str(p.get("short_exchange") or "—").upper()
+    long_qty = p.get("long_qty")
+    short_qty = p.get("short_qty")
+    long_price = p.get("entry_price_long")
+    short_price = p.get("entry_price_short")
+    long_funding = p.get("long_funding_rate_pct")
+    short_funding = p.get("short_funding_rate_pct")
+    notional = p.get("notional")
+    net_edge = p.get("net_edge_pct")
+    spread = p.get("immediate_spread_pct")
+    mode = str(p.get("mode") or "").upper()
+    tier = str(p.get("entry_tier") or "").upper()
+
+    sym_disp = html.escape(symbol or "—")
+    head_bits = [f"🟢 <b>עסקה נפתחה</b>  ·  <code>{sym_disp}</code>"]
+    sub_bits = []
+    if mode:
+        sub_bits.append(html.escape(mode))
+    if tier:
+        sub_bits.append(f"tier {html.escape(tier)}")
+    if sub_bits:
+        head_bits.append("  ·  ".join(sub_bits))
+
+    leg_block = (
+        f"🟩 <b>LONG</b>   {html.escape(long_ex)}\n"
+        f"     qty <b>{html.escape(str(long_qty))}</b>  @ {_fmt_price(long_price)}\n"
+        f"     funding <b>{_fmt_pct(long_funding)}</b>\n"
+        f"🟥 <b>SHORT</b>  {html.escape(short_ex)}\n"
+        f"     qty <b>{html.escape(str(short_qty))}</b>  @ {_fmt_price(short_price)}\n"
+        f"     funding <b>{_fmt_pct(short_funding)}</b>"
+    )
+
+    totals_lines = []
+    if notional is not None:
+        totals_lines.append(f"💵 נוטיונל לרגל: <b>{_fmt_money(notional)}</b>")
+    if spread is not None:
+        totals_lines.append(f"📐 ספרד מיידי: <b>{_fmt_pct(spread)}</b>")
+    if net_edge is not None:
+        totals_lines.append(f"🎯 קצה נטו (אחרי עמלות): <b>{_fmt_pct(net_edge)}</b>")
+
+    parts = ["\n".join(head_bits), leg_block]
+    if totals_lines:
+        parts.append("\n".join(totals_lines))
+    text = "\n\n".join(parts)
+    return text[:_MAX_MESSAGE_CHARS]
+
+
+def _format_trade_close(p: Dict[str, Any], symbol: str) -> str:
+    """Render a trade_close payload into a Telegram HTML card."""
+    long_ex = str(p.get("long_exchange") or "—").upper()
+    short_ex = str(p.get("short_exchange") or "—").upper()
+    total_pnl = p.get("total_pnl")
+    price_pnl = p.get("price_pnl")
+    funding_net = p.get("funding_net")
+    fees = p.get("fees")
+    invested = p.get("invested")
+    profit_pct = p.get("profit_pct")
+    hold_min = p.get("hold_minutes")
+    exit_reason = p.get("exit_reason")
+    entry_long = p.get("entry_price_long")
+    entry_short = p.get("entry_price_short")
+    exit_long = p.get("exit_price_long")
+    exit_short = p.get("exit_price_short")
+
+    try:
+        is_win = float(total_pnl) >= 0
+    except (TypeError, ValueError):
+        is_win = True
+    head_emoji = "✅" if is_win else "🔴"
+    head_label = "עסקה נסגרה ברווח" if is_win else "עסקה נסגרה בהפסד"
+
+    sym_disp = html.escape(symbol or "—")
+    head = (
+        f"{head_emoji} <b>{head_label}</b>  ·  <code>{sym_disp}</code>\n"
+        f"זמן החזקה: <b>{html.escape(_fmt_hold(hold_min))}</b>"
+    )
+
+    pnl_block_lines = [f"💰 נטו: <b>{_fmt_money(total_pnl, dp=4, signed=True)}</b>"]
+    if profit_pct is not None:
+        pnl_block_lines.append(f"📊 תשואה: <b>{_fmt_pct(profit_pct, dp=3)}</b>  על  {_fmt_money(invested)}")
+    pnl_block = "\n".join(pnl_block_lines)
+
+    breakdown_lines = ["<b>פירוק:</b>"]
+    if price_pnl is not None:
+        breakdown_lines.append(f"  • מחיר (basis): {_fmt_money(price_pnl, dp=4, signed=True)}")
+    if funding_net is not None:
+        breakdown_lines.append(f"  • מימון נטו: {_fmt_money(funding_net, dp=4, signed=True)}")
+    if fees is not None:
+        breakdown_lines.append(f"  • עמלות: -{_fmt_money(abs(float(fees)), dp=4)}")
+    breakdown = "\n".join(breakdown_lines) if len(breakdown_lines) > 1 else ""
+
+    legs_lines = []
+    if entry_long is not None and exit_long is not None:
+        legs_lines.append(
+            f"🟩 LONG  {html.escape(long_ex)}: "
+            f"{_fmt_price(entry_long)} → {_fmt_price(exit_long)}"
+        )
+    if entry_short is not None and exit_short is not None:
+        legs_lines.append(
+            f"🟥 SHORT {html.escape(short_ex)}: "
+            f"{_fmt_price(entry_short)} → {_fmt_price(exit_short)}"
+        )
+    legs = "\n".join(legs_lines)
+
+    footer = ""
+    if exit_reason:
+        footer = f"📌 סיבת יציאה: <i>{html.escape(str(exit_reason))}</i>"
+
+    parts = [head, pnl_block]
+    if breakdown:
+        parts.append(breakdown)
+    if legs:
+        parts.append(legs)
+    if footer:
+        parts.append(footer)
+    text = "\n\n".join(parts)
+    return text[:_MAX_MESSAGE_CHARS]
+
+
+def _format_generic(alert: Dict[str, Any]) -> str:
+    """Fallback for non-trade alert types (system, daily_summary, errors)."""
     message = (alert.get("message") or "").strip()
     symbol = (alert.get("symbol") or "").strip()
     exchange = (alert.get("exchange") or "").strip()
     kind = (alert.get("type") or "system").strip()
     severity = (alert.get("severity") or "info").strip()
 
-    # Map alert type → (emoji, bold header)
     HEADERS: Dict[str, tuple[str, str]] = {
-        "trade_open":    ("🟢", "Trade opened"),
-        "trade_close":   ("✅", "Trade closed"),
-        "daily_summary": ("📊", "Daily summary"),
-        "funding":       ("💰", "Funding received"),
-        "liquidation":   ("🚨", "Liquidation risk"),
+        "daily_summary": ("📊", "סיכום יומי"),
+        "funding":       ("💰", "מימון התקבל"),
+        "liquidation":   ("🚨", "סיכון לליקווידציה"),
     }
     emoji, title = HEADERS.get(kind, ("ℹ️", kind.replace("_", " ").title()))
 
-    # Severity prefix for non-trade alerts
     if severity == "critical" and kind not in HEADERS:
         emoji = "🚨"
     elif severity == "warning" and kind not in HEADERS:
         emoji = "⚠️"
 
-    # Body: Everything after the leading emoji in `message` (the bot's
-    # existing line). If the message doesn't start with emoji, include as-is.
     body = message
     for lead in ("🟢 ", "🔴 ", "✅ ", "⚠️ ", "🚨 ", "ℹ️ "):
         if body.startswith(lead):
@@ -87,7 +230,6 @@ def format_alert(alert: Dict[str, Any]) -> str:
             break
     body = html.escape(body)
 
-    # Optional meta tags
     meta_parts = []
     if symbol:
         meta_parts.append(f"<code>{html.escape(symbol)}</code>")
@@ -100,11 +242,35 @@ def format_alert(alert: Dict[str, Any]) -> str:
         lines.append(body)
     if meta_line:
         lines.append(meta_line)
-
     text = "\n".join(lines)
-    if len(text) > _MAX_MESSAGE_CHARS:
-        text = text[: _MAX_MESSAGE_CHARS - 3] + "..."
-    return text
+    return text[:_MAX_MESSAGE_CHARS]
+
+
+def format_alert(alert: Dict[str, Any]) -> str:
+    """Render an alert dict to an HTML-safe Telegram message string.
+
+    For trade_open / trade_close, the formatter prefers a structured
+    `payload` dict (passed via APIPublisher.publish_alert(payload=...))
+    and renders a richer card. Other alert types fall through to the
+    generic emoji+message format.
+
+    Args:
+        alert: The dict published to ``trinity:alerts`` — fields
+            id, timestamp, severity, type, message, symbol, exchange,
+            payload.
+
+    Returns:
+        An HTML-escaped, Telegram-formatted message (parse_mode=HTML).
+    """
+    kind = (alert.get("type") or "system").strip()
+    payload = alert.get("payload") or None
+    symbol = (alert.get("symbol") or "").strip()
+
+    if kind == "trade_open" and isinstance(payload, dict):
+        return _format_trade_open(payload, symbol)
+    if kind == "trade_close" and isinstance(payload, dict):
+        return _format_trade_close(payload, symbol)
+    return _format_generic(alert)
 
 
 # ── Notifier ─────────────────────────────────────────────────────

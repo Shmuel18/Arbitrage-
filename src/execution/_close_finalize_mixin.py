@@ -240,6 +240,24 @@ class _CloseFinalizeMixin:
                 severity="info",
                 alert_type="trade_close",
                 symbol=trade.symbol,
+                payload={
+                    "trade_id": trade.trade_id,
+                    "mode": trade.mode,
+                    "long_exchange": trade.long_exchange,
+                    "short_exchange": trade.short_exchange,
+                    "entry_price_long": str(trade.entry_price_long) if trade.entry_price_long is not None else None,
+                    "entry_price_short": str(trade.entry_price_short) if trade.entry_price_short is not None else None,
+                    "exit_price_long": str(trade.exit_price_long) if trade.exit_price_long is not None else None,
+                    "exit_price_short": str(trade.exit_price_short) if trade.exit_price_short is not None else None,
+                    "total_pnl": float(total_pnl),
+                    "price_pnl": float(price_pnl),
+                    "funding_net": float(funding_net),
+                    "fees": float(total_fees),
+                    "invested": float(invested),
+                    "profit_pct": float(profit_pct),
+                    "hold_minutes": float(hold_minutes),
+                    "exit_reason": _exit_reason,
+                },
             )
 
         if self._cfg.logging.log_balances_after_trade:

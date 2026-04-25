@@ -745,6 +745,36 @@ class _EntryMixin:
             logger.info(entry_msg, extra={"trade_id": trade_id, "symbol": opp.symbol, "action": "trade_entry"})
             if self._publisher:
                 await self._publisher.publish_log("INFO", entry_msg)
+                # Telegram fan-out — structured payload lets the formatter
+                # build a rich card (qty/price/funding/edge) rather than
+                # parsing the human-readable message string.
+                await self._publisher.publish_alert(
+                    (
+                        f"🟢 Trade opened: {trade_id} {opp.symbol} "
+                        f"L={opp.long_exchange}({long_filled_qty}) "
+                        f"S={opp.short_exchange}({short_filled_qty}) "
+                        f"net={float(opp.net_edge_pct):.4f}%"
+                    ),
+                    severity="info",
+                    alert_type="trade_open",
+                    symbol=opp.symbol,
+                    payload={
+                        "trade_id": trade_id,
+                        "mode": opp.mode,
+                        "entry_tier": opp.entry_tier,
+                        "long_exchange": opp.long_exchange,
+                        "short_exchange": opp.short_exchange,
+                        "long_qty": str(long_filled_qty),
+                        "short_qty": str(short_filled_qty),
+                        "entry_price_long": str(entry_price_long) if entry_price_long is not None else None,
+                        "entry_price_short": str(entry_price_short) if entry_price_short is not None else None,
+                        "long_funding_rate_pct": lr_pct,
+                        "short_funding_rate_pct": sr_pct,
+                        "immediate_spread_pct": float(immediate_spread),
+                        "net_edge_pct": float(opp.net_edge_pct),
+                        "notional": entry_notional,
+                    },
+                )
 
             # ── Journal: record trade open ──
             self._journal.trade_opened(

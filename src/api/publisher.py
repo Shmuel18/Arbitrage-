@@ -169,6 +169,7 @@ class APIPublisher:
         alert_type: str = "system",
         symbol: str | None = None,
         exchange: str | None = None,
+        payload: Dict[str, Any] | None = None,
     ) -> None:
         """Publish a structured alert to trinity:alerts (24 h TTL, max 200).
 
@@ -181,6 +182,9 @@ class APIPublisher:
                         "trade_close", "error_state", "system".
             symbol:     Optional trading symbol (e.g. "BTC/USDT:USDT").
             exchange:   Optional exchange name (e.g. "binance").
+            payload:    Optional structured fields used by Telegram formatters
+                        for trade_open / trade_close to render rich messages.
+                        Must be JSON-serializable.
         """
         entry = {
             "id": str(uuid.uuid4()),
@@ -190,6 +194,7 @@ class APIPublisher:
             "message": message,
             "symbol": symbol,
             "exchange": exchange,
+            "payload": payload,
         }
         raw = json.dumps(entry)
         try:
