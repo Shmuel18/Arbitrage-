@@ -232,6 +232,8 @@ class StatusPublisher:
             "long_interval_hours": None,
             "short_interval_hours": None,
             "entry_tier": trade.entry_tier,
+            "long_24h_volume_usd": str(trade.long_24h_volume_usd) if trade.long_24h_volume_usd is not None else None,
+            "short_24h_volume_usd": str(trade.short_24h_volume_usd) if trade.short_24h_volume_usd is not None else None,
         }
 
         # Live funding spread

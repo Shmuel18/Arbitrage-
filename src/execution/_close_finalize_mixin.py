@@ -224,6 +224,8 @@ class _CloseFinalizeMixin:
             "exit_reason": _exit_reason,
             "funding_collections": trade.funding_collections,
             "funding_collected_usd": str(trade.funding_collected_usd),
+            "long_24h_volume_usd": str(trade.long_24h_volume_usd) if trade.long_24h_volume_usd is not None else None,
+            "short_24h_volume_usd": str(trade.short_24h_volume_usd) if trade.short_24h_volume_usd is not None else None,
         }
         await self._redis.zadd(
             "trinity:trades:history",
@@ -428,6 +430,8 @@ class _CloseFinalizeMixin:
                 "exit_reason": ExitReason.MANUAL_CLOSE,
                 "funding_collections": trade.funding_collections,
                 "funding_collected_usd": str(trade.funding_collected_usd),
+                "long_24h_volume_usd": str(trade.long_24h_volume_usd) if trade.long_24h_volume_usd is not None else None,
+                "short_24h_volume_usd": str(trade.short_24h_volume_usd) if trade.short_24h_volume_usd is not None else None,
             }
             await self._redis.zadd(
                 "trinity:trades:history",
