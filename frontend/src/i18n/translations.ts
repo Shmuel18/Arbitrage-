@@ -306,6 +306,7 @@ export interface Translations {
   exitTimeout: string;
   exitLiquidation: string;
   exitManual: string;
+  exitRestart: string;
 
   // Countdown
   countdownNow: string;
@@ -662,6 +663,7 @@ const en: Translations = {
   exitTimeout: 'Timeout',
   exitLiquidation: 'Liquidation',
   exitManual: 'Manual',
+  exitRestart: 'Bot Restart',
 
   // Countdown
   countdownNow: '⚡ NOW',
@@ -1017,6 +1019,7 @@ const he: Translations = {
   exitTimeout: 'טיימאאוט',
   exitLiquidation: 'חיסול',
   exitManual: 'ידני',
+  exitRestart: 'הפעלה מחדש',
 
   // Countdown
   countdownNow: '⚡ עכשיו',

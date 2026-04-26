@@ -582,6 +582,12 @@ class _CloseMixin(_CloseFinalizeMixin):
         P2-1: Parallel gather (was sequential) so N trades close in
         max(close_time) rather than N × close_time.  return_exceptions=True
         ensures one failed close doesn't block the others.
+
+        Each trade is tagged RESTART_SHUTDOWN so post-mortem analysis can
+        distinguish a forced-by-deploy close from an organic exit-gate
+        close. Without this tag the trade falls back to the default
+        SPREAD_BELOW_THRESHOLD label, which is misleading and pollutes
+        win/loss attribution.
         """
         open_trades = [
             t for t in list(self._active_trades.values())
@@ -590,6 +596,8 @@ class _CloseMixin(_CloseFinalizeMixin):
         if not open_trades:
             return
         logger.info(f"Shutdown: closing {len(open_trades)} open trade(s) in parallel")
+        for t in open_trades:
+            t._exit_reason = ExitReason.RESTART_SHUTDOWN.value
         await asyncio.gather(
             *[self._close_trade(t) for t in open_trades],
             return_exceptions=True,

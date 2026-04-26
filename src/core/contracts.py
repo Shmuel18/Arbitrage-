@@ -53,6 +53,7 @@ class ExitReason(str, Enum):
     PROFIT_TARGET = "profit_target"
     EXIT_TIMEOUT = "exit_timeout"
     LIQUIDATION_RISK = "liquidation_risk"
+    RESTART_SHUTDOWN = "restart_shutdown"
 
 
 # ── Instrument specification ─────────────────────────────────────
