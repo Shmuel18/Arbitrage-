@@ -1,0 +1,112 @@
+name: Reset trade history (DANGEROUS)
+
+# Wipes closed-trade history, PnL timeseries, and aggregated stats from
+# Redis. Requires explicit "WIPE" confirmation. Aborts if any open trade
+# exists — wiping in-flight state would orphan a real exchange position.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "WIPE" to confirm history deletion'
+        required: true
+        default: ""
+      include_alerts:
+        description: 'Also clear trinity:alerts? (true/false)'
+        required: false
+        default: "true"
+
+concurrency:
+  group: reset-history
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "WIPE" ]; then
+            echo "::error::You must type WIPE in the confirm field."
+            exit 1
+          fi
+          echo "Confirmed: WIPE"
+
+      - name: SSH and run guarded reset
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 2m
+          script: |
+            set -euo pipefail
+            INCLUDE_ALERTS="${{ github.event.inputs.include_alerts }}"
+
+            RC="docker exec trinity-redis redis-cli"
+
+            echo "=== Active trade scan ==="
+            ACTIVE_KEYS=$($RC --scan --pattern "trinity:trade:*" | wc -l | tr -d ' ')
+            echo "trinity:trade:* keys found: $ACTIVE_KEYS"
+
+            # Inspect state of each active trade — only OPEN/CLOSING are blockers.
+            BLOCKING=0
+            if [ "$ACTIVE_KEYS" -gt 0 ]; then
+              while IFS= read -r key; do
+                [ -z "$key" ] && continue
+                STATE=$($RC get "$key" 2>/dev/null | python3 -c 'import sys,json; d=json.loads(sys.stdin.read() or "{}"); print(d.get("state",""))' 2>/dev/null || echo "")
+                echo "  $key  state=$STATE"
+                case "$STATE" in
+                  open|closing|OPEN|CLOSING)
+                    BLOCKING=$((BLOCKING + 1))
+                    ;;
+                esac
+              done < <($RC --scan --pattern "trinity:trade:*")
+            fi
+
+            if [ "$BLOCKING" -gt 0 ]; then
+              echo "::error::ABORT — $BLOCKING open/closing trade(s) exist. Wait for them to close (or close manually) before resetting history."
+              exit 1
+            fi
+            echo "No blocking trades. Proceeding."
+
+            echo ""
+            echo "=== Snapshot before delete ==="
+            HIST_BEFORE=$($RC zcard trinity:trades:history 2>/dev/null || echo 0)
+            PNL_BEFORE=$($RC zcard trinity:pnl:timeseries 2>/dev/null || echo 0)
+            ALERTS_BEFORE=$($RC llen trinity:alerts 2>/dev/null || echo 0)
+            echo "trinity:trades:history    entries: $HIST_BEFORE"
+            echo "trinity:pnl:timeseries    entries: $PNL_BEFORE"
+            echo "trinity:alerts            entries: $ALERTS_BEFORE"
+
+            echo ""
+            echo "=== Deleting history keys ==="
+            DELETED=$($RC del \
+              trinity:trades:history \
+              trinity:pnl:timeseries \
+              trinity:pnl:running \
+              trinity:pnl:latest \
+              trinity:stats \
+              trinity:stats:trade_count \
+              trinity:stats:win_count \
+              trinity:stats:total_pnl 2>/dev/null || echo 0)
+            echo "Deleted (history+pnl+stats): $DELETED key(s)"
+
+            if [ "$INCLUDE_ALERTS" = "true" ]; then
+              ALERTS_DEL=$($RC del trinity:alerts 2>/dev/null || echo 0)
+              echo "Deleted trinity:alerts: $ALERTS_DEL key(s)"
+            fi
+
+            echo ""
+            echo "=== Snapshot after delete ==="
+            HIST_AFTER=$($RC zcard trinity:trades:history 2>/dev/null || echo 0)
+            PNL_AFTER=$($RC zcard trinity:pnl:timeseries 2>/dev/null || echo 0)
+            ALERTS_AFTER=$($RC llen trinity:alerts 2>/dev/null || echo 0)
+            echo "trinity:trades:history    entries: $HIST_AFTER  (was $HIST_BEFORE)"
+            echo "trinity:pnl:timeseries    entries: $PNL_AFTER   (was $PNL_BEFORE)"
+            echo "trinity:alerts            entries: $ALERTS_AFTER (was $ALERTS_BEFORE)"
+
+            echo ""
+            echo "=== Reset complete. Bot continues running with intact active state. ==="
