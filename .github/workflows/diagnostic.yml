@@ -1,0 +1,46 @@
+name: Diagnostic — fetch bot logs
+
+# Read-only SSH command. Outputs filtered docker logs to the workflow
+# console so they're retrievable via the GitHub API. No state changes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Symbol substring to filter (e.g. ENSO). Empty = no filter."
+        required: false
+        default: ""
+      lines:
+        description: "Number of log lines to scan from container (max 10000)"
+        required: false
+        default: "3000"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Pull and filter docker logs
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 2m
+          script: |
+            set -uo pipefail
+            LINES="${{ github.event.inputs.lines }}"
+            SYMBOL="${{ github.event.inputs.symbol }}"
+            # Sanitize: clamp lines, strip non-alnum from symbol
+            LINES=$(echo "$LINES" | tr -cd '0-9' | head -c 5)
+            [ -z "$LINES" ] && LINES=3000
+            [ "$LINES" -gt 10000 ] && LINES=10000
+            SYMBOL=$(echo "$SYMBOL" | tr -cd 'A-Za-z0-9/:_-')
+            echo "=== docker logs trinity-bot --tail $LINES | filter='$SYMBOL' ==="
+            if [ -z "$SYMBOL" ]; then
+              docker logs trinity-bot --tail "$LINES" 2>&1 | tail -300
+            else
+              docker logs trinity-bot --tail "$LINES" 2>&1 | grep -i -E "$SYMBOL|exit_logic|basis_recovery|profit_target|funding_collected" | tail -300
+            fi
+            echo "=== end of logs ==="
