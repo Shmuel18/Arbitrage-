@@ -309,15 +309,24 @@ class StatusPublisher:
         try:
             _lt = ticker_cache.get((trade.long_exchange, trade.symbol), {})
             _st = ticker_cache.get((trade.short_exchange, trade.symbol), {})
-            _lp = float(_lt.get("last") or _lt.get("close") or 0)
-            _sp = float(_st.get("last") or _st.get("close") or 0)
+            # Mid prices for stable basis-display reference. Doesn't reflect
+            # what an actual exit fill would look like.
+            _lp_mid = float(_lt.get("last") or _lt.get("close") or 0)
+            _sp_mid = float(_st.get("last") or _st.get("close") or 0)
+            # Exit-realistic prices: closing the long means selling at bid,
+            # closing the short means buying back at ask. This matches what
+            # the bot's _calculate_current_pnl uses (executable VWAP); using
+            # bid/ask here keeps the dashboard PnL aligned with what the
+            # exit gates evaluate, instead of optimistic mid-price PnL.
+            _lp_exit = float(_lt.get("bid") or _lp_mid)   # sell long at bid
+            _sp_exit = float(_st.get("ask") or _sp_mid)   # buy back short at ask
             _elp = float(trade.entry_price_long or 0)
             _esp = float(trade.entry_price_short or 0)
-            if _lp > 0 and _sp > 0 and _elp > 0 and _esp > 0:
+            if _lp_exit > 0 and _sp_exit > 0 and _elp > 0 and _esp > 0:
                 _notional = _elp * float(trade.long_qty)
                 if _notional > 0:
-                    _long_pnl = (_lp - _elp) * float(trade.long_qty)
-                    _short_pnl = (_esp - _sp) * float(trade.short_qty)
+                    _long_pnl = (_lp_exit - _elp) * float(trade.long_qty)
+                    _short_pnl = (_esp - _sp_exit) * float(trade.short_qty)
                     _price_pnl = _long_pnl + _short_pnl
                     _fund_pnl = float(trade.funding_collected_usd or 0)
                     _fees = float(trade.fees_paid_total or 0)
@@ -331,10 +340,10 @@ class StatusPublisher:
                     pos_entry.update(pnl_data)
                     # Cache this good result
                     self._last_pnl_cache[trade.trade_id] = pnl_data
-            pos_entry["live_price_long"] = str(_lp) if _lp > 0 else None
-            pos_entry["live_price_short"] = str(_sp) if _sp > 0 else None
-            if _lp > 0 and _sp > 0:
-                pos_entry["current_basis_pct"] = str(round((_lp - _sp) / _sp * 100, 4))
+            pos_entry["live_price_long"] = str(_lp_mid) if _lp_mid > 0 else None
+            pos_entry["live_price_short"] = str(_sp_mid) if _sp_mid > 0 else None
+            if _lp_mid > 0 and _sp_mid > 0:
+                pos_entry["current_basis_pct"] = str(round((_lp_mid - _sp_mid) / _sp_mid * 100, 4))
         except Exception as exc:
             logger.debug(f"Price PnL calc failed for {trade.symbol}: {exc}")
 
