@@ -584,6 +584,24 @@ class Scanner(_ScannerEvaluatorMixin):
                             self._cfg, _busy_symbols,
                         )
 
+                        # Tier classification (_classify_tier) uses tier_net =
+                        # immediate_spread - taker_fees, which deliberately ignores
+                        # the larger exit_slippage_buffer the exit gates require.
+                        # Result: an opportunity can show entry_tier="top" while
+                        # net_edge_pct (the user-visible "Net" column) is already
+                        # negative — the row earns a 🏆 badge for a trade that
+                        # cannot exit profitably. Demote the displayed tier to
+                        # None whenever net_edge_pct is non-positive so the badge
+                        # only appears on rows that have a chance at green PnL.
+                        # Internal entry_tier on the OpportunityCandidate is left
+                        # alone so executor / scanner code paths are unchanged.
+                        def _display_tier(o) -> Optional[str]:
+                            if o.entry_tier is None:
+                                return None
+                            if float(o.net_edge_pct) <= 0:
+                                return None
+                            return o.entry_tier
+
                         opp_data = [
                             {
                                 "symbol": o.symbol,
@@ -606,7 +624,7 @@ class Scanner(_ScannerEvaluatorMixin):
                                 "qualified": o.qualified,
                                 "long_interval_hours": o.long_interval_hours,
                                 "short_interval_hours": o.short_interval_hours,
-                                "entry_tier": o.entry_tier,
+                                "entry_tier": _display_tier(o),
                                 "price_spread_pct": float(o.price_spread_pct),
                                 "stale_price": o.stale_price,
                                 "executable_status": _exec_statuses[i],
