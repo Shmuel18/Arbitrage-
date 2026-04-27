@@ -523,6 +523,95 @@ class _EntryMixin:
             else:
                 entry_basis_pct = Decimal("0")
 
+            # ── Entry basis safety net ──────────────────────────────
+            # The scanner classifies tiers using pre-execution bid/ask, but
+            # actual fills can land adverse to that snapshot due to slippage.
+            # Reject (and unwind) if the realised spread exceeds tolerance —
+            # otherwise the trade enters at a basis the tier policy would
+            # never have approved.
+            _max_basis = tp.max_entry_basis_spread_pct
+            if entry_basis_pct > _max_basis:
+                logger.error(
+                    f"❌ [{opp.symbol}] Entry basis {float(entry_basis_pct):+.4f}% "
+                    f"exceeds max {float(_max_basis):+.4f}% — emergency-closing both legs",
+                    extra={
+                        "symbol": opp.symbol,
+                        "action": "entry_basis_abort",
+                        "entry_basis_pct": float(entry_basis_pct),
+                        "max_basis_pct": float(_max_basis),
+                    },
+                )
+                _long_close_qty = Decimal(str(long_fill["filled"]))
+                _short_close_qty = Decimal(str(short_fill["filled"]))
+                _failed: list = []
+                try:
+                    _close_results = await asyncio.gather(
+                        self._place_with_timeout(
+                            long_adapter,
+                            OrderRequest(
+                                exchange=opp.long_exchange,
+                                symbol=opp.symbol,
+                                side=OrderSide.SELL,
+                                quantity=_long_close_qty,
+                                reduce_only=True,
+                            ),
+                        ),
+                        self._place_with_timeout(
+                            short_adapter,
+                            OrderRequest(
+                                exchange=opp.short_exchange,
+                                symbol=opp.symbol,
+                                side=OrderSide.BUY,
+                                quantity=_short_close_qty,
+                                reduce_only=True,
+                            ),
+                        ),
+                        return_exceptions=True,
+                    )
+                    _failed = [r for r in _close_results if isinstance(r, Exception) or r is None]
+                except Exception as _unwind_err:
+                    logger.error(
+                        f"❌ [{opp.symbol}] Entry basis unwind ERROR: {_unwind_err} — "
+                        f"MANUAL INTERVENTION REQUIRED",
+                        extra={"symbol": opp.symbol, "action": "entry_basis_unwind_error"},
+                    )
+                    _failed = [True]
+                if _failed:
+                    logger.error(
+                        f"❌ [{opp.symbol}] Entry basis unwind FAILED ({len(_failed)} legs) — "
+                        f"MANUAL INTERVENTION REQUIRED"
+                    )
+                    _cooldown_secs = 86400
+                    _route_reason = "entry_basis_unwind_failed"
+                else:
+                    logger.info(
+                        f"✅ [{opp.symbol}] Entry basis unwind: both legs closed reduceOnly"
+                    )
+                    _cooldown_secs = 300
+                    _route_reason = "entry_basis_too_adverse"
+                await self._redis.set_cooldown(opp.symbol, _cooldown_secs)
+                await self._redis.set_route_cooldown(
+                    opp.symbol, opp.long_exchange, opp.short_exchange,
+                    _cooldown_secs, reason=_route_reason,
+                )
+                # Journal a ghost trade so the abort surfaces in history.
+                _ghost_notional = (
+                    float(entry_price_long * _long_close_qty)
+                    if entry_price_long else 0.0
+                )
+                self._journal.event(
+                    "ghost_trade",
+                    symbol=opp.symbol,
+                    long_exchange=opp.long_exchange,
+                    short_exchange=opp.short_exchange,
+                    reason=_route_reason,
+                    qty=float(_long_close_qty),
+                    notional=_ghost_notional,
+                    entry_basis_pct=float(entry_basis_pct),
+                    max_basis_pct=float(_max_basis),
+                )
+                return
+
             # Log any partial fills and mismatches
             short_partial = short_filled_qty < short_order_qty
             qty_mismatch = long_filled_qty != short_filled_qty

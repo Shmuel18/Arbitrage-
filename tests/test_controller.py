@@ -220,44 +220,105 @@ class TestHandleOpportunity:
     async def test_rejects_post_entry_adverse_basis_and_emergency_closes(
         self,
         controller,
+        config,
         sample_opportunity,
+        mock_exchange_mgr,
         mock_redis,
     ):
-        """Adverse realized entry basis must trigger immediate rejection and unwind."""
-        long_spec = AsyncMock()
-        long_spec.taker_fee = Decimal("0.0005")
-        short_spec = AsyncMock()
-        short_spec.taker_fee = Decimal("0.0005")
+        """Adverse realized entry basis must trigger immediate rejection and unwind.
 
-        controller._execute_entry_orders = AsyncMock(
-            return_value={
-                "order_qty": Decimal("0.01"),
-                "long_filled_qty": Decimal("0.01"),
-                "short_filled_qty": Decimal("0.01"),
-                "entry_price_long": Decimal("50000"),
-                "entry_price_short": Decimal("49900"),
-                "entry_fees": Decimal("0.5"),
-                "long_spec": long_spec,
-                "short_spec": short_spec,
-                "entry_basis_pct": Decimal("1.25"),
-            }
-        )
+        Reproduces the slippage scenario the user observed on ORCA: the scanner
+        approves the trade on a favorable bid/ask snapshot, but actual fills
+        land on the wrong side of the spread. The post-fill basis check is the
+        last-resort safety net before the trade is registered.
+        """
+        # Force fills that yield basis = (50100-49900)/49900*100 ≈ 0.4008%,
+        # well above the 0.15% configured tolerance.
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        long_adapter.place_order.return_value = {
+            "id": "long-1", "filled": 0.01, "average": 50100.0, "status": "closed",
+        }
+        short_adapter.place_order.return_value = {
+            "id": "short-1", "filled": 0.01, "average": 49900.0, "status": "closed",
+        }
+        # Mirror the fill price in the trades-API reconcile path.
+        long_adapter.fetch_fill_details_from_trades.return_value = {
+            "total_fee": Decimal("0"),
+            "avg_price": Decimal("50100"),
+            "filled_qty": Decimal("0.01"),
+        }
+        short_adapter.fetch_fill_details_from_trades.return_value = {
+            "total_fee": Decimal("0"),
+            "avg_price": Decimal("49900"),
+            "filled_qty": Decimal("0.01"),
+        }
 
-        close_calls = []
+        # Tolerance must be the production default for this test to be meaningful.
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
 
-        async def _mock_place_with_timeout(adapter, req):
-            close_calls.append(req)
-            return {"id": "close", "filled": float(req.quantity), "average": 50000.0}
+        # Capture every order routed through _place_with_timeout. The first two
+        # calls are the entry legs; the last two should be the reduceOnly unwind.
+        place_calls = []
+        original_place = controller._place_with_timeout
 
-        controller._place_with_timeout = _mock_place_with_timeout
+        async def _track_place(adapter, req):
+            place_calls.append(req)
+            return await original_place(adapter, req)
+
+        controller._place_with_timeout = _track_place
 
         await controller.handle_opportunity(sample_opportunity)
 
-        assert len(controller._active_trades) == 0
-        assert len(close_calls) == 2
-        assert all(req.reduce_only for req in close_calls)
-        assert {req.side for req in close_calls} == {OrderSide.SELL, OrderSide.BUY}
+        assert len(controller._active_trades) == 0, "trade must not be registered"
         mock_redis.set_trade_state.assert_not_called()
+
+        unwind_calls = [r for r in place_calls if r.reduce_only]
+        assert len(unwind_calls) == 2, f"expected two reduceOnly closes, got {unwind_calls}"
+        assert {r.side for r in unwind_calls} == {OrderSide.SELL, OrderSide.BUY}
+        # Cooldowns prevent immediate re-entry on the same symbol/route.
+        mock_redis.set_cooldown.assert_called()
+        mock_redis.set_route_cooldown.assert_called()
+        # Cooldown duration must be the success path (300s), not the
+        # unwind-failed escalation (24h).
+        cooldown_seconds = mock_redis.set_cooldown.call_args.args[1]
+        assert cooldown_seconds == 300
+
+    @pytest.mark.asyncio
+    async def test_allows_entry_when_basis_within_tolerance(
+        self,
+        controller,
+        config,
+        sample_opportunity,
+        mock_exchange_mgr,
+    ):
+        """Adverse basis below tolerance must NOT trigger the safety net."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        # basis = (50010-49990)/49990*100 ≈ 0.0400%, under 0.15% tolerance.
+        long_adapter.place_order.return_value = {
+            "id": "long-1", "filled": 0.01, "average": 50010.0, "status": "closed",
+        }
+        short_adapter.place_order.return_value = {
+            "id": "short-1", "filled": 0.01, "average": 49990.0, "status": "closed",
+        }
+        long_adapter.fetch_fill_details_from_trades.return_value = {
+            "total_fee": Decimal("0"),
+            "avg_price": Decimal("50010"),
+            "filled_qty": Decimal("0.01"),
+        }
+        short_adapter.fetch_fill_details_from_trades.return_value = {
+            "total_fee": Decimal("0"),
+            "avg_price": Decimal("49990"),
+            "filled_qty": Decimal("0.01"),
+        }
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 1
+        trade = list(controller._active_trades.values())[0]
+        assert trade.entry_basis_pct < Decimal("0.15")
 
 
 class TestCloseOrphan:
