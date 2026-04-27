@@ -52,7 +52,8 @@ class ExitReason(str, Enum):
     UPGRADE_EXIT = "upgrade_exit"
     PROFIT_TARGET = "profit_target"
     EXIT_TIMEOUT = "exit_timeout"
-    LIQUIDATION_RISK = "liquidation_risk"
+    LIQUIDATION_RISK = "liquidation_risk"           # Bot detected risk + closed preventively
+    LIQUIDATION_EXTERNAL = "liquidation_external"   # Exchange force-closed the position
     RESTART_SHUTDOWN = "restart_shutdown"
 
 

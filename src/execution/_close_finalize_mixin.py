@@ -60,6 +60,44 @@ class _CloseFinalizeMixin:
         exit_notional_short = (trade.exit_price_short or Decimal("0")) * trade.short_qty
         long_pnl = exit_notional_long - entry_notional_long
         short_pnl = entry_notional_short - exit_notional_short
+
+        # ── Liquidation reconcile ────────────────────────────────
+        # When the exchange force-closed a leg before our reduce-only order
+        # filled (flagged in _close_leg), the recovered fill price isn't the
+        # whole story — there's also the liquidation penalty + bankruptcy-
+        # price gap that ate the rest of the margin. The realised loss is
+        # ≈ leg_margin = leg_notional / leverage. Replace the optimistic
+        # price-PnL with that floor so the dashboard matches the exchange's
+        # Realized PnL view (DAM @ 11:53: bot computed -$10.92, exchange
+        # took -$15.88 = full margin).
+        _liquidated_legs: list[str] = []
+        if getattr(trade, "_long_closed_externally", False):
+            _long_lev = self._cfg.exchanges.get(trade.long_exchange)
+            _long_lev_n = int(_long_lev.leverage) if _long_lev and _long_lev.leverage else 5
+            _long_margin = entry_notional_long / Decimal(str(_long_lev_n))
+            if long_pnl > -_long_margin:
+                logger.warning(
+                    f"[{trade.symbol}] Long leg force-closed by {trade.long_exchange} "
+                    f"— overriding computed PnL ${float(long_pnl):.4f} with "
+                    f"-margin ${float(-_long_margin):.4f} (liquidation loss)",
+                    extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_long"},
+                )
+                long_pnl = -_long_margin
+            _liquidated_legs.append("long")
+        if getattr(trade, "_short_closed_externally", False):
+            _short_lev = self._cfg.exchanges.get(trade.short_exchange)
+            _short_lev_n = int(_short_lev.leverage) if _short_lev and _short_lev.leverage else 5
+            _short_margin = entry_notional_short / Decimal(str(_short_lev_n))
+            if short_pnl > -_short_margin:
+                logger.warning(
+                    f"[{trade.symbol}] Short leg force-closed by {trade.short_exchange} "
+                    f"— overriding computed PnL ${float(short_pnl):.4f} with "
+                    f"-margin ${float(-_short_margin):.4f} (liquidation loss)",
+                    extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_short"},
+                )
+                short_pnl = -_short_margin
+            _liquidated_legs.append("short")
+
         price_pnl = long_pnl + short_pnl
         funding_income = trade.funding_received_total or Decimal("0")
         funding_cost = trade.funding_paid_total or Decimal("0")
@@ -85,6 +123,14 @@ class _CloseFinalizeMixin:
             logger.debug(f"Exit funding rate fetch failed for {trade.symbol}: {exc}")
 
         _exit_reason = trade._exit_reason or ExitReason.SPREAD_BELOW_THRESHOLD
+        # External liquidation overrides whatever exit reason the bot's logic
+        # had assigned — the bot never actually got to act on its decision,
+        # the exchange did. Tag clearly so post-mortem analysis isn't fooled
+        # by phantom "profit_target" labels on what was actually a liq.
+        if _liquidated_legs:
+            _exit_reason = (
+                f"liquidation_external_{'+'.join(_liquidated_legs)}"
+            )
         entry_lr = float(trade.long_funding_rate or 0) * 100
         entry_sr = float(trade.short_funding_rate or 0) * 100
         exit_lr = float(exit_funding_long_rate or 0) * 100 if exit_funding_long_rate else None
@@ -311,24 +357,39 @@ class _CloseFinalizeMixin:
                         # abstraction layer (rate-limit semaphore + retries).
                         has_pos = await adapter.has_open_position(symbol)
                         if not has_pos:
-                            logger.info(
-                                f"[{symbol}] Position already gone on {exchange} — "
-                                f"treating as successful close",
-                                extra={"trade_id": trade_id, "exchange": exchange},
+                            # CRITICAL: position was gone BEFORE our reduce-only
+                            # order succeeded → the exchange closed it for us.
+                            # Almost always a liquidation (DAM @ 11:53 incident:
+                            # bot computed +$0.12 profit but exchange recorded
+                            # -$15.88 because the long was force-liquidated for
+                            # the full margin). Flag for the finalize step to
+                            # override exit_reason + PnL using the leg's margin
+                            # rather than trusting the recovered fill price.
+                            logger.warning(
+                                f"[{symbol}] Position gone on {exchange} BEFORE "
+                                f"our close order filled — flagging as suspected "
+                                f"external liquidation",
+                                extra={"trade_id": trade_id, "exchange": exchange,
+                                       "action": "external_close_detected"},
                             )
                             return {"filled": float(qty), "average": None,
-                                    "id": "position_verified_gone"}
+                                    "id": "position_verified_gone",
+                                    "closed_externally": True}
                     except Exception as _pe:
                         logger.debug(f"Position check failed on {exchange}/{symbol}: {_pe}")
             except Exception as e:
                 err_lower = str(e).lower()
                 if any(kw in err_lower for kw in _NO_POSITION_KEYWORDS):
-                    logger.info(
-                        f"[{symbol}] {exchange}: '{e}' — position already closed",
-                        extra={"trade_id": trade_id, "exchange": exchange},
+                    logger.warning(
+                        f"[{symbol}] {exchange}: '{e}' — position closed by "
+                        f"exchange before our order. Flagging as suspected "
+                        f"external liquidation.",
+                        extra={"trade_id": trade_id, "exchange": exchange,
+                               "action": "external_close_detected"},
                     )
                     return {"filled": float(qty), "average": None,
-                            "id": "position_already_closed"}
+                            "id": "position_already_closed",
+                            "closed_externally": True}
                 logger.warning(
                     f"Close attempt {attempt+1}/3 failed {exchange}/{symbol}: {e}",
                     extra={"trade_id": trade_id, "exchange": exchange},

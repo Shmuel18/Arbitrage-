@@ -76,6 +76,11 @@ class _CloseMixin(_CloseFinalizeMixin):
             trade.closed_at = datetime.now(timezone.utc)
             trade.exit_price_long = _h.extract_avg_price(long_fill)
             trade.exit_price_short = _h.extract_avg_price(short_fill)
+            # Surface "exchange closed it before our reduce-only filled" so
+            # the finalize step can override exit_reason and PnL — without
+            # this, a force-liquidation reads as a clean profit-target exit.
+            trade._long_closed_externally = bool(long_fill.get("closed_externally"))
+            trade._short_closed_externally = bool(short_fill.get("closed_externally"))
 
             # P1-3: Post-close dust reconcile.
             # Verify both positions are actually flat.  If a partial fill or

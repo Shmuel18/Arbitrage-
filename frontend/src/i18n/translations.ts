@@ -310,6 +310,7 @@ export interface Translations {
   exitNegFunding: string;
   exitTimeout: string;
   exitLiquidation: string;
+  exitLiquidationExt: string;
   exitManual: string;
   exitRestart: string;
 
@@ -670,7 +671,8 @@ const en: Translations = {
   exitBasisTimeout: 'Basis Timeout',
   exitNegFunding: 'Neg. Funding',
   exitTimeout: 'Timeout',
-  exitLiquidation: 'Liquidation',
+  exitLiquidation: 'Liquidation Risk',
+  exitLiquidationExt: 'Force-Liquidated',
   exitManual: 'Manual',
   exitRestart: 'Bot Restart',
 
@@ -1030,7 +1032,8 @@ const he: Translations = {
   exitBasisTimeout: 'טיימאאוט בסיס',
   exitNegFunding: 'מימון שלילי',
   exitTimeout: 'טיימאאוט',
-  exitLiquidation: 'חיסול',
+  exitLiquidation: 'סיכון חיסול',
+  exitLiquidationExt: 'חיסול ע"י הבורסה',
   exitManual: 'ידני',
   exitRestart: 'הפעלה מחדש',
 

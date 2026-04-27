@@ -320,7 +320,8 @@ const _exitReasonMap: Record<string, ExitReasonBase> = {
   basis_hard_stop:        { emoji: '⏱️', tKey: 'exitBasisTimeout',  fallback: 'Basis Timeout', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
   negative_funding:       { emoji: '⚠️', tKey: 'exitNegFunding',   fallback: 'Neg. Funding',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
   exit_timeout:           { emoji: '⏰', tKey: 'exitTimeout',      fallback: 'Timeout',      color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
-  liquidation_risk:       { emoji: '🚨', tKey: 'exitLiquidation',  fallback: 'Liquidation',  color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  liquidation_risk:       { emoji: '🚨', tKey: 'exitLiquidation',  fallback: 'Liquidation Risk', color: '#ef4444', bg: 'rgba(239,68,68,0.10)' },
+  liquidation_external:   { emoji: '💥', tKey: 'exitLiquidationExt', fallback: 'Force-Liquidated', color: '#dc2626', bg: 'rgba(220,38,38,0.15)' },
   manual_close:           { emoji: '🛑', tKey: 'exitManual',       fallback: 'Manual',       color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' },
   restart_shutdown:       { emoji: '🔄', tKey: 'exitRestart',      fallback: 'Bot Restart',  color: '#94a3b8', bg: 'rgba(148,163,184,0.10)' },
 };
