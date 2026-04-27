@@ -320,6 +320,60 @@ class TestHandleOpportunity:
         trade = list(controller._active_trades.values())[0]
         assert trade.entry_basis_pct < Decimal("0.15")
 
+    @pytest.mark.asyncio
+    async def test_pre_entry_basis_precheck_blocks_orders(
+        self,
+        controller,
+        config,
+        sample_opportunity,
+        mock_exchange_mgr,
+        mock_redis,
+    ):
+        """Adverse L1 basis must abort BEFORE any order is placed."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        # Predicted basis = (50100-49900)/49900*100 ≈ 0.4008% > 0.15% tolerance.
+        long_adapter.get_best_ask = lambda sym: 50100.0
+        short_adapter.get_best_bid = lambda sym: 49900.0
+        long_adapter.get_best_ask_age_ms = lambda sym: 100.0
+        short_adapter.get_best_bid_age_ms = lambda sym: 100.0
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        # No fees burned — neither leg was even attempted.
+        long_adapter.place_order.assert_not_called()
+        short_adapter.place_order.assert_not_called()
+        # Brief route cooldown was set so the next scan tick won't retry.
+        mock_redis.set_route_cooldown.assert_called()
+        cooldown_seconds = mock_redis.set_route_cooldown.call_args.args[3]
+        assert cooldown_seconds == 60
+
+    @pytest.mark.asyncio
+    async def test_pre_entry_basis_precheck_skips_when_l1_stale(
+        self,
+        controller,
+        config,
+        sample_opportunity,
+        mock_exchange_mgr,
+    ):
+        """Stale L1 data must abort entry — we cannot verify basis."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        long_adapter.get_best_ask = lambda sym: 50000.0
+        short_adapter.get_best_bid = lambda sym: 50000.0
+        # Both ages exceed 15s tolerance.
+        long_adapter.get_best_ask_age_ms = lambda sym: 30000.0
+        short_adapter.get_best_bid_age_ms = lambda sym: 30000.0
+        config.trading_params.max_market_data_age_ms = 15000
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        assert len(controller._active_trades) == 0
+        long_adapter.place_order.assert_not_called()
+        short_adapter.place_order.assert_not_called()
+
 
 class TestCloseOrphan:
     @pytest.mark.asyncio

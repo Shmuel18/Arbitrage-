@@ -291,6 +291,64 @@ class _EntryMixin:
                 short_adapter.ensure_trading_settings(opp.symbol),
             )
 
+            # ── Pre-entry basis precheck ──────────────────────────────
+            # The scanner's tier classification reads bid/ask at scan time, but
+            # market settings can take 6-8s on slow exchanges and the book may
+            # have moved during that window. Re-read L1 right before the first
+            # order so we abort BEFORE either leg is opened when the basis has
+            # already drifted past tolerance — saves the round-trip fee that
+            # the post-fill safety net would otherwise burn.
+            _max_basis = tp.max_entry_basis_spread_pct
+            _max_age_ms = float(getattr(tp, "max_market_data_age_ms", 15000))
+            try:
+                _ask_long_raw = long_adapter.get_best_ask(opp.symbol)
+                _bid_short_raw = short_adapter.get_best_bid(opp.symbol)
+                _ask_age = long_adapter.get_best_ask_age_ms(opp.symbol)
+                _bid_age = short_adapter.get_best_bid_age_ms(opp.symbol)
+            except Exception as _book_err:
+                logger.warning(
+                    f"[{opp.symbol}] Pre-entry book read failed: {_book_err} — "
+                    f"skipping precheck (post-fill safety net still active)"
+                )
+                _ask_long_raw = _bid_short_raw = None
+                _ask_age = _bid_age = None
+            if _ask_long_raw and _bid_short_raw and _bid_short_raw > 0:
+                _stale = (
+                    (_ask_age is not None and _ask_age > _max_age_ms)
+                    or (_bid_age is not None and _bid_age > _max_age_ms)
+                )
+                if _stale:
+                    logger.info(
+                        f"⏳ Skipping {opp.symbol}: L1 stale "
+                        f"(ask_age={_ask_age:.0f}ms bid_age={_bid_age:.0f}ms "
+                        f"> {_max_age_ms:.0f}ms) — cannot verify entry basis",
+                        extra={"symbol": opp.symbol, "action": "entry_basis_stale_l1"},
+                    )
+                    return
+                _ask_long = Decimal(str(_ask_long_raw))
+                _bid_short = Decimal(str(_bid_short_raw))
+                _predicted_basis = (_ask_long - _bid_short) / _bid_short * Decimal("100")
+                if _predicted_basis > _max_basis:
+                    logger.info(
+                        f"🚫 Skipping {opp.symbol}: predicted entry basis "
+                        f"{float(_predicted_basis):+.4f}% exceeds max "
+                        f"{float(_max_basis):+.4f}% — not entering "
+                        f"(ask_long={_ask_long} bid_short={_bid_short})",
+                        extra={
+                            "symbol": opp.symbol,
+                            "action": "entry_basis_precheck_reject",
+                            "predicted_basis_pct": float(_predicted_basis),
+                            "max_basis_pct": float(_max_basis),
+                        },
+                    )
+                    # Brief route cooldown so the next scan tick doesn't
+                    # immediately retry the same adverse pair.
+                    await self._redis.set_route_cooldown(
+                        opp.symbol, opp.long_exchange, opp.short_exchange,
+                        60, reason="entry_basis_precheck_reject",
+                    )
+                    return
+
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)
