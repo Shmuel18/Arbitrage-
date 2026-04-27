@@ -22,6 +22,7 @@ and ExecutionController inherits from _MonitorMixin.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time as _time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -126,6 +127,16 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         fees_pct_val = pnl_info["fees_pct"]
         l_price = pnl_info["long_price"]
         s_price = pnl_info["short_price"]
+        # 'vwap' = prices come from a real order-book walk for trade.qty,
+        # so total_pnl_pct reflects what an actual exit fill would yield.
+        # 'ticker_fallback' = orderbook too thin / fetch failed, prices
+        # are last-trade values that overstate executable PnL on a thin
+        # book. Aggressive exit gates below must refuse to fire when the
+        # source is the fallback — see the DAM 11:53 incident: bot saw
+        # +1.58% profit on ticker.last, realised only +0.15% on actual
+        # fills because the orderbook was empty during a 14% crash.
+        _price_source = pnl_info.get("price_source", "vwap")
+        _prices_executable = _price_source == "vwap"
 
         # ── Track funding payment status ─────────────────────────
         long_funding = long_adapter.get_funding_rate_cached(trade.symbol)
@@ -306,7 +317,21 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         _PRICE_SPIKE_THRESHOLD_PCT = Decimal("1.0")  # raw price PnL %
         _PRICE_SPIKE_SUSTAIN_TICKS = 2               # consecutive ticks
         _spike_ticks = getattr(trade, "_price_spike_tick_count", 0)
-        if price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
+        if price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT and not _prices_executable:
+            # Don't lock in a phantom profit on stale ticker data.
+            # The displayed PnL is what last-trade prices imply, but our
+            # actual exit will hit a thin orderbook at much worse prices.
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"⚡ [{trade.symbol}] Price spike detected (price_pnl="
+                    f"{float(price_pnl_pct):+.4f}%) but VWAP unavailable "
+                    f"(source={_price_source}) — REFUSING aggressive exit, "
+                    f"holding for funding/basis recovery instead",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "price_spike_refused_no_vwap"},
+                )
+            trade._price_spike_tick_count = 0
+        elif price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
             trade._price_spike_tick_count = _spike_ticks + 1
             if trade._price_spike_tick_count >= _PRICE_SPIKE_SUSTAIN_TICKS:
                 _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
@@ -344,7 +369,21 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         # ── 3. PROFIT TARGET CHECK ───────────────────────────────
         profit_target = tp.profit_target_pct
         adjusted_pnl = total_pnl_pct - tp.exit_slippage_buffer_pct
-        if adjusted_pnl >= profit_target:
+        if adjusted_pnl >= profit_target and not _prices_executable:
+            # Same protection as the price-spike gate: refuse to lock in
+            # profit on a stale ticker. exit_slippage_buffer (0.30%) is
+            # tuned for normal market conditions, not for crashes where
+            # the orderbook empties out and realised slippage is multiple
+            # percent. Hold instead until VWAP recovers.
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"[{trade.symbol}] Profit target hit (adj_pnl="
+                    f"{float(adjusted_pnl):+.4f}%) but VWAP unavailable "
+                    f"(source={_price_source}) — REFUSING exit, holding",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "profit_target_refused_no_vwap"},
+                )
+        elif adjusted_pnl >= profit_target:
             # P1-1: Block profit-target exit when funding payment is imminent.
             # A price pump just before funding would cause us to exit and miss
             # the income payment we opened specifically to capture.
@@ -433,7 +472,24 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "basis_recovery_price_wait"},
             )
 
-        if _basis_favorable and _basis_exit_pnl_ok and _price_pnl_ok:
+        if (
+            _basis_favorable and _basis_exit_pnl_ok and _price_pnl_ok
+            and not _prices_executable
+        ):
+            # basis_recovery uses the same prices that proved unreliable
+            # for the spike/profit gates; refuse here too. The trade
+            # stays open until VWAP comes back, at which point it can
+            # cleanly exit on real numbers.
+            if logger.isEnabledFor(logging.INFO):
+                logger.info(
+                    f"[{trade.symbol}] Basis recovered (adj_pnl="
+                    f"{float(_adjusted_basis_exit_pnl):+.4f}%) but VWAP "
+                    f"unavailable (source={_price_source}) — REFUSING exit, "
+                    f"holding for executable book",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "basis_recovery_refused_no_vwap"},
+                )
+        elif _basis_favorable and _basis_exit_pnl_ok and _price_pnl_ok:
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
             logger.info(
                 f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "

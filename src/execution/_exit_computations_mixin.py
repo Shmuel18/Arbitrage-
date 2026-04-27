@@ -355,6 +355,15 @@ class _ExitComputationsMixin:
 
         l_price: Optional[Decimal] = None
         s_price: Optional[Decimal] = None
+        # Track price source so the exit logic can distinguish a real
+        # executable PnL from a stale-ticker fallback. When the orderbook
+        # is too thin to support trade.long_qty/short_qty, the adapter
+        # returns None from get_executable_price and we fall back to
+        # ticker.last — but ticker.last is what the LAST trade printed,
+        # not what we'd actually fill at. Aggressive exit gates (price
+        # spike, profit target, basis recovery) must NOT fire on this
+        # fictional PnL because the realised exit will be far worse.
+        price_source = "vwap"
 
         # Preferred path: VWAP executable prices.
         try:
@@ -382,6 +391,7 @@ class _ExitComputationsMixin:
 
         # Fallback path (tests / adapters without order-book pricing): ticker last.
         if l_price is None or s_price is None:
+            price_source = "ticker_fallback"
             try:
                 long_ticker, short_ticker = await asyncio.wait_for(
                     asyncio.gather(
@@ -441,6 +451,7 @@ class _ExitComputationsMixin:
             "fees_pct": fees_pct,
             "long_price": l_price,
             "short_price": s_price,
+            "price_source": price_source,
         }
 
     async def _next_funding_qualifies(self, trade: TradeRecord, long_adapter, short_adapter) -> bool:
