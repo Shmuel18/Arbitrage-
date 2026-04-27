@@ -287,6 +287,84 @@ class _FillRecoveryMixin:
             "filled": total_qty,
         }
 
+    async def fetch_realized_pnl_from_trades(
+        self,
+        symbol: str,
+        since_ms: Optional[int] = None,
+        order_id: Optional[str] = None,
+    ) -> Optional[Decimal]:
+        """Sum the exchange-reported realized PnL across recent trades.
+
+        Different perpetual exchanges expose this in different `info` fields:
+            Binance USDT-M  → info.realizedPnl
+            Bybit V5        → info.execPnl / info.closedPnl
+            KuCoin Futures  → info.realisedPnl
+            Bitget          → info.realisedPnL / info.profit
+            Gateio          → not in trade.info (returns None — caller falls
+                              back to the bot's (exit−entry)×qty computation)
+
+        Realized PnL is the price portion only — funding payments and trade
+        fees are tracked in separate exchange records and aren't included.
+        Use this to override the bot's internal price-PnL estimate so the
+        dashboard's "Realized PnL" matches the exchange's own books.
+
+        Returns ``None`` when no trades are returned, none of the trades
+        carry a realized-PnL field, or extraction fails — never raises.
+        """
+        resolved = self._resolve_symbol(symbol)
+        try:
+            async with self._rest_semaphore:
+                raw_trades = await self._exchange.fetch_my_trades(
+                    resolved, since=since_ms, limit=20,
+                )
+        except Exception as exc:
+            logger.debug(
+                f"fetch_realized_pnl_from_trades: fetch_my_trades failed on "
+                f"{self.exchange_id}/{symbol}: {exc}",
+            )
+            return None
+        if not raw_trades:
+            return None
+
+        if order_id:
+            raw_trades = [t for t in raw_trades if t.get("order") == order_id]
+            if not raw_trades:
+                return None
+
+        # First-non-empty across the candidate keys; sum across the matched trades.
+        _CANDIDATE_KEYS = (
+            "realizedPnl",       # Binance, generic
+            "realisedPnl",       # Bybit, KuCoin
+            "realisedPnL",       # Bitget
+            "closedPnl",         # Bybit V5 alt
+            "execPnl",           # Bybit alt
+            "profit",            # some Bitget endpoints
+        )
+        total = Decimal("0")
+        found_any = False
+        for t in raw_trades:
+            info = t.get("info") or {}
+            for k in _CANDIDATE_KEYS:
+                v = info.get(k)
+                if v is None or v == "" or v == "0" or v == "0.0":
+                    continue
+                try:
+                    total += Decimal(str(v))
+                    found_any = True
+                    break
+                except Exception:
+                    continue
+
+        if not found_any:
+            return None
+        logger.info(
+            f"[{self.exchange_id}/{symbol}] Realized PnL from trades API: "
+            f"${float(total):+.4f} ({len(raw_trades)} trade(s), order_id={order_id})",
+            extra={"exchange": self.exchange_id, "symbol": symbol,
+                   "action": "realized_pnl_from_trades"},
+        )
+        return total
+
     async def check_timed_out_fill(self, req: OrderRequest) -> float:
         """Check whether an entry order filled on the exchange despite a client-side timeout.
 

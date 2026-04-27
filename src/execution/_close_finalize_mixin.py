@@ -61,41 +61,93 @@ class _CloseFinalizeMixin:
         long_pnl = exit_notional_long - entry_notional_long
         short_pnl = entry_notional_short - exit_notional_short
 
+        # ── Exchange-reported Realized PnL (preferred source) ─────
+        # The (exit−entry)×qty calc above is approximate — it ignores
+        # liquidation penalties, mark-price gaps, and per-fill rounding.
+        # Whenever ccxt's fetch_my_trades returns an info.realizedPnl-class
+        # field, prefer that authoritative number. Falls through silently
+        # for exchanges (e.g. Gateio) that don't expose it on trades.
+        _pnl_source = "computed"
+        _ex_long: Optional[Decimal] = None
+        _ex_short: Optional[Decimal] = None
+        if trade.opened_at:
+            _since_ms = int(trade.opened_at.timestamp() * 1000)
+        else:
+            _since_ms = None
+        try:
+            _ex_long, _ex_short = await asyncio.gather(
+                long_adapter.fetch_realized_pnl_from_trades(trade.symbol, since_ms=_since_ms)
+                    if long_adapter else asyncio.sleep(0, result=None),
+                short_adapter.fetch_realized_pnl_from_trades(trade.symbol, since_ms=_since_ms)
+                    if short_adapter else asyncio.sleep(0, result=None),
+                return_exceptions=True,
+            )
+            if isinstance(_ex_long, Decimal):
+                logger.info(
+                    f"[{trade.symbol}] Long PnL: bot computed ${float(long_pnl):.4f} → "
+                    f"exchange-reported ${float(_ex_long):.4f}",
+                    extra={"trade_id": trade.trade_id, "exchange": trade.long_exchange,
+                           "action": "realized_pnl_override_long"},
+                )
+                long_pnl = _ex_long
+                _pnl_source = "exchange_partial"
+            if isinstance(_ex_short, Decimal):
+                logger.info(
+                    f"[{trade.symbol}] Short PnL: bot computed ${float(short_pnl):.4f} → "
+                    f"exchange-reported ${float(_ex_short):.4f}",
+                    extra={"trade_id": trade.trade_id, "exchange": trade.short_exchange,
+                           "action": "realized_pnl_override_short"},
+                )
+                short_pnl = _ex_short
+            if isinstance(_ex_long, Decimal) and isinstance(_ex_short, Decimal):
+                _pnl_source = "exchange"
+        except Exception as _rp_exc:
+            logger.debug(
+                f"[{trade.symbol}] Realized PnL reconcile failed: {_rp_exc}",
+            )
+
         # ── Liquidation reconcile ────────────────────────────────
         # When the exchange force-closed a leg before our reduce-only order
         # filled (flagged in _close_leg), the recovered fill price isn't the
         # whole story — there's also the liquidation penalty + bankruptcy-
         # price gap that ate the rest of the margin. The realised loss is
-        # ≈ leg_margin = leg_notional / leverage. Replace the optimistic
-        # price-PnL with that floor so the dashboard matches the exchange's
-        # Realized PnL view (DAM @ 11:53: bot computed -$10.92, exchange
-        # took -$15.88 = full margin).
+        # ≈ leg_margin = leg_notional / leverage.
+        #
+        # If the realized-PnL block above already pulled exchange-reported
+        # numbers for this leg, those are MORE accurate than the heuristic
+        # margin-floor and we leave them alone. The override only applies
+        # when ccxt couldn't extract realized PnL (e.g. Gateio trades) AND
+        # the position was force-closed.
         _liquidated_legs: list[str] = []
+        _long_pnl_from_exchange = isinstance(_ex_long, Decimal)
+        _short_pnl_from_exchange = isinstance(_ex_short, Decimal)
         if getattr(trade, "_long_closed_externally", False):
-            _long_lev = self._cfg.exchanges.get(trade.long_exchange)
-            _long_lev_n = int(_long_lev.leverage) if _long_lev and _long_lev.leverage else 5
-            _long_margin = entry_notional_long / Decimal(str(_long_lev_n))
-            if long_pnl > -_long_margin:
-                logger.warning(
-                    f"[{trade.symbol}] Long leg force-closed by {trade.long_exchange} "
-                    f"— overriding computed PnL ${float(long_pnl):.4f} with "
-                    f"-margin ${float(-_long_margin):.4f} (liquidation loss)",
-                    extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_long"},
-                )
-                long_pnl = -_long_margin
+            if not _long_pnl_from_exchange:
+                _long_lev = self._cfg.exchanges.get(trade.long_exchange)
+                _long_lev_n = int(_long_lev.leverage) if _long_lev and _long_lev.leverage else 5
+                _long_margin = entry_notional_long / Decimal(str(_long_lev_n))
+                if long_pnl > -_long_margin:
+                    logger.warning(
+                        f"[{trade.symbol}] Long leg force-closed by {trade.long_exchange}, "
+                        f"no exchange-reported PnL — applying margin floor: "
+                        f"${float(long_pnl):.4f} → ${float(-_long_margin):.4f}",
+                        extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_long"},
+                    )
+                    long_pnl = -_long_margin
             _liquidated_legs.append("long")
         if getattr(trade, "_short_closed_externally", False):
-            _short_lev = self._cfg.exchanges.get(trade.short_exchange)
-            _short_lev_n = int(_short_lev.leverage) if _short_lev and _short_lev.leverage else 5
-            _short_margin = entry_notional_short / Decimal(str(_short_lev_n))
-            if short_pnl > -_short_margin:
-                logger.warning(
-                    f"[{trade.symbol}] Short leg force-closed by {trade.short_exchange} "
-                    f"— overriding computed PnL ${float(short_pnl):.4f} with "
-                    f"-margin ${float(-_short_margin):.4f} (liquidation loss)",
-                    extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_short"},
-                )
-                short_pnl = -_short_margin
+            if not _short_pnl_from_exchange:
+                _short_lev = self._cfg.exchanges.get(trade.short_exchange)
+                _short_lev_n = int(_short_lev.leverage) if _short_lev and _short_lev.leverage else 5
+                _short_margin = entry_notional_short / Decimal(str(_short_lev_n))
+                if short_pnl > -_short_margin:
+                    logger.warning(
+                        f"[{trade.symbol}] Short leg force-closed by {trade.short_exchange}, "
+                        f"no exchange-reported PnL — applying margin floor: "
+                        f"${float(short_pnl):.4f} → ${float(-_short_margin):.4f}",
+                        extra={"trade_id": trade.trade_id, "action": "liq_pnl_override_short"},
+                    )
+                    short_pnl = -_short_margin
             _liquidated_legs.append("short")
 
         price_pnl = long_pnl + short_pnl
