@@ -74,6 +74,11 @@ export interface Translations {
   countdown: string;
   belowThreshold: string;
   belowThresholdLabel: string;
+  // Executable status (Sizer pre-flight)
+  execStatus_insufficient_balance: string;
+  execStatus_lot_size_too_large: string;
+  execStatus_already_open: string;
+  execStatus_unknown: string;
 
   // Analytics
   pnlChart: string;
@@ -438,6 +443,10 @@ const en: Translations = {
   countdown: 'PAYOUT',
   belowThreshold: 'Below threshold (0.3%)',
   belowThresholdLabel: 'Below threshold',
+  execStatus_insufficient_balance: 'Insufficient balance on one leg — bot cannot enter',
+  execStatus_lot_size_too_large: 'Position too small for exchange minimum lot — top up the leg with the lower balance',
+  execStatus_already_open: 'A trade on this symbol is already active',
+  execStatus_unknown: 'Pre-flight check failed (missing market data)',
 
   pnlChart: 'PnL Chart',
   pnlChartInterval: 'Interval',
@@ -794,6 +803,10 @@ const he: Translations = {
   countdown: 'פעימה',
   belowThreshold: 'מתחת לסף (0.3%)',
   belowThresholdLabel: 'מתחת לסף',
+  execStatus_insufficient_balance: 'יתרה לא מספקת באחת הבורסות — הבוט לא יכול להיכנס',
+  execStatus_lot_size_too_large: 'הפוזיציה קטנה מדי ל-lot המינימלי בבורסה — תוסיף יתרה לבורסה החלשה',
+  execStatus_already_open: 'קיימת כבר עסקה פעילה על הצמד הזה',
+  execStatus_unknown: 'בדיקת pre-flight נכשלה (חוסר נתוני שוק)',
 
   pnlChart: 'גרף רווח והפסד',
   pnlChartInterval: 'טווח',

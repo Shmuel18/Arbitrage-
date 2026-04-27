@@ -16,8 +16,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, List, Optional
 
+import json
+
 from src.core.contracts import EntryTier, OpportunityCandidate, OrderSide, TradeMode
 from src.core.logging import get_logger
+from src.discovery._executable_status import compute_statuses_for
 from src.discovery._scanner_evaluator import _ScannerEvaluatorMixin, _classify_tier
 from src.discovery.calculator import (
     analyze_per_payment_pnl,
@@ -551,6 +554,36 @@ class Scanner(_ScannerEvaluatorMixin):
                     if _opp_changed:
                         self._last_opp_fingerprint = _new_fingerprint
                     if self._publisher and _opp_changed:
+                        # Pre-compute executable_status so the dashboard can
+                        # distinguish scanner-qualified rows that the bot WILL
+                        # try to enter from those it will silently skip
+                        # (e.g. lot_size_too_large when one leg is low on margin).
+                        # Reads balances + active positions from Redis — no
+                        # extra exchange round-trips.
+                        _balances_map: Dict[str, float] = {}
+                        _busy_symbols: frozenset = frozenset()
+                        try:
+                            _bal_raw = await self._redis.get("trinity:balances")
+                            if _bal_raw:
+                                _bd = json.loads(_bal_raw)
+                                _balances_map = {
+                                    k: float(v) for k, v in (_bd.get("balances") or {}).items()
+                                }
+                            _pos_raw = await self._redis.get("trinity:positions")
+                            if _pos_raw:
+                                _pd = json.loads(_pos_raw)
+                                _items = _pd if isinstance(_pd, list) else _pd.get("positions", [])
+                                _busy_symbols = frozenset(
+                                    p["symbol"] for p in _items
+                                    if isinstance(p, dict) and p.get("symbol")
+                                )
+                        except Exception as _exec_err:
+                            logger.debug(f"executable_status snapshot read failed: {_exec_err}")
+                        _exec_statuses = await compute_statuses_for(
+                            display_top, _balances_map, self._exchanges,
+                            self._cfg, _busy_symbols,
+                        )
+
                         opp_data = [
                             {
                                 "symbol": o.symbol,
@@ -576,8 +609,9 @@ class Scanner(_ScannerEvaluatorMixin):
                                 "entry_tier": o.entry_tier,
                                 "price_spread_pct": float(o.price_spread_pct),
                                 "stale_price": o.stale_price,
+                                "executable_status": _exec_statuses[i],
                             }
-                            for o in display_top
+                            for i, o in enumerate(display_top)
                         ]
                         await self._publisher.publish_opportunities(opp_data)
                         if now_ts - self._last_top_log_ts < 1:

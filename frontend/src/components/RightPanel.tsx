@@ -26,6 +26,17 @@ const MODE_MAP: Record<string, { icon: string; tKey: string; fallback: string; c
   pot:         { icon: '🍯', tKey: 'pot',         fallback: 'POT',         color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
 };
 
+/* ── Executable status icons ──────────────────────────────────────
+ * Mirror the STATUS_* strings emitted by src/discovery/_executable_status.py.
+ * 'ready' renders nothing — the row glow already conveys it.
+ */
+const EXEC_STATUS_EMOJI: Record<string, string> = {
+  insufficient_balance: '💸',
+  lot_size_too_large:   '📏',
+  already_open:         '🔒',
+  unknown:              '❓',
+};
+
 /* ── Opportunity table column definitions ────────────────────── */
 interface ColumnDef {
   /** Translation key from the settings context `t` object. */
@@ -243,6 +254,25 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 color: opp.price_spread_pct > 0 ? 'var(--red)' : opp.price_spread_pct < 0 ? 'var(--green)' : 'var(--text-muted)',
               }}>
                 P:{opp.price_spread_pct >= 0 ? '+' : ''}{opp.price_spread_pct.toFixed(2)}%
+              </span>
+            )}
+            {!dimmed && opp.executable_status && opp.executable_status !== 'ready' && (
+              <span
+                title={
+                  (t as unknown as Record<string, string>)[`execStatus_${opp.executable_status}`]
+                  ?? opp.executable_status
+                }
+                style={{
+                  fontSize: 12,
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  background: 'rgba(245,158,11,0.15)',
+                  color: '#f59e0b',
+                  border: '1px solid rgba(245,158,11,0.3)',
+                  cursor: 'help',
+                }}
+              >
+                {EXEC_STATUS_EMOJI[opp.executable_status] ?? '⚠️'}
               </span>
             )}
           </div>

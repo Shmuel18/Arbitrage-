@@ -58,6 +58,11 @@ export interface Opportunity {
   entry_tier?: string | null;
   price_spread_pct?: number | null;
   stale_price?: boolean;
+  // Sizer/risk pre-flight result — set by scanner before publishing.
+  // 'ready' = bot will try to enter; other values surface a reason
+  // (insufficient_balance / lot_size_too_large / already_open) so the
+  // dashboard can flag rows that look qualified but won't be executed.
+  executable_status?: string | null;
   [k: string]: unknown;
 }
 
