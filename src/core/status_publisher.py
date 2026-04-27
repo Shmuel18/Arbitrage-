@@ -239,8 +239,8 @@ class StatusPublisher:
         # Live funding spread
         self._enrich_funding_spread(pos_entry, trade)
 
-        # Unrealized PnL from prices
-        self._enrich_price_pnl(pos_entry, trade, ticker_cache)
+        # Unrealized PnL — exchange-reported (preferred) or bid/ask (fallback)
+        self._enrich_price_pnl(pos_entry, trade, ticker_cache, position_cache)
 
         # Static trade fields
         pos_entry["entry_basis_pct"] = str(trade.entry_basis_pct) if trade.entry_basis_pct is not None else None
@@ -305,6 +305,7 @@ class StatusPublisher:
         pos_entry: Dict[str, Any],
         trade: Any,
         ticker_cache: Dict[tuple[str, str], dict],
+        position_cache: Optional[Dict[tuple[str, str], list]] = None,
     ) -> None:
         try:
             _lt = ticker_cache.get((trade.long_exchange, trade.symbol), {})
@@ -322,24 +323,60 @@ class StatusPublisher:
             _sp_exit = float(_st.get("ask") or _sp_mid)   # buy back short at ask
             _elp = float(trade.entry_price_long or 0)
             _esp = float(trade.entry_price_short or 0)
-            if _lp_exit > 0 and _sp_exit > 0 and _elp > 0 and _esp > 0:
-                _notional = _elp * float(trade.long_qty)
-                if _notional > 0:
-                    _long_pnl = (_lp_exit - _elp) * float(trade.long_qty)
-                    _short_pnl = (_esp - _sp_exit) * float(trade.short_qty)
-                    _price_pnl = _long_pnl + _short_pnl
-                    _fund_pnl = float(trade.funding_collected_usd or 0)
-                    _fees = float(trade.fees_paid_total or 0)
-                    _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
-                    pnl_data = {
-                        "unrealized_pnl_pct": str(round(_total_pnl_pct, 4)),
-                        "price_pnl_pct": str(round(_price_pnl / _notional * 100, 4)),
-                        "funding_pnl_pct": str(round(_fund_pnl / _notional * 100, 4)),
-                        "fees_pct": str(round(_fees / _notional * 100, 4)),
-                    }
-                    pos_entry.update(pnl_data)
-                    # Cache this good result
-                    self._last_pnl_cache[trade.trade_id] = pnl_data
+            _notional = _elp * float(trade.long_qty) if _elp > 0 else 0
+
+            # Prefer the EXCHANGE'S unrealized_pnl when available — it's the
+            # authoritative number (matches what you'd see in the exchange UI
+            # and what's posted on close as Realized PnL). Fall back to the
+            # bid/ask computation only if positions aren't cached or the
+            # exchange omitted the field.
+            _exchange_long_pnl: Optional[float] = None
+            _exchange_short_pnl: Optional[float] = None
+            _pnl_source = "computed_bid_ask"
+            if position_cache is not None and _notional > 0:
+                _long_positions = position_cache.get((trade.long_exchange, trade.symbol), [])
+                _short_positions = position_cache.get((trade.short_exchange, trade.symbol), [])
+                if _long_positions:
+                    _v = _long_positions[0].unrealized_pnl
+                    if _v is not None:
+                        _exchange_long_pnl = float(_v)
+                if _short_positions:
+                    _v = _short_positions[0].unrealized_pnl
+                    if _v is not None:
+                        _exchange_short_pnl = float(_v)
+                if _exchange_long_pnl is not None and _exchange_short_pnl is not None:
+                    _pnl_source = "exchange"
+
+            if _pnl_source == "exchange" and _notional > 0:
+                _price_pnl = _exchange_long_pnl + _exchange_short_pnl
+                _fund_pnl = float(trade.funding_collected_usd or 0)
+                _fees = float(trade.fees_paid_total or 0)
+                _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
+                pnl_data = {
+                    "unrealized_pnl_pct": str(round(_total_pnl_pct, 4)),
+                    "price_pnl_pct": str(round(_price_pnl / _notional * 100, 4)),
+                    "funding_pnl_pct": str(round(_fund_pnl / _notional * 100, 4)),
+                    "fees_pct": str(round(_fees / _notional * 100, 4)),
+                    "pnl_source": "exchange",
+                }
+                pos_entry.update(pnl_data)
+                self._last_pnl_cache[trade.trade_id] = pnl_data
+            elif _lp_exit > 0 and _sp_exit > 0 and _elp > 0 and _esp > 0 and _notional > 0:
+                _long_pnl = (_lp_exit - _elp) * float(trade.long_qty)
+                _short_pnl = (_esp - _sp_exit) * float(trade.short_qty)
+                _price_pnl = _long_pnl + _short_pnl
+                _fund_pnl = float(trade.funding_collected_usd or 0)
+                _fees = float(trade.fees_paid_total or 0)
+                _total_pnl_pct = (_price_pnl + _fund_pnl - _fees) / _notional * 100
+                pnl_data = {
+                    "unrealized_pnl_pct": str(round(_total_pnl_pct, 4)),
+                    "price_pnl_pct": str(round(_price_pnl / _notional * 100, 4)),
+                    "funding_pnl_pct": str(round(_fund_pnl / _notional * 100, 4)),
+                    "fees_pct": str(round(_fees / _notional * 100, 4)),
+                    "pnl_source": "computed_bid_ask",
+                }
+                pos_entry.update(pnl_data)
+                self._last_pnl_cache[trade.trade_id] = pnl_data
             pos_entry["live_price_long"] = str(_lp_mid) if _lp_mid > 0 else None
             pos_entry["live_price_short"] = str(_sp_mid) if _sp_mid > 0 else None
             if _lp_mid > 0 and _sp_mid > 0:
