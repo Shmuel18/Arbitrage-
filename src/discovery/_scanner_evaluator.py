@@ -12,7 +12,7 @@ import inspect
 import logging
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Dict, List, Optional
 
 from src.core.contracts import EntryTier, OpportunityCandidate, OrderSide, TradeMode
@@ -131,14 +131,18 @@ class _ScannerEvaluatorMixin:
                 continue
             try:
                 v = Decimal(str(raw))
-            except Exception:
+            except (InvalidOperation, ValueError, TypeError):
+                # Exchange returned a non-numeric placeholder (e.g. "N/A");
+                # skip this candidate and try the next field in the chain.
                 continue
             if v > 0:
                 vol = v
                 break
 
         if vol is None:
-            # Final fallback: base volume × last price
+            # Final fallback: base volume × last price. If parsing fails here
+            # we just return None (handled below) rather than blow up the
+            # whole scan loop — caller treats None as "vol_unknown".
             try:
                 base_v = ticker.get("baseVolume") or info.get("volume")
                 last_p = ticker.get("last") or info.get("lastTradePrice") or info.get("lastPrice")
@@ -147,8 +151,11 @@ class _ScannerEvaluatorMixin:
                     lp = Decimal(str(last_p))
                     if bv > 0 and lp > 0:
                         vol = bv * lp
-            except Exception:
-                pass
+            except (InvalidOperation, ValueError, TypeError) as exc:
+                logger.debug(
+                    f"[VOL] {eid}:{symbol} baseVolume×last fallback parse failed: {exc}",
+                    extra={"exchange": eid, "symbol": symbol, "action": "volume_fallback_parse_failed"},
+                )
 
         if vol is None or vol <= 0:
             return None
