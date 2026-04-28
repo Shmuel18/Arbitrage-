@@ -22,3 +22,9 @@ jobs:
             cd /opt/ratebridge && git log -1 --oneline
             echo "=== trinity:opportunities (first 3 entries) ==="
             docker exec trinity-redis redis-cli GET trinity:opportunities | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(json.dumps(d.get('opportunities', [])[:3], indent=2)[:3000])"
+            echo "=== frontend bundle: does it include the new code? ==="
+            BUILD_DIR=$(docker exec trinity-bot find /app/frontend/build/assets -name 'index-*.js' 2>/dev/null | head -1)
+            echo "bundle: $BUILD_DIR"
+            if [ -n "$BUILD_DIR" ]; then
+              echo "DISQ_REASON_EMOJI found:" $(docker exec trinity-bot grep -c "DISQ_REASON_EMOJI\|disqualify_reason\|disqReason_" "$BUILD_DIR" 2>/dev/null || echo 0)
+            fi
