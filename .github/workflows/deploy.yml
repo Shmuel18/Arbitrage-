@@ -15,6 +15,10 @@ on:
         description: 'Type "deploy" to confirm'
         required: true
         default: ""
+      no_cache:
+        description: 'Set to "true" to bypass docker layer cache (forces fresh frontend build).'
+        required: false
+        default: "false"
 
 # Never allow two deploys to run at the same time. cancel-in-progress is
 # false so we don't interrupt an in-flight deploy with a later click.
@@ -61,7 +65,12 @@ jobs:
             git log -1 --oneline
 
             echo "=== build bot image ==="
-            docker compose build bot
+            if [ "${{ github.event.inputs.no_cache }}" = "true" ]; then
+              echo "no_cache=true → forcing rebuild without docker layer cache"
+              docker compose build --no-cache bot
+            else
+              docker compose build bot
+            fi
 
             echo "=== extract built frontend assets to host ==="
             # docker-compose.yml mounts host:/opt/ratebridge/frontend/build
