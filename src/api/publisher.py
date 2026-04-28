@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from src.notifications.telegram_notifier import TelegramNotifier
@@ -212,9 +212,64 @@ class APIPublisher:
         # hot trading path). Errors are swallowed inside send_alert().
         if self._telegram is not None:
             try:
-                asyncio.create_task(self._telegram.send_alert(entry))
+                asyncio.create_task(self._enrich_and_send_telegram(entry))
             except RuntimeError:
                 # No running loop (sync test context). Skip — Redis write
                 # above is the durable record; Telegram is best-effort.
                 pass
+
+    async def _enrich_and_send_telegram(self, entry: Dict[str, Any]) -> None:
+        """Wrap send_alert with payload enrichment for trade_close events.
+
+        Adds today's stats (WR, total_pnl, wins, losses) to the close card
+        so the user sees the trade in context — "you're 5W/2L today, +$3.21".
+        Failures here must NEVER break the alert: any exception falls back
+        to the un-enriched send_alert call.
+        """
+        try:
+            if entry.get("type") == "trade_close":
+                stats = await self._fetch_today_stats()
+                if stats and isinstance(entry.get("payload"), dict):
+                    entry["payload"] = {**entry["payload"], "today_stats": stats}
+        except Exception as exc:
+            logger.debug(f"Telegram payload enrichment failed: {exc}")
+        try:
+            if self._telegram is not None:
+                await self._telegram.send_alert(entry)
+        except Exception as exc:
+            logger.debug(f"Telegram send_alert failed: {exc}")
+
+    async def _fetch_today_stats(self) -> Optional[Dict[str, Any]]:
+        """Aggregate today's closed trades from Redis. Returns None on error."""
+        try:
+            cutoff = datetime.now(timezone.utc).timestamp() - 24 * 3600
+            raw = await self.redis.zrangebyscore(
+                "trinity:trades:history", cutoff, float("inf"), withscores=True,
+            )
+        except Exception as exc:
+            logger.debug(f"_fetch_today_stats: redis read failed: {exc}")
+            return None
+        if not raw:
+            return None
+        trades = []
+        for item in raw:
+            try:
+                trade_json, _ = item
+                trades.append(json.loads(trade_json))
+            except Exception:
+                continue
+        if not trades:
+            return None
+        def _pnl(t: Dict[str, Any]) -> float:
+            return float(t.get("total_pnl") or t.get("net_profit") or 0.0)
+        pnls = [_pnl(t) for t in trades]
+        wins = sum(1 for p in pnls if p > 0)
+        losses = sum(1 for p in pnls if p < 0)
+        return {
+            "trade_count": len(pnls),
+            "wins": wins,
+            "losses": losses,
+            "total_pnl": sum(pnls),
+            "win_rate": (wins / len(pnls)) if pnls else 0.0,
+        }
 

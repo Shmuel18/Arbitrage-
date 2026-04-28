@@ -773,6 +773,10 @@ class _EntryMixin:
                         "immediate_spread_pct": float(immediate_spread),
                         "net_edge_pct": float(opp.net_edge_pct),
                         "notional": entry_notional,
+                        # Cycle info + funding countdown for the Telegram card.
+                        "long_interval_hours": opp.long_interval_hours,
+                        "short_interval_hours": opp.short_interval_hours,
+                        "next_funding_ms": opp.next_funding_ms,
                     },
                 )
 

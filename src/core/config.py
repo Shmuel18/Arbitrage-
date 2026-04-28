@@ -184,6 +184,10 @@ class TelegramConfig(BaseModel):
     # for the /menu command's WebApp button. Leave empty to run notifications
     # alone (no Mini App launcher).
     mini_app_url: Optional[str] = None
+    # Dashboard URL surfaced as an inline button on trade_open / trade_close
+    # notifications. Falls back to mini_app_url when not explicitly set so
+    # most installs need to configure only one.
+    dashboard_url: Optional[str] = None
 
     @property
     def enabled(self) -> bool:

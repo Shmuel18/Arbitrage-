@@ -25,7 +25,8 @@ import asyncio
 import datetime as _dt
 import html
 import logging
-from typing import TYPE_CHECKING, Any, Dict, Optional
+import time as _time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import aiohttp
 
@@ -40,6 +41,71 @@ _MAX_MESSAGE_CHARS = 4096  # Telegram hard limit
 
 
 # ── Formatter ────────────────────────────────────────────────────
+
+_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+
+# Hebrew labels for exit_reason values. Prefix-matched against
+# trade._exit_reason; the latter is sometimes "<reason>_<param>"
+# (e.g. "profit_target_1.5845pct"), so we match by startswith.
+_EXIT_REASON_HE: Dict[str, str] = {
+    "profit_target":         "🎯 יעד רווח",
+    "basis_recovery":        "✅ basis התאושש",
+    "cherry_hard_stop":      "🍒 Cherry hard stop",
+    "max_hold_timeout":      "⏰ timeout מקסימלי",
+    "negative_funding":      "⚠️ funding שלילי",
+    "liquidation_external":  "💥 חיסול ע״י הבורסה",
+    "liquidation_risk":      "🚨 סיכון ליקווידציה",
+    "manual_close":          "🛑 סגירה ידנית",
+    "upgrade_exit":          "⬆️ שדרוג",
+    "restart_shutdown":      "🔄 הפעלה מחדש",
+    "spread_below_threshold": "📉 ספרד נמוך",
+    "no_funding_received":   "⏰ funding לא הגיע",
+    "price_spike":           "⚡ price spike",
+}
+
+_MODE_LABEL_HE: Dict[str, str] = {
+    "pot":         "🍯 POT",
+    "cherry_pick": "🍒 CHERRY",
+    "nutcracker":  "🥜 NUTCRACKER",
+    "hold":        "🤝 HOLD",
+}
+
+_TIER_LABEL_HE: Dict[str, str] = {
+    "top":     "🏆 מובי",
+    "medium":  "📊 בינוני",
+    "weak":    "⚡ חלש",
+    "adverse": "⚠️ אדברסי",
+}
+
+
+def _exit_reason_he(raw: Any) -> str:
+    """Translate a raw exit_reason to Hebrew label, falling back to the raw string."""
+    if not raw:
+        return ""
+    s = str(raw).lower()
+    for prefix, label in _EXIT_REASON_HE.items():
+        if s == prefix or s.startswith(prefix + "_"):
+            return label
+    return raw  # unknown — show as-is
+
+
+def _fmt_countdown(ms_in_future: Any) -> str:
+    """Format a future-timestamp (ms) as 'בעוד Xש Yד' / 'בעוד Xד' / '—'."""
+    try:
+        delta_s = (float(ms_in_future) / 1000) - _time.time()
+    except (TypeError, ValueError):
+        return "—"
+    if delta_s <= 0:
+        return "עכשיו"
+    delta_min = int(delta_s // 60)
+    if delta_min < 60:
+        return f"בעוד {delta_min}ד"
+    h = delta_min // 60
+    m = delta_min % 60
+    if m == 0:
+        return f"בעוד {h}ש"
+    return f"בעוד {h}ש {m}ד"
+
 
 # Format helpers — kept tiny and pure so they're trivially testable.
 def _fmt_money(v: Any, dp: int = 2, signed: bool = False) -> str:
@@ -94,40 +160,68 @@ def _format_trade_open(p: Dict[str, Any], symbol: str) -> str:
     notional = p.get("notional")
     net_edge = p.get("net_edge_pct")
     spread = p.get("immediate_spread_pct")
-    mode = str(p.get("mode") or "").upper()
-    tier = str(p.get("entry_tier") or "").upper()
+    mode = str(p.get("mode") or "").lower()
+    tier = str(p.get("entry_tier") or "").lower()
+    long_iv = p.get("long_interval_hours")
+    short_iv = p.get("short_interval_hours")
+    next_funding_ms = p.get("next_funding_ms")
 
     sym_disp = html.escape(symbol or "—")
-    head_bits = [f"🟢 <b>עסקה נפתחה</b>  ·  <code>{sym_disp}</code>"]
-    sub_bits = []
-    if mode:
-        sub_bits.append(html.escape(mode))
-    if tier:
-        sub_bits.append(f"tier {html.escape(tier)}")
-    if sub_bits:
-        head_bits.append("  ·  ".join(sub_bits))
 
+    # ── Header ──
+    head = f"🟢 <b>עסקה נפתחה</b>\n<code>{sym_disp}</code>"
+
+    # ── Mode + tier sub-row ──
+    sub_bits: List[str] = []
+    mode_label = _MODE_LABEL_HE.get(mode, mode.upper() if mode else "")
+    if mode_label:
+        sub_bits.append(f"<b>{mode_label}</b>")
+    tier_label = _TIER_LABEL_HE.get(tier, "")
+    if tier_label:
+        sub_bits.append(f"<b>{tier_label}</b>")
+    sub_row = "  ·  ".join(sub_bits) if sub_bits else ""
+
+    # ── Cycles + countdown row ──
+    cycle_bits: List[str] = []
+    if long_iv and short_iv:
+        cycle_bits.append(
+            f"🔄 {html.escape(long_ex[:3])} {long_iv}h × {html.escape(short_ex[:3])} {short_iv}h"
+        )
+    if next_funding_ms:
+        cycle_bits.append(f"⏱ funding {_fmt_countdown(next_funding_ms)}")
+    cycle_row = "  ·  ".join(cycle_bits) if cycle_bits else ""
+
+    # ── Legs ──
     leg_block = (
-        f"🟩 <b>LONG</b>   {html.escape(long_ex)}\n"
-        f"     qty <b>{html.escape(str(long_qty))}</b>  @ {_fmt_price(long_price)}\n"
-        f"     funding <b>{_fmt_pct(long_funding)}</b>\n"
-        f"🟥 <b>SHORT</b>  {html.escape(short_ex)}\n"
-        f"     qty <b>{html.escape(str(short_qty))}</b>  @ {_fmt_price(short_price)}\n"
-        f"     funding <b>{_fmt_pct(short_funding)}</b>"
+        f"🟩 <b>LONG</b>  ·  {html.escape(long_ex)}\n"
+        f"     <code>{html.escape(str(long_qty))}</code> @ <code>{_fmt_price(long_price)}</code>"
+        f"  ·  funding <b>{_fmt_pct(long_funding, dp=2)}</b>\n"
+        f"🟥 <b>SHORT</b>  ·  {html.escape(short_ex)}\n"
+        f"     <code>{html.escape(str(short_qty))}</code> @ <code>{_fmt_price(short_price)}</code>"
+        f"  ·  funding <b>{_fmt_pct(short_funding, dp=2)}</b>"
     )
 
+    # ── Totals ──
     totals_lines = []
     if notional is not None:
-        totals_lines.append(f"💵 נוטיונל לרגל: <b>{_fmt_money(notional)}</b>")
+        totals_lines.append(f"💵 נוטיונל לרגל     <b>{_fmt_money(notional)}</b>")
     if spread is not None:
-        totals_lines.append(f"📐 ספרד מיידי: <b>{_fmt_pct(spread)}</b>")
+        totals_lines.append(f"📐 ספרד מיידי       <b>{_fmt_pct(spread, dp=2)}</b>")
     if net_edge is not None:
-        totals_lines.append(f"🎯 קצה נטו (אחרי עמלות): <b>{_fmt_pct(net_edge)}</b>")
+        totals_lines.append(f"🎯 קצה נטו         <b>{_fmt_pct(net_edge, dp=2)}</b>")
 
-    parts = ["\n".join(head_bits), leg_block]
+    # ── Assemble ──
+    parts = [head]
+    if sub_row:
+        parts.append(sub_row)
+    if cycle_row:
+        parts.append(cycle_row)
+    parts.append(_DIVIDER)
+    parts.append(leg_block)
     if totals_lines:
+        parts.append(_DIVIDER)
         parts.append("\n".join(totals_lines))
-    text = "\n\n".join(parts)
+    text = "\n".join(parts)
     return text[:_MAX_MESSAGE_CHARS]
 
 
@@ -147,6 +241,7 @@ def _format_trade_close(p: Dict[str, Any], symbol: str) -> str:
     entry_short = p.get("entry_price_short")
     exit_long = p.get("exit_price_long")
     exit_short = p.get("exit_price_short")
+    today_stats = p.get("today_stats") or {}
 
     try:
         is_win = float(total_pnl) >= 0
@@ -156,50 +251,92 @@ def _format_trade_close(p: Dict[str, Any], symbol: str) -> str:
     head_label = "עסקה נסגרה ברווח" if is_win else "עסקה נסגרה בהפסד"
 
     sym_disp = html.escape(symbol or "—")
-    head = (
-        f"{head_emoji} <b>{head_label}</b>  ·  <code>{sym_disp}</code>\n"
-        f"זמן החזקה: <b>{html.escape(_fmt_hold(hold_min))}</b>"
-    )
 
-    pnl_block_lines = [f"💰 נטו: <b>{_fmt_money(total_pnl, dp=4, signed=True)}</b>"]
+    # ── Header with PnL right in the title ──
+    head_parts = [f"{head_emoji} <b>{head_label}</b>"]
     if profit_pct is not None:
-        pnl_block_lines.append(f"📊 תשואה: <b>{_fmt_pct(profit_pct, dp=3)}</b>  על  {_fmt_money(invested)}")
-    pnl_block = "\n".join(pnl_block_lines)
+        head_parts.append(_fmt_pct(profit_pct, dp=3))
+    head = (
+        "  ·  ".join(head_parts) + "\n"
+        f"<code>{sym_disp}</code>"
+    )
+    if hold_min is not None:
+        head += f"  ·  ⏱ {html.escape(_fmt_hold(hold_min))}"
 
-    breakdown_lines = ["<b>פירוק:</b>"]
+    # ── Top-line PnL ──
+    pnl_lines = [f"💰 רווח נטו        <b>{_fmt_money(total_pnl, dp=4, signed=True)}</b>"]
+    if profit_pct is not None and invested is not None:
+        pnl_lines.append(
+            f"📊 תשואה          <b>{_fmt_pct(profit_pct, dp=3)}</b> על {_fmt_money(invested)}"
+        )
+
+    # ── Breakdown ──
+    breakdown_lines = ["<b>פירוק PnL</b>"]
     if price_pnl is not None:
-        breakdown_lines.append(f"  • מחיר (basis): {_fmt_money(price_pnl, dp=4, signed=True)}")
+        breakdown_lines.append(
+            f"  💱 מחיר (basis)   {_fmt_money(price_pnl, dp=4, signed=True)}"
+        )
     if funding_net is not None:
-        breakdown_lines.append(f"  • מימון נטו: {_fmt_money(funding_net, dp=4, signed=True)}")
+        breakdown_lines.append(
+            f"  💸 מימון נטו      {_fmt_money(funding_net, dp=4, signed=True)}"
+        )
     if fees is not None:
-        breakdown_lines.append(f"  • עמלות: -{_fmt_money(abs(float(fees)), dp=4)}")
-    breakdown = "\n".join(breakdown_lines) if len(breakdown_lines) > 1 else ""
+        breakdown_lines.append(
+            f"  💼 עמלות          -{_fmt_money(abs(float(fees)), dp=4)}"
+        )
+    has_breakdown = len(breakdown_lines) > 1
 
+    # ── Legs ──
     legs_lines = []
     if entry_long is not None and exit_long is not None:
         legs_lines.append(
-            f"🟩 LONG  {html.escape(long_ex)}: "
-            f"{_fmt_price(entry_long)} → {_fmt_price(exit_long)}"
+            f"🟩 LONG  {html.escape(long_ex):<7s}  "
+            f"<code>{_fmt_price(entry_long)} → {_fmt_price(exit_long)}</code>"
         )
     if entry_short is not None and exit_short is not None:
         legs_lines.append(
-            f"🟥 SHORT {html.escape(short_ex)}: "
-            f"{_fmt_price(entry_short)} → {_fmt_price(exit_short)}"
+            f"🟥 SHORT {html.escape(short_ex):<7s}  "
+            f"<code>{_fmt_price(entry_short)} → {_fmt_price(exit_short)}</code>"
         )
-    legs = "\n".join(legs_lines)
 
-    footer = ""
+    # ── Exit reason ──
+    reason_line = ""
     if exit_reason:
-        footer = f"📌 סיבת יציאה: <i>{html.escape(str(exit_reason))}</i>"
+        reason_he = _exit_reason_he(exit_reason)
+        reason_line = f"📌 סיבת יציאה: <b>{html.escape(reason_he)}</b>"
 
-    parts = [head, pnl_block]
-    if breakdown:
-        parts.append(breakdown)
-    if legs:
-        parts.append(legs)
-    if footer:
-        parts.append(footer)
-    text = "\n\n".join(parts)
+    # ── Today's stats footer ──
+    stats_line = ""
+    if today_stats and today_stats.get("trade_count"):
+        wins = today_stats.get("wins", 0)
+        losses = today_stats.get("losses", 0)
+        net = today_stats.get("total_pnl", 0.0)
+        wr = today_stats.get("win_rate", 0.0)
+        try:
+            stats_line = (
+                f"📈 <b>היום:</b> "
+                f"{int(wins)}W/{int(losses)}L  ·  "
+                f"{_fmt_money(float(net), dp=2, signed=True)}  ·  "
+                f"WR <b>{float(wr) * 100:.0f}%</b>"
+            )
+        except (TypeError, ValueError):
+            stats_line = ""
+
+    # ── Assemble ──
+    parts = [head, _DIVIDER, "\n".join(pnl_lines)]
+    if has_breakdown:
+        parts.append(_DIVIDER)
+        parts.append("\n".join(breakdown_lines))
+    if legs_lines:
+        parts.append(_DIVIDER)
+        parts.append("\n".join(legs_lines))
+    if reason_line:
+        parts.append(_DIVIDER)
+        parts.append(reason_line)
+    if stats_line:
+        parts.append(_DIVIDER)
+        parts.append(stats_line)
+    text = "\n".join(parts)
     return text[:_MAX_MESSAGE_CHARS]
 
 
@@ -318,10 +455,21 @@ class TelegramNotifier:
 
     # ── Public API ──────────────────────────────────────────────
 
-    async def send(self, text: str, silent: bool = False) -> bool:
+    async def send(
+        self,
+        text: str,
+        silent: bool = False,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Send a message. Returns True on HTTP 2xx, False on any failure.
 
         Never raises. Callers should treat the return value as advisory only.
+
+        Args:
+            text:         HTML-formatted message body.
+            silent:       Suppress notification sound (still delivers).
+            reply_markup: Optional inline keyboard / reply keyboard, e.g.
+                          ``{"inline_keyboard": [[{"text": "...", "url": "..."}]]}``.
         """
         if not self._cfg.enabled:
             return False
@@ -329,13 +477,15 @@ class TelegramNotifier:
         if not token:
             return False
 
-        payload = {
+        payload: Dict[str, Any] = {
             "chat_id": self._cfg.chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
             "disable_notification": silent or self._is_quiet_now(),
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
 
         try:
             session = await self._session_get()
@@ -389,6 +539,8 @@ class TelegramNotifier:
         """Convenience: format + send in one call. Honors config switches.
 
         Returns False (no-op) when the matching `notify_*` flag is disabled.
+        Trade-open / trade_close alerts get a Dashboard inline button so
+        the user can jump from the notification to the live UI in one tap.
         """
         if not self._cfg.enabled:
             return False
@@ -402,4 +554,28 @@ class TelegramNotifier:
         # Unknown or untyped alerts go through when enabled at all — they're
         # typically rare (system errors) and worth pushing.
         text = format_alert(alert)
-        return await self.send(text)
+        reply_markup = self._build_alert_keyboard(kind)
+        return await self.send(text, reply_markup=reply_markup)
+
+    def _build_alert_keyboard(self, kind: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Build an inline keyboard for trade-related alerts (URL only — no
+        callbacks, so a stray tap can never trigger a destructive action).
+
+        Returns ``None`` for alert types that shouldn't carry a keyboard
+        (system / generic / daily_summary already include their own context).
+        """
+        if kind not in ("trade_open", "trade_close"):
+            return None
+        url = (
+            getattr(self._cfg, "dashboard_url", None)
+            or getattr(self._cfg, "mini_app_url", None)
+            or ""
+        )
+        url = str(url).strip()
+        if not url:
+            return None
+        return {
+            "inline_keyboard": [
+                [{"text": "🔗 לדאשבורד", "url": url}],
+            ]
+        }
