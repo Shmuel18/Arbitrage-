@@ -63,6 +63,16 @@ jobs:
             echo "=== build bot image ==="
             docker compose build bot
 
+            echo "=== extract built frontend assets to host ==="
+            # docker-compose.yml mounts host:/opt/ratebridge/frontend/build
+            # over the container's /app/frontend/build (nginx on the host
+            # serves the same static files). Without this step the freshly
+            # built bundle stays inside the image and never reaches users.
+            EXTRACT=$(docker create ratebridge-bot:latest)
+            rm -rf frontend/build/*
+            docker cp "$EXTRACT:/app/frontend/build/." frontend/build/
+            docker rm "$EXTRACT"
+
             echo "=== recreate bot container ==="
             docker compose up -d --force-recreate bot
 

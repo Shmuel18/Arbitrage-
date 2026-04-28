@@ -1,0 +1,51 @@
+name: Fix — extract frontend bundle from image to host
+
+# docker-compose.yml mounts host:/opt/ratebridge/frontend/build over the
+# container's freshly-built /app/frontend/build (so nginx on the host can
+# serve the same static files the container would). But docker compose
+# build only updates the IMAGE — nothing rsyncs the new bundle to the
+# host directory. So the host directory has been stuck at April-24 vintage
+# while every dashboard change in the past 4 days went into the image but
+# never reached the user's browser.
+#
+# This workflow extracts the latest image's frontend/build/ to the host
+# and recreates the container so nginx + the container both see the new
+# bundle. One-shot use; the permanent fix lives in deploy.yml.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Extract frontend assets from image to host
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 3m
+          script: |
+            set -euo pipefail
+            cd /opt/ratebridge
+            echo "=== bundle BEFORE extract ==="
+            ls -la frontend/build/assets/index-*.js 2>/dev/null | head -3
+            echo "=== extracting from image ==="
+            TEMP=$(docker create ratebridge-bot:latest)
+            # Wipe stale bundle assets first so old hash files don't linger
+            rm -rf frontend/build/*
+            docker cp "$TEMP:/app/frontend/build/." frontend/build/
+            docker rm "$TEMP"
+            echo "=== bundle AFTER extract ==="
+            ls -la frontend/build/assets/index-*.js 2>/dev/null | head -3
+            echo "=== restart bot to pick up new bind-mount contents ==="
+            docker compose restart bot
+            sleep 5
+            echo "=== verify served bundle has new code ==="
+            BUNDLE=$(find frontend/build/assets -name 'index-*.js' | head -1)
+            echo "  disqReason matches: $(grep -c disqReason_ "$BUNDLE" || echo 0)"
+            echo "  DISQ_REASON_EMOJI matches: $(grep -c DISQ_REASON_EMOJI "$BUNDLE" || echo 0)"
+            echo "  executable_status matches: $(grep -c executable_status "$BUNDLE" || echo 0)"
