@@ -159,7 +159,16 @@ class Scanner(_ScannerEvaluatorMixin):
         self._early_dispatched: set[str] = set()
 
     def _opportunity_fingerprint(self, display_top: list[OpportunityCandidate]) -> str:
-        """Return a stable fingerprint for the published display opportunities."""
+        """Return a stable fingerprint for the published display opportunities.
+
+        Bug fix: previously included only price/funding-time deltas, not
+        qualification state. So when Net flipped above/below threshold or
+        the rejection reason changed (vol_unknown ↔ funding_no_imminent),
+        the fingerprint stayed equal and the dashboard kept rendering the
+        last-published reason — frequently 5–15 minutes stale.
+        Now includes qualified, disqualify_reason and entry_tier so any
+        meaningful state change triggers a re-publish.
+        """
 
         def _bucket(ts_ms: Optional[float]) -> str:
             if ts_ms is None:
@@ -173,6 +182,9 @@ class Scanner(_ScannerEvaluatorMixin):
             f"|{_bucket(o.next_funding_ms)}"
             f"|{_bucket(o.long_next_funding_ms)}"
             f"|{_bucket(o.short_next_funding_ms)}"
+            f"|q{1 if o.qualified else 0}"
+            f"|d{o.disqualify_reason or '-'}"
+            f"|t{o.entry_tier or '-'}"
             for o in display_top
         )
         return ",".join(parts)
