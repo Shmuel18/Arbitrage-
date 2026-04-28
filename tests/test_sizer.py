@@ -54,14 +54,18 @@ def _mock_adapter(
     ticker_last: float = 50000.0,
 ) -> AsyncMock:
     adapter = AsyncMock()
-    adapter.get_balance.return_value = {
+    _balance_dict = {
         "total": Decimal(str(free * 1.2)),
         "free": Decimal(str(free)),
         "used": Decimal(str(free * 0.2)),
     }
+    adapter.get_balance.return_value = _balance_dict
+    # Sizer now uses get_balance_cached to skip a per-entry REST round-trip;
+    # mock it to return the same value so the test exercises the same paths.
+    adapter.get_balance_cached.return_value = _balance_dict
     adapter.get_instrument_spec.return_value = spec or _make_spec()
-    # P1-3: sizer now fetches a live ticker price in the same gather as balances.
-    # Return a realistic ticker dict so Decimal conversion in sizer.compute succeeds.
+    # Sizer no longer fetches a live ticker (uses opp.reference_price), but
+    # leave the mock in place — harmless and protects against future regressions.
     adapter.get_ticker.return_value = {"last": ticker_last}
     return adapter
 

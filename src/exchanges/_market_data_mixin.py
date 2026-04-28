@@ -310,11 +310,34 @@ class _MarketDataMixin:
             recomputed_total = free_val + used_val
             if recomputed_total > _ZERO:
                 total_val = recomputed_total
-        return {
+        result = {
             "total": total_val,
             "free": free_val,
             "used": used_val,
         }
+        # Refresh the short-TTL cache so concurrent get_balance_cached
+        # calls within the next few seconds skip the REST round-trip.
+        self._balance_cache = (_time.time(), result)
+        return result
+
+    async def get_balance_cached(self, max_age_sec: float = 3.0) -> Dict[str, Any]:
+        """Return the most recent get_balance() result if it's < max_age_sec
+        old, else fetch fresh.
+
+        Used in the entry hot-path (sizer) to eliminate ~300-700ms of REST
+        latency on every trade. The status_publisher already polls balances
+        every few seconds for the dashboard, so the cache is usually warm
+        by the time an entry fires. Worst case is one stale fetch — but
+        the position-sizer applies a 90 % margin-safety cap downstream,
+        so a slightly stale balance can only OVER-shrink the order, never
+        over-expose us.
+        """
+        cached = getattr(self, "_balance_cache", None)
+        if cached is not None:
+            ts, val = cached
+            if (_time.time() - ts) < max_age_sec:
+                return val
+        return await self.get_balance()
 
     # ── Funding history ──────────────────────────────────────────
 

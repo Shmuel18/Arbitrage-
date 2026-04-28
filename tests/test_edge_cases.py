@@ -330,8 +330,12 @@ class TestBalanceFreshAtEntry:
         self, controller, sample_opportunity, mock_exchange_mgr
     ):
         """
-        Verifies that get_balance() is called during entry, ensuring the sizer
-        always sees current margin rather than a value captured at startup.
+        Verifies that the sizer queries balance during entry — either
+        get_balance() (fresh) or get_balance_cached() (≤ 3 s old). Ensures
+        sizing always sees recent margin rather than a startup-captured
+        value. The cached path was added to remove ~500ms of REST latency
+        from the entry hot-path; status_publisher refreshes the cache
+        every few seconds so freshness is preserved.
         """
         adapter_a = mock_exchange_mgr.get("exchange_a")
         adapter_b = mock_exchange_mgr.get("exchange_b")
@@ -339,15 +343,21 @@ class TestBalanceFreshAtEntry:
         # Reset call counts before the entry
         adapter_a.get_balance.reset_mock()
         adapter_b.get_balance.reset_mock()
+        adapter_a.get_balance_cached.reset_mock()
+        adapter_b.get_balance_cached.reset_mock()
 
         await controller.handle_opportunity(sample_opportunity)
 
-        # At least one of the adapters must have had its balance queried
+        # At least one of the adapters must have had its balance queried —
+        # either fresh or cached, both count.
         total_balance_calls = (
-            adapter_a.get_balance.call_count + adapter_b.get_balance.call_count
+            adapter_a.get_balance.call_count
+            + adapter_b.get_balance.call_count
+            + adapter_a.get_balance_cached.call_count
+            + adapter_b.get_balance_cached.call_count
         )
         assert total_balance_calls >= 1, (
-            "No get_balance() call during entry — sizer may be using stale data"
+            "No balance call during entry — sizer may be using stale data"
         )
 
 

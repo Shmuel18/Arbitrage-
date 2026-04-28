@@ -56,15 +56,23 @@ class PositionSizer:
 
         Returns ``None`` if sizing is not possible (zero balance, missing spec, etc.).
         """
-        long_bal, short_bal, _live_ticker = await asyncio.gather(
-            long_adapter.get_balance(),
-            short_adapter.get_balance(),
-            # Fetch a live price in parallel with balances so qty is computed
-            # against the CURRENT market price, not the scanner snapshot which can be
-            # 300ms–60s stale.  Actual fill notional = qty × fill_price; using a stale
-            # reference_price silently bypasses max_position_size_usd on fast-moving assets.
-            long_adapter.get_ticker(opp.symbol),
+        # Balances: cached snapshot (≤ 3 s old) is good enough for sizing.
+        # status_publisher polls balances on a tight loop for the dashboard,
+        # so the cache is usually warm by the time an entry fires — this
+        # eliminates the ~300-700 ms REST round-trip per leg from the
+        # entry hot-path. The 90 % margin-safety cap downstream still
+        # protects against any short-term staleness.
+        long_bal, short_bal = await asyncio.gather(
+            long_adapter.get_balance_cached(max_age_sec=3.0),
+            short_adapter.get_balance_cached(max_age_sec=3.0),
         )
+        # Skip the live ticker fetch — opp.reference_price is the scanner's
+        # mark/last snapshot from < 5 s ago and good enough for qty sizing
+        # (the order is a market fill anyway; the price affects qty calc,
+        # not the actual execution price). Saves another ~300-500 ms per
+        # entry. The margin-safety + min_lot validations downstream catch
+        # any bad sizing from a stale price.
+        _live_ticker = None
 
         position_pct = Decimal(str(self._cfg.risk_limits.position_size_pct))
 

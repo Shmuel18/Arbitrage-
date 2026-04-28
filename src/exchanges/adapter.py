@@ -50,6 +50,9 @@ class ExchangeAdapter(
         self._instrument_cache: Dict[str, InstrumentSpec] = {}
         self._settings_applied: set = set()
         self._funding_rate_cache: Dict[str, dict] = {}  # symbol → {rate, timestamp, ...}
+        # (timestamp_sec, balance_dict) — populated by get_balance(), read by
+        # get_balance_cached() in the entry hot-path to skip REST round-trips.
+        self._balance_cache: Optional[tuple] = None
         self._price_cache: Dict[str, float] = {}  # symbol → last/mark price (fallback when funding data lacks markPrice)
         self._price_timestamp_cache: Dict[str, float] = {}  # symbol → last cached mark/last price timestamp (epoch-ms)
         self._ask_cache: Dict[str, float] = {}  # symbol → best ask price (from ticker poll, cached every 15s)

@@ -274,22 +274,22 @@ class _EntryMixin:
 
         trade_id = str(uuid.uuid4())[:12]
         try:
-            # ── Position sizing ──────────────────────────────────
-            sizing = await self._sizer.compute(opp, long_adapter, short_adapter)
-            if sizing is None:
-                return
-            order_qty, notional, long_spec, short_spec = sizing
-
-            # Open both legs
-
-            # Pre-apply trading settings on BOTH exchanges CONCURRENTLY.
-            # ensure_trading_settings (margin mode, leverage, position mode) can take
-            # 6-8s on slow exchanges (kucoin). Running them in parallel saves up to
-            # 8 seconds of entry latency.
-            await asyncio.gather(
+            # ── Position sizing + trading-settings setup IN PARALLEL ─
+            # sizer.compute (balances + qty math) and ensure_trading_settings
+            # (margin mode + leverage + position mode) are independent —
+            # neither depends on the other's result, both must finish before
+            # we place orders. Running them with asyncio.gather lets wall
+            # time = max(sizer, settings) instead of sum (saves ~500-1500 ms
+            # per entry depending on exchange and cache state).
+            sizing_task = self._sizer.compute(opp, long_adapter, short_adapter)
+            settings_task = asyncio.gather(
                 long_adapter.ensure_trading_settings(opp.symbol),
                 short_adapter.ensure_trading_settings(opp.symbol),
             )
+            sizing, _ = await asyncio.gather(sizing_task, settings_task)
+            if sizing is None:
+                return
+            order_qty, notional, long_spec, short_spec = sizing
 
             # Mark grace period BEFORE placing first order
             if self._risk_guard:

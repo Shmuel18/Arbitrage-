@@ -90,9 +90,11 @@ def mock_adapter(btc_spec):
     adapter.exchange_id = "exchange_a"
     adapter.get_instrument_spec.return_value = btc_spec
     adapter.get_cached_instrument_spec = MagicMock(return_value=btc_spec)
-    adapter.get_balance.return_value = {
+    _bal_a = {
         "total": Decimal("1000"), "free": Decimal("800"), "used": Decimal("200"),
     }
+    adapter.get_balance.return_value = _bal_a
+    adapter.get_balance_cached.return_value = _bal_a
     adapter.get_ticker.return_value = {"last": 50000.0, "bid": 49999, "ask": 50001}
     adapter.get_funding_rate.return_value = {
         "rate": Decimal("0.0001"), "timestamp": None, "datetime": None,
@@ -132,9 +134,11 @@ def mock_exchange_mgr(mock_adapter):
     adapter_b.exchange_id = "exchange_b"
     adapter_b.get_instrument_spec = mock_adapter.get_instrument_spec
     adapter_b.get_cached_instrument_spec = mock_adapter.get_cached_instrument_spec
-    adapter_b.get_balance.return_value = {
+    _bal_b = {
         "total": Decimal("1000"), "free": Decimal("800"), "used": Decimal("200"),
     }
+    adapter_b.get_balance.return_value = _bal_b
+    adapter_b.get_balance_cached.return_value = _bal_b
     adapter_b.get_ticker.return_value = {"last": 50000.0}
     adapter_b.get_funding_rate.return_value = {
         "rate": Decimal("0.0003"), "timestamp": None, "datetime": None,
