@@ -923,15 +923,44 @@ class Scanner(_ScannerEvaluatorMixin):
                 # published display_top (cached in _prev_display_opps) so
                 # the dashboard sees state changes within seconds rather
                 # than waiting up to 3 minutes for the next full scan.
-                # Only rows whose (symbol, long, short) match a hot eval
-                # are replaced; others keep their stale value (which is
-                # fine — fingerprint will only flip if the change is on a
-                # currently-displayed row).
-                if _hot_evals and self._prev_display_opps:
+                #
+                # P3-2: When a funding boundary fires (e.g. 22:00 UTC), the
+                # funding cache auto-advances next_timestamp on every read
+                # via get_funding_rate_cached. But the previous version of
+                # this block only refreshed ROWS that happened to receive a
+                # WS tick this pass — quiet symbols stayed stale until they
+                # ticked, producing a 1-3 minute trickle update across the
+                # 5 displayed rows ("3 of 5 show the clock badge, the rest
+                # haven't caught up yet"). Fix: re-evaluate EVERY displayed
+                # symbol that wasn't already hot-scanned, with cheap=True
+                # (WS-cache only, no REST). 5 cheap evals ≈ 50ms — every
+                # row reflects the same funding-cache state at publish.
+                if self._prev_display_opps:
                     _hot_index: Dict[str, OpportunityCandidate] = {
                         f"{o.symbol}|{o.long_exchange}|{o.short_exchange}": o
                         for o in _hot_evals
                     }
+                    _display_symbols: set[str] = {
+                        opp_key.split("|", 1)[0]
+                        for opp_key in self._prev_display_opps.keys()
+                    }
+                    _hot_symbols_set: set[str] = {o.symbol for o in _hot_evals}
+                    _missing_symbols: set[str] = _display_symbols - _hot_symbols_set
+                    for _sym in _missing_symbols:
+                        try:
+                            _opps = await self._scan_symbol(
+                                _sym, adapters, exchange_ids, cooled_symbols, cheap=True,
+                            )
+                            for _o in _opps:
+                                _hot_index[
+                                    f"{_o.symbol}|{_o.long_exchange}|{_o.short_exchange}"
+                                ] = _o
+                        except Exception as exc:
+                            if logger.isEnabledFor(logging.DEBUG):
+                                logger.debug(
+                                    f"[hot-scan] display-row re-eval failed for {_sym}: {exc}",
+                                )
+
                     _refreshed_top: list[OpportunityCandidate] = []
                     for opp_key, (cached_opp, _age) in self._prev_display_opps.items():
                         _refreshed_top.append(_hot_index.get(opp_key, cached_opp))
