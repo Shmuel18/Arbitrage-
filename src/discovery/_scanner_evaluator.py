@@ -13,7 +13,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from src.core.contracts import EntryTier, OpportunityCandidate, OrderSide, TradeMode
 from src.core.logging import get_logger
@@ -80,9 +80,21 @@ class _ScannerEvaluatorMixin:
         """Return cached 24h quote volume (USD) for (exchange, symbol).
 
         Uses a TTL-bounded in-memory cache (`self._volume_cache`). On cache
-        miss/expiry, fetches the ticker via REST and pulls `quoteVolume`.
-        Returns ``None`` if the ticker fetch fails or the field is absent —
-        callers must treat ``None`` as "unknown" and decide policy.
+        miss/expiry, fetches the ticker via REST and pulls quote volume.
+
+        Per-exchange field mapping (ccxt's `quoteVolume` is USDT-denominated
+        for most spot pairs but is often missing on futures/perpetuals — try
+        the raw `info` dict before giving up):
+          - All:           ticker.quoteVolume
+          - KuCoin Fut:    info.turnoverOf24h  (USDT 24h turnover)
+                           info.volValue        (alternate name)
+          - Bitget:        info.usdtVolume
+          - Generic:       info.volume * info.lastTradePrice (base × price)
+          - Last resort:   ticker.baseVolume * ticker.last
+
+        Returns ``None`` only if all fallbacks fail — callers treat None as
+        "unknown" and fail-closed (block the trade rather than risk a
+        thin-book entry).
         """
         cache_key = f"{eid}:{symbol}"
         ttl = float(getattr(self._cfg.trading_params, "volume_cache_ttl_sec", 300))
@@ -98,12 +110,47 @@ class _ScannerEvaluatorMixin:
                 extra={"exchange": eid, "symbol": symbol, "action": "volume_fetch_failed"},
             )
             return None
-        raw = (ticker or {}).get("quoteVolume")
-        if raw is None:
+        if not ticker:
             return None
-        try:
-            vol = Decimal(str(raw))
-        except Exception:
+
+        info = ticker.get("info") or {}
+        # Ordered candidates — first non-None numeric wins. Keys span the
+        # "USDT-quote turnover" naming conventions of major futures venues.
+        candidates: List = [
+            ticker.get("quoteVolume"),
+            info.get("turnoverOf24h"),     # KuCoin Futures
+            info.get("volValue"),          # KuCoin alt
+            info.get("turnover24h"),       # Bybit
+            info.get("usdtVolume"),        # Bitget alt
+            info.get("quoteVolume"),       # raw passthrough
+            info.get("turnover"),          # generic
+        ]
+        vol: Optional[Decimal] = None
+        for raw in candidates:
+            if raw is None or raw == "" or raw == "0":
+                continue
+            try:
+                v = Decimal(str(raw))
+            except Exception:
+                continue
+            if v > 0:
+                vol = v
+                break
+
+        if vol is None:
+            # Final fallback: base volume × last price
+            try:
+                base_v = ticker.get("baseVolume") or info.get("volume")
+                last_p = ticker.get("last") or info.get("lastTradePrice") or info.get("lastPrice")
+                if base_v is not None and last_p is not None:
+                    bv = Decimal(str(base_v))
+                    lp = Decimal(str(last_p))
+                    if bv > 0 and lp > 0:
+                        vol = bv * lp
+            except Exception:
+                pass
+
+        if vol is None or vol <= 0:
             return None
         self._volume_cache[cache_key] = (vol, now)
         return vol

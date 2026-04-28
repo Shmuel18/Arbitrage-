@@ -37,9 +37,6 @@ jobs:
             [ -z "$LINES" ] && LINES=3000
             [ "$LINES" -gt 10000 ] && LINES=10000
             SYMBOL=$(echo "$SYMBOL" | tr -cd 'A-Za-z0-9/:_-')
-            echo "=== git HEAD ==="
-            cd /opt/ratebridge && git log -1 --oneline
-            echo ""
             echo "=== docker logs trinity-bot --tail $LINES | filter='$SYMBOL' ==="
             if [ -z "$SYMBOL" ]; then
               docker logs trinity-bot --tail "$LINES" 2>&1 | tail -300
@@ -47,49 +44,3 @@ jobs:
               docker logs trinity-bot --tail "$LINES" 2>&1 | grep -i -E "$SYMBOL|exit_logic|basis_recovery|profit_target|funding_collected" | tail -300
             fi
             echo "=== end of logs ==="
-            echo ""
-            echo "=== trinity:opportunities (filtered to symbol if any) ==="
-            if [ -n "$SYMBOL" ]; then
-              docker exec trinity-redis redis-cli GET trinity:opportunities | python3 -c "
-import json, sys, re
-sym = '$SYMBOL'.upper()
-try:
-    d = json.loads(sys.stdin.read())
-    matches = [o for o in d.get('opportunities', []) if sym in str(o.get('symbol','')).upper()]
-    print(json.dumps(matches[:3], indent=2)[:2500])
-except Exception as e:
-    print(f'parse error: {e}')
-"
-            fi
-            echo ""
-            echo "=== KuCoin raw ticker probe ==="
-            docker exec trinity-bot python3 - <<'PY' 2>&1 | head -40
-import asyncio
-import ccxt.async_support as ccxt
-
-async def main():
-    ex = ccxt.kucoinfutures({'enableRateLimit': True})
-    try:
-        await ex.load_markets()
-        for sym in ['DAM/USDT:USDT','BTC/USDT:USDT','SIREN/USDT:USDT','ENJ/USDT:USDT']:
-            if sym not in ex.markets:
-                print(f'{sym}: not in markets')
-                continue
-            try:
-                t = await ex.fetch_ticker(sym)
-            except Exception as e:
-                print(f'{sym}: fetch_ticker failed: {e}')
-                continue
-            print(f'\\n--- {sym} ---')
-            print(f'  quoteVolume (ccxt-norm): {t.get("quoteVolume")}')
-            print(f'  baseVolume:              {t.get("baseVolume")}')
-            print(f'  last:                    {t.get("last")}')
-            info = t.get('info') or {}
-            for k, v in info.items():
-                if isinstance(v, (int,float,str)) and any(s in str(k).lower() for s in ('vol','turn','amount','value')):
-                    print(f'  info.{k}: {v}')
-    finally:
-        await ex.close()
-
-asyncio.run(main())
-PY

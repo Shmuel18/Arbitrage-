@@ -47,37 +47,3 @@ jobs:
               cnt=$(docker exec trinity-bot grep -c "$kw" "$BUILD_DIR" 2>/dev/null || echo 0)
               echo "  $kw: $cnt"
             done
-            echo ""
-            echo "=== KuCoin raw ticker shape ==="
-            docker exec trinity-bot python3 - <<'PY'
-import asyncio, json
-import ccxt.async_support as ccxt
-
-async def main():
-    ex = ccxt.kucoinfutures({'enableRateLimit': True})
-    try:
-        await ex.load_markets()
-        # Try a couple of well-known symbols + one user has been seeing problems with
-        for sym in ['DAM/USDT:USDT', 'BTC/USDT:USDT', 'SIREN/USDT:USDT']:
-            if sym not in ex.markets:
-                print(f'{sym}: NOT IN MARKETS on kucoin')
-                continue
-            try:
-                t = await ex.fetch_ticker(sym)
-            except Exception as e:
-                print(f'{sym}: fetch_ticker failed: {e}')
-                continue
-            print(f'\\n=== {sym} ===')
-            print(f'  ccxt-normalized quoteVolume: {t.get("quoteVolume")}')
-            print(f'  ccxt-normalized baseVolume:  {t.get("baseVolume")}')
-            print(f'  ccxt-normalized last:        {t.get("last")}')
-            info = t.get('info') or {}
-            # Print all numeric-ish keys from raw info to spot the right one
-            for k, v in info.items():
-                if isinstance(v, (int, float, str)) and any(s in str(k).lower() for s in ('vol', 'turn', 'amount', 'value')):
-                    print(f'  info.{k}: {v}')
-    finally:
-        await ex.close()
-
-asyncio.run(main())
-PY
