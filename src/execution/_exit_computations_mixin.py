@@ -356,23 +356,29 @@ class _ExitComputationsMixin:
         l_price: Optional[Decimal] = None
         s_price: Optional[Decimal] = None
         # Track price source so the exit logic can distinguish a real
-        # executable PnL from a stale-ticker fallback. When the orderbook
-        # is too thin to support trade.long_qty/short_qty, the adapter
-        # returns None from get_executable_price and we fall back to
-        # ticker.last — but ticker.last is what the LAST trade printed,
+        # executable PnL from a stale-ticker fallback. The adapter's
+        # get_vwap_and_depth() returns (price, book_sufficient): when the
+        # order book is too thin to absorb trade.long_qty / short_qty in
+        # one shot, book_sufficient is False and the returned price is a
+        # ticker / partial-VWAP fallback — what the LAST trade printed,
         # not what we'd actually fill at. Aggressive exit gates (price
-        # spike, profit target, basis recovery) must NOT fire on this
-        # fictional PnL because the realised exit will be far worse.
+        # spike, profit target, basis recovery) must NOT fire on a
+        # ticker_fallback price because the realised exit will be far
+        # worse than the on-screen number. Historical bug (DAM 2026-04-28):
+        # get_executable_price() silently fell back to ticker without
+        # surfacing the flag, so price_source="vwap" was wrongly trusted
+        # and the bot exited on +1.7% / +2.5% phantom spikes that turned
+        # into actual losses on fill.
         price_source = "vwap"
 
-        # Preferred path: VWAP executable prices.
+        # Preferred path: VWAP from a depth-validated walk of the book.
         try:
-            raw_l_price, raw_s_price = await asyncio.wait_for(
+            (raw_l_price, l_book_ok), (raw_s_price, s_book_ok) = await asyncio.wait_for(
                 asyncio.gather(
-                    long_adapter.get_executable_price(
+                    long_adapter.get_vwap_and_depth(
                         trade.symbol, trade.long_qty, side="sell"
                     ),
-                    short_adapter.get_executable_price(
+                    short_adapter.get_vwap_and_depth(
                         trade.symbol, trade.short_qty, side="buy"
                     ),
                 ),
@@ -380,14 +386,18 @@ class _ExitComputationsMixin:
             )
             l_price = _to_decimal_price(raw_l_price)
             s_price = _to_decimal_price(raw_s_price)
+            # If either side's book was too shallow / failed, downgrade so
+            # the exit-decision gate refuses aggressive exits on this cycle.
+            if not (l_book_ok and s_book_ok):
+                price_source = "ticker_fallback"
         except asyncio.TimeoutError:
             logger.warning(
-                f"[{trade.symbol}] Executable-price fetch timed out after "
+                f"[{trade.symbol}] VWAP-depth fetch timed out after "
                 f"{_MONITOR_REST_TIMEOUT}s — falling back to ticker",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
             )
         except Exception as e:
-            logger.debug(f"Executable price fetch failed for {trade.symbol}: {e}")
+            logger.debug(f"VWAP-depth fetch failed for {trade.symbol}: {e}")
 
         # Fallback path (tests / adapters without order-book pricing): ticker last.
         if l_price is None or s_price is None:

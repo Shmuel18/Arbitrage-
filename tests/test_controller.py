@@ -469,6 +469,11 @@ class TestHoldOrExit:
 
         mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50025")
         mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
+        # Source-of-truth for _calculate_current_pnl is now get_vwap_and_depth
+        # (returns (price, book_sufficient)). Mirror the executable_price values
+        # here with book_sufficient=True so the exit-decision treats them as VWAP.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth.return_value = (Decimal("50025"), True)
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth.return_value = (Decimal("50000"), True)
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
@@ -550,6 +555,8 @@ class TestHoldOrExit:
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
         mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50500")
         mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth.return_value = (Decimal("50500"), True)
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth.return_value = (Decimal("50000"), True)
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")
@@ -1069,6 +1076,8 @@ class TestBasisGuard:
         mock_exchange_mgr.get("exchange_b").get_ticker.return_value = {"last": 50000.0}
         mock_exchange_mgr.get("exchange_a").get_executable_price.return_value = Decimal("50550")
         mock_exchange_mgr.get("exchange_b").get_executable_price.return_value = Decimal("50000")
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth.return_value = (Decimal("50550"), True)
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth.return_value = (Decimal("50000"), True)
 
         trade = _make_trade(controller, spread_pct="1.0")
         trade.entry_price_long = Decimal("50000")

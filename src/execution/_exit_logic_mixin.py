@@ -334,25 +334,60 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         elif price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
             trade._price_spike_tick_count = _spike_ticks + 1
             if trade._price_spike_tick_count >= _PRICE_SPIKE_SUSTAIN_TICKS:
-                _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
-                logger.info(
-                    f"⚡ Trade {trade.trade_id}{tier_tag}: PRICE SPIKE TAKE-PROFIT! "
-                    f"price_pnl={float(price_pnl_pct):+.4f}% ≥ "
-                    f"{float(_PRICE_SPIKE_THRESHOLD_PCT)}% (sustained "
-                    f"{trade._price_spike_tick_count} ticks) — "
-                    f"bypassing funding lock, exiting after {hold_min}min",
-                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
-                           "action": "price_spike_exit"},
-                )
-                trade._exit_reason = _reason
-                self._journal.exit_decision(
-                    trade.trade_id, trade.symbol,
-                    reason=_reason,
-                    immediate_spread=Decimal(str(total_pnl_pct)),
-                    hold_min=hold_min,
-                )
-                await self._close_trade(trade)
-                return
+                # P1-1 (extended to spike path): when income funding is
+                # imminent, prefer the GUARANTEED funding payment over a
+                # spike profit that could still fade between this tick and
+                # the actual fill. Mirrors the same lock that profit_target
+                # already applies. Without this gate the bot was exiting
+                # 60-90s before funding on phantom +2-3% spikes (DAM
+                # 2026-04-28: missed +1.5% funding to lock in -0.14% loss).
+                _SPIKE_FUNDING_LOCK_MIN: float = 3.0
+                _mins_to_next_income_spike: float | None = None
+                if trade.next_funding_long and not long_paid:
+                    _mfl = (trade.next_funding_long - now).total_seconds() / 60
+                    if _mfl > 0:
+                        _mins_to_next_income_spike = _mfl
+                if trade.next_funding_short and not short_paid:
+                    _mfs = (trade.next_funding_short - now).total_seconds() / 60
+                    if _mfs > 0 and (
+                        _mins_to_next_income_spike is None
+                        or _mfs < _mins_to_next_income_spike
+                    ):
+                        _mins_to_next_income_spike = _mfs
+
+                if (
+                    _mins_to_next_income_spike is not None
+                    and _mins_to_next_income_spike < _SPIKE_FUNDING_LOCK_MIN
+                ):
+                    logger.info(
+                        f"⚡ [{trade.symbol}] Price spike sustained "
+                        f"({float(price_pnl_pct):+.4f}%) but funding in "
+                        f"{_mins_to_next_income_spike:.1f}min < lock="
+                        f"{_SPIKE_FUNDING_LOCK_MIN}min — holding to capture "
+                        f"income payment first",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                               "action": "price_spike_funding_lock"},
+                    )
+                else:
+                    _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
+                    logger.info(
+                        f"⚡ Trade {trade.trade_id}{tier_tag}: PRICE SPIKE TAKE-PROFIT! "
+                        f"price_pnl={float(price_pnl_pct):+.4f}% ≥ "
+                        f"{float(_PRICE_SPIKE_THRESHOLD_PCT)}% (sustained "
+                        f"{trade._price_spike_tick_count} ticks) — "
+                        f"bypassing funding lock, exiting after {hold_min}min",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                               "action": "price_spike_exit"},
+                    )
+                    trade._exit_reason = _reason
+                    self._journal.exit_decision(
+                        trade.trade_id, trade.symbol,
+                        reason=_reason,
+                        immediate_spread=Decimal(str(total_pnl_pct)),
+                        hold_min=hold_min,
+                    )
+                    await self._close_trade(trade)
+                    return
             else:
                 logger.info(
                     f"⚡ [{trade.symbol}] Price spike detected: "
