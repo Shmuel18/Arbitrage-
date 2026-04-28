@@ -158,6 +158,104 @@ class Scanner(_ScannerEvaluatorMixin):
         # avoid double-dispatch when the main loop also processes results.
         self._early_dispatched: set[str] = set()
 
+    async def _publish_display_if_changed(
+        self,
+        display_top: list[OpportunityCandidate],
+    ) -> bool:
+        """Compute fingerprint over display_top and publish to Redis on change.
+
+        Shared by scan_all() and the hot-scan loop so the dashboard sees
+        disqualify_reason/qualified flips within seconds of a funding
+        boundary, not on the next 3-minute full-scan cycle.
+
+        Returns True if a publish actually happened.
+        """
+        new_fingerprint = self._opportunity_fingerprint(display_top)
+        if new_fingerprint == self._last_opp_fingerprint:
+            return False
+        self._last_opp_fingerprint = new_fingerprint
+        if not self._publisher:
+            return False
+
+        # Pre-compute executable_status so the dashboard can distinguish
+        # scanner-qualified rows that the bot WILL try to enter from those
+        # it will silently skip (e.g. lot_size_too_large when one leg is
+        # low on margin). Reads balances + active positions from Redis —
+        # no extra exchange round-trips.
+        balances_map: Dict[str, float] = {}
+        busy_symbols: frozenset = frozenset()
+        try:
+            bal_raw = await self._redis.get("trinity:balances")
+            if bal_raw:
+                bd = json.loads(bal_raw)
+                balances_map = {
+                    k: float(v) for k, v in (bd.get("balances") or {}).items()
+                }
+            pos_raw = await self._redis.get("trinity:positions")
+            if pos_raw:
+                pd = json.loads(pos_raw)
+                items = pd if isinstance(pd, list) else pd.get("positions", [])
+                busy_symbols = frozenset(
+                    p["symbol"] for p in items
+                    if isinstance(p, dict) and p.get("symbol")
+                )
+        except Exception as exc:
+            logger.debug(f"executable_status snapshot read failed: {exc}")
+        exec_statuses = await compute_statuses_for(
+            display_top, balances_map, self._exchanges,
+            self._cfg, busy_symbols,
+        )
+
+        # Tier classification (_classify_tier) uses tier_net =
+        # immediate_spread - taker_fees, which deliberately ignores the
+        # larger exit_slippage_buffer the exit gates require. Result: an
+        # opportunity can show entry_tier="top" while net_edge_pct (the
+        # user-visible "Net" column) is already negative — the row earns
+        # a 🏆 badge for a trade that cannot exit profitably. Demote the
+        # displayed tier to None whenever net_edge_pct is non-positive
+        # so the badge only appears on rows that have a chance at green
+        # PnL. Internal entry_tier on the OpportunityCandidate is left
+        # alone so executor / scanner code paths are unchanged.
+        def _display_tier(o) -> Optional[str]:
+            if o.entry_tier is None:
+                return None
+            if float(o.net_edge_pct) <= 0:
+                return None
+            return o.entry_tier
+
+        opp_data = [
+            {
+                "symbol": o.symbol,
+                "long_exchange": o.long_exchange,
+                "short_exchange": o.short_exchange,
+                "net_pct": float(o.net_edge_pct),
+                "gross_pct": float(o.gross_edge_pct),
+                "funding_spread_pct": float(o.funding_spread_pct),
+                "immediate_spread_pct": float(o.immediate_spread_pct),
+                "immediate_net_pct": float(o.immediate_net_pct),
+                "hourly_rate_pct": float(o.hourly_rate_pct),
+                "min_interval_hours": o.min_interval_hours,
+                "next_funding_ms": o.next_funding_ms,
+                "long_next_funding_ms": o.long_next_funding_ms,
+                "short_next_funding_ms": o.short_next_funding_ms,
+                "long_rate": float(o.long_funding_rate),
+                "short_rate": float(o.short_funding_rate),
+                "price": float(o.reference_price),
+                "mode": o.mode,
+                "qualified": o.qualified,
+                "long_interval_hours": o.long_interval_hours,
+                "short_interval_hours": o.short_interval_hours,
+                "entry_tier": _display_tier(o),
+                "price_spread_pct": float(o.price_spread_pct),
+                "stale_price": o.stale_price,
+                "executable_status": exec_statuses[i],
+                "disqualify_reason": o.disqualify_reason,
+            }
+            for i, o in enumerate(display_top)
+        ]
+        await self._publisher.publish_opportunities(opp_data)
+        return True
+
     def _opportunity_fingerprint(self, display_top: list[OpportunityCandidate]) -> str:
         """Return a stable fingerprint for the published display opportunities.
 
@@ -561,95 +659,12 @@ class Scanner(_ScannerEvaluatorMixin):
                     # — but only when the list has changed meaningfully (hysteresis).
                     # Fingerprint is ORDER-INDEPENDENT (sorted) so that pure rank
                     # reshuffles of the same 5 items do NOT trigger a publish.
-                    _new_fingerprint = self._opportunity_fingerprint(display_top)
-                    _opp_changed = _new_fingerprint != self._last_opp_fingerprint
-                    if _opp_changed:
-                        self._last_opp_fingerprint = _new_fingerprint
-                    if self._publisher and _opp_changed:
-                        # Pre-compute executable_status so the dashboard can
-                        # distinguish scanner-qualified rows that the bot WILL
-                        # try to enter from those it will silently skip
-                        # (e.g. lot_size_too_large when one leg is low on margin).
-                        # Reads balances + active positions from Redis — no
-                        # extra exchange round-trips.
-                        _balances_map: Dict[str, float] = {}
-                        _busy_symbols: frozenset = frozenset()
-                        try:
-                            _bal_raw = await self._redis.get("trinity:balances")
-                            if _bal_raw:
-                                _bd = json.loads(_bal_raw)
-                                _balances_map = {
-                                    k: float(v) for k, v in (_bd.get("balances") or {}).items()
-                                }
-                            _pos_raw = await self._redis.get("trinity:positions")
-                            if _pos_raw:
-                                _pd = json.loads(_pos_raw)
-                                _items = _pd if isinstance(_pd, list) else _pd.get("positions", [])
-                                _busy_symbols = frozenset(
-                                    p["symbol"] for p in _items
-                                    if isinstance(p, dict) and p.get("symbol")
-                                )
-                        except Exception as _exec_err:
-                            logger.debug(f"executable_status snapshot read failed: {_exec_err}")
-                        _exec_statuses = await compute_statuses_for(
-                            display_top, _balances_map, self._exchanges,
-                            self._cfg, _busy_symbols,
+                    _published = await self._publish_display_if_changed(display_top)
+                    if _published and now_ts - self._last_top_log_ts < 1:
+                        await self._publisher.publish_log(
+                            "INFO",
+                            f"Top 5 updated: {len(qualified_opps)} qualified, {len(all_opps) - len(qualified_opps)} display-only"
                         )
-
-                        # Tier classification (_classify_tier) uses tier_net =
-                        # immediate_spread - taker_fees, which deliberately ignores
-                        # the larger exit_slippage_buffer the exit gates require.
-                        # Result: an opportunity can show entry_tier="top" while
-                        # net_edge_pct (the user-visible "Net" column) is already
-                        # negative — the row earns a 🏆 badge for a trade that
-                        # cannot exit profitably. Demote the displayed tier to
-                        # None whenever net_edge_pct is non-positive so the badge
-                        # only appears on rows that have a chance at green PnL.
-                        # Internal entry_tier on the OpportunityCandidate is left
-                        # alone so executor / scanner code paths are unchanged.
-                        def _display_tier(o) -> Optional[str]:
-                            if o.entry_tier is None:
-                                return None
-                            if float(o.net_edge_pct) <= 0:
-                                return None
-                            return o.entry_tier
-
-                        opp_data = [
-                            {
-                                "symbol": o.symbol,
-                                "long_exchange": o.long_exchange,
-                                "short_exchange": o.short_exchange,
-                                "net_pct": float(o.net_edge_pct),
-                                "gross_pct": float(o.gross_edge_pct),
-                                "funding_spread_pct": float(o.funding_spread_pct),
-                                "immediate_spread_pct": float(o.immediate_spread_pct),
-                                "immediate_net_pct": float(o.immediate_net_pct),
-                                "hourly_rate_pct": float(o.hourly_rate_pct),
-                                "min_interval_hours": o.min_interval_hours,
-                                "next_funding_ms": o.next_funding_ms,
-                                "long_next_funding_ms": o.long_next_funding_ms,
-                                "short_next_funding_ms": o.short_next_funding_ms,
-                                "long_rate": float(o.long_funding_rate),
-                                "short_rate": float(o.short_funding_rate),
-                                "price": float(o.reference_price),
-                                "mode": o.mode,
-                                "qualified": o.qualified,
-                                "long_interval_hours": o.long_interval_hours,
-                                "short_interval_hours": o.short_interval_hours,
-                                "entry_tier": _display_tier(o),
-                                "price_spread_pct": float(o.price_spread_pct),
-                                "stale_price": o.stale_price,
-                                "executable_status": _exec_statuses[i],
-                                "disqualify_reason": o.disqualify_reason,
-                            }
-                            for i, o in enumerate(display_top)
-                        ]
-                        await self._publisher.publish_opportunities(opp_data)
-                        if now_ts - self._last_top_log_ts < 1:
-                            await self._publisher.publish_log(
-                                "INFO",
-                                f"Top 5 updated: {len(qualified_opps)} qualified, {len(all_opps) - len(qualified_opps)} display-only"
-                            )
 
                     # Send opportunities to controller
                     execute_only_best = self._cfg.trading_params.execute_only_best_opportunity
@@ -845,6 +860,14 @@ class Scanner(_ScannerEvaluatorMixin):
                         extra={"action": "hot_scan_start"},
                     )
 
+                # P3-1: Collect every fresh evaluation so we can refresh
+                # the published display rows for any symbol that's currently
+                # in the dashboard's top-5. Without this the dashboard waits
+                # for the next 3-min full-scan to see disqualify_reason flips
+                # (e.g. a row going from POT 🍯 → ⏰ funding_no_imminent the
+                # second a funding payment fires).
+                _hot_evals: list[OpportunityCandidate] = []
+
                 for symbol in hot_symbols:
                     try:
                         # cheap=True: skip _build_opportunity REST calls (balance+ticker+VWAP).
@@ -854,6 +877,7 @@ class Scanner(_ScannerEvaluatorMixin):
                         opps = await self._scan_symbol(
                             symbol, adapters, exchange_ids, cooled_symbols, cheap=True,
                         )
+                        _hot_evals.extend(opps)
                         for opp in opps:
                             if opp.qualified:
                                 # P1-2: Key debounce by route, not just symbol.
@@ -893,6 +917,32 @@ class Scanner(_ScannerEvaluatorMixin):
                         return
                     except Exception as exc:
                         logger.warning(f"[hot-scan] Error evaluating {symbol}: {exc}")
+
+                # ── P3-1: refresh dashboard rows from this hot pass ─────
+                # Overlay the freshly-evaluated opps onto the previously
+                # published display_top (cached in _prev_display_opps) so
+                # the dashboard sees state changes within seconds rather
+                # than waiting up to 3 minutes for the next full scan.
+                # Only rows whose (symbol, long, short) match a hot eval
+                # are replaced; others keep their stale value (which is
+                # fine — fingerprint will only flip if the change is on a
+                # currently-displayed row).
+                if _hot_evals and self._prev_display_opps:
+                    _hot_index: Dict[str, OpportunityCandidate] = {
+                        f"{o.symbol}|{o.long_exchange}|{o.short_exchange}": o
+                        for o in _hot_evals
+                    }
+                    _refreshed_top: list[OpportunityCandidate] = []
+                    for opp_key, (cached_opp, _age) in self._prev_display_opps.items():
+                        _refreshed_top.append(_hot_index.get(opp_key, cached_opp))
+                    if _refreshed_top:
+                        try:
+                            await self._publish_display_if_changed(_refreshed_top)
+                        except Exception as exc:
+                            logger.warning(
+                                f"[hot-scan] publish refresh failed: {exc}",
+                                extra={"action": "hot_scan_publish_failed"},
+                            )
 
             except asyncio.CancelledError:
                 return
