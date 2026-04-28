@@ -66,13 +66,10 @@ class PositionSizer:
             long_adapter.get_balance_cached(max_age_sec=3.0),
             short_adapter.get_balance_cached(max_age_sec=3.0),
         )
-        # Skip the live ticker fetch — opp.reference_price is the scanner's
-        # mark/last snapshot from < 5 s ago and good enough for qty sizing
-        # (the order is a market fill anyway; the price affects qty calc,
-        # not the actual execution price). Saves another ~300-500 ms per
-        # entry. The margin-safety + min_lot validations downstream catch
-        # any bad sizing from a stale price.
-        _live_ticker = None
+        # Live ticker fetch deferred — sizing now uses opp.reference_price
+        # by default (scanner snapshot, < 5 s old) and only falls back to
+        # ticker if reference_price is unset. See the price-resolution
+        # block below.
 
         position_pct = Decimal(str(self._cfg.risk_limits.position_size_pct))
 
@@ -161,10 +158,28 @@ class PositionSizer:
             logger.warning(f"{opp.symbol}: lot_size resolved to zero, falling back to {_FALLBACK_LOT}")
             lot = _FALLBACK_LOT
 
-        # Use live ticker price when available; fall back to opp.reference_price
-        # if the ticker returned an empty or zero value (e.g. during exchange maintenance).
-        _live_price = Decimal(str(_live_ticker.get("last", 0) or 0)) if _live_ticker else _ZERO
-        _price_for_sizing = _live_price if _live_price > _ZERO else opp.reference_price
+        # Prefer the scanner's reference_price (mark/last from < 5 s ago) to
+        # avoid a per-entry ticker REST round-trip. If it's missing (some
+        # POT/cherry paths construct OpportunityCandidate with
+        # reference_price=Decimal("0")), fall back to a live ticker fetch
+        # — better to pay the latency than divide by zero.
+        _price_for_sizing = opp.reference_price if opp.reference_price > _ZERO else _ZERO
+        if _price_for_sizing <= _ZERO:
+            try:
+                _live_ticker = await long_adapter.get_ticker(opp.symbol)
+                _live_price = Decimal(str(_live_ticker.get("last", 0) or 0)) if _live_ticker else _ZERO
+                if _live_price > _ZERO:
+                    _price_for_sizing = _live_price
+            except Exception as _tick_exc:
+                logger.warning(
+                    f"{opp.symbol}: ticker fallback for sizing failed: {_tick_exc}"
+                )
+        if _price_for_sizing <= _ZERO:
+            logger.warning(
+                f"{opp.symbol}: Skipping — cannot determine sizing price "
+                f"(reference_price={opp.reference_price}, ticker fetch failed)"
+            )
+            return None
 
         qty_raw = notional / _price_for_sizing
         steps = int(qty_raw / lot)
