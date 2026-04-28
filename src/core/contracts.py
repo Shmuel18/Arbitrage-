@@ -129,6 +129,12 @@ class OpportunityCandidate:
     short_interval_hours: int = 8
     # Qualification flag (False = display-only, doesn't pass all trading gates)
     qualified: bool = True
+    # Why qualified=False — set at the gate that rejected the opportunity so
+    # the dashboard can show a specific reason instead of the misleading
+    # "Below threshold (0.3%)" label that fires for every disqualification.
+    # One of: "vol_unknown" / "low_vol" / "adverse_basis" / "funding_spread_low"
+    # / "funding_no_imminent" / "funding_stale" / "cherry_unsuitable" / None.
+    disqualify_reason: Optional[str] = None
     # Cherry-pick fields
     mode: TradeMode = TradeMode.HOLD       # see TradeMode enum
     exit_before: Optional[datetime] = None # when to exit (before costly payment)

@@ -628,6 +628,7 @@ class Scanner(_ScannerEvaluatorMixin):
                                 "price_spread_pct": float(o.price_spread_pct),
                                 "stale_price": o.stale_price,
                                 "executable_status": _exec_statuses[i],
+                                "disqualify_reason": o.disqualify_reason,
                             }
                             for i, o in enumerate(display_top)
                         ]

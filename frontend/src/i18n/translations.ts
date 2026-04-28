@@ -79,6 +79,14 @@ export interface Translations {
   execStatus_lot_size_too_large: string;
   execStatus_already_open: string;
   execStatus_unknown: string;
+  // Disqualify reason (scanner gate that rejected the opportunity)
+  disqReason_vol_unknown: string;
+  disqReason_low_vol: string;
+  disqReason_adverse_basis: string;
+  disqReason_funding_spread_low: string;
+  disqReason_funding_no_imminent: string;
+  disqReason_funding_stale: string;
+  disqReason_cherry_unsuitable: string;
 
   // Analytics
   pnlChart: string;
@@ -448,6 +456,13 @@ const en: Translations = {
   execStatus_lot_size_too_large: 'Position too small for exchange minimum lot — top up the leg with the lower balance',
   execStatus_already_open: 'A trade on this symbol is already active',
   execStatus_unknown: 'Pre-flight check failed (missing market data)',
+  disqReason_vol_unknown: 'One exchange did not report 24h volume — fail-closed (cannot certify liquidity)',
+  disqReason_low_vol: '24h volume on the weaker leg is below the minimum threshold',
+  disqReason_adverse_basis: 'Price spread too adverse — opportunity would lose more on basis than funding earns',
+  disqReason_funding_spread_low: 'Funding spread (after fees) is below the minimum threshold',
+  disqReason_funding_no_imminent: 'No income side fires within the entry window',
+  disqReason_funding_stale: 'Exchange funding timestamp is in the past — data is stale',
+  disqReason_cherry_unsuitable: 'Cherry-pick conditions not met (no income/cost gap, or income too far)',
 
   pnlChart: 'PnL Chart',
   pnlChartInterval: 'Interval',
@@ -809,6 +824,13 @@ const he: Translations = {
   execStatus_lot_size_too_large: 'הפוזיציה קטנה מדי ל-lot המינימלי בבורסה — תוסיף יתרה לבורסה החלשה',
   execStatus_already_open: 'קיימת כבר עסקה פעילה על הצמד הזה',
   execStatus_unknown: 'בדיקת pre-flight נכשלה (חוסר נתוני שוק)',
+  disqReason_vol_unknown: 'בורסה אחת לא החזירה נפח 24 שעות — דחייה ביטחונית (אי אפשר לאמת נזילות)',
+  disqReason_low_vol: 'נפח 24 שעות בצד החלש נמוך מהסף המינימלי',
+  disqReason_adverse_basis: 'ספרד מחירים אדברסי מדי — ההפסד על הbasis יעלה על רווח הfunding',
+  disqReason_funding_spread_low: 'הפרש פנדינג (אחרי עמלות) מתחת לסף המינימלי',
+  disqReason_funding_no_imminent: 'אין צד הכנסה שיורה בחלון הכניסה',
+  disqReason_funding_stale: 'חותמת זמן של פנדינג בעבר — נתונים מיושנים',
+  disqReason_cherry_unsuitable: 'תנאי cherry-pick לא מתקיימים (אין פער income/cost, או income רחוק מדי)',
 
   pnlChart: 'גרף רווח והפסד',
   pnlChartInterval: 'טווח',

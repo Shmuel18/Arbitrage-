@@ -455,12 +455,18 @@ class _ScannerEvaluatorMixin:
 
         # ── Gate: imminent income must exist & meet threshold ────
         hold_qualified = True
+        # Surface why the gate rejected so the UI can render a specific
+        # badge instead of the generic "below 0.3%" label.
+        _disq_reason: Optional[str] = None
         if long_stale or short_stale:
             hold_qualified = False
+            _disq_reason = "funding_stale"
         elif not (long_imminent or short_imminent):
             hold_qualified = False
+            _disq_reason = "funding_no_imminent"
         elif (imminent_spread_pct - total_cost_pct) < tp.min_funding_spread:
             hold_qualified = False
+            _disq_reason = "funding_spread_low"
 
         # ── Determine mode & net (based on imminent payments) ────
         mode: TradeMode = TradeMode.HOLD
@@ -521,6 +527,7 @@ class _ScannerEvaluatorMixin:
                 # overwhelms the cherry-pick funding edge → reject.
                 if entry_tier is None and _live_basis_available and price_spread_pct > 0:
                     qualified = False
+                    _disq_reason = "adverse_basis"
                     logger.info(
                         f"\u26a0\ufe0f [{symbol}] CHERRY_PICK rejected: adverse price basis "
                         f"{float(price_spread_pct):+.4f}% overwhelms net edge {float(net_pct):.4f}%"
@@ -556,6 +563,10 @@ class _ScannerEvaluatorMixin:
         else:
             # ── HOLD didn't qualify — try CHERRY_PICK ────────────
             qualified = False  # default off, cherry_pick turns it back on
+            # _disq_reason inherited from the HOLD path; cherry-pick success
+            # below clears it again. If cherry also fails, keep the existing
+            # reason so we surface the most actionable rejection cause.
+            _disq_reason = _disq_reason or "cherry_unsuitable"
             if not pnl["both_cost"] and not (long_stale or short_stale):
                 cherry_ok = False
                 if pnl["long_is_income"]:
@@ -595,6 +606,7 @@ class _ScannerEvaluatorMixin:
                             if cp_net >= tp.min_funding_spread:
                                 cherry_ok = True
                                 qualified = True
+                                _disq_reason = None  # cherry rescued the opp
                                 mode = TradeMode.CHERRY_PICK
                                 gross_pct = cp_gross
                                 net_pct = cp_net
@@ -619,6 +631,7 @@ class _ScannerEvaluatorMixin:
                                 if entry_tier is None and _live_basis_available and price_spread_pct > 0:
                                     cherry_ok = False
                                     qualified = False
+                                    _disq_reason = "adverse_basis"
                                     logger.info(
                                         f"\u26a0\ufe0f [{symbol}] CHERRY_PICK rejected (alt path): "
                                         f"adverse price basis {float(price_spread_pct):+.4f}% "
@@ -628,6 +641,8 @@ class _ScannerEvaluatorMixin:
         # ── Force disqualify if price spread is too adverse for any tier ──
         if _tier_too_adverse or _adverse_price_gate:
             qualified = False
+            if _disq_reason is None:
+                _disq_reason = "adverse_basis"
 
         # ── Liquidity filter: reject thin-market opportunities ───
         # Root cause of the NTRN -$14 trade was basis divergence on a low-volume
@@ -644,6 +659,7 @@ class _ScannerEvaluatorMixin:
             if long_vol is None or short_vol is None:
                 qualified = False
                 _vol_reject = True
+                _disq_reason = "vol_unknown"
                 if logger.isEnabledFor(logging.INFO):
                     logger.info(
                         f"🚫 [{symbol}] REJECT: VOL_UNKNOWN "
@@ -654,6 +670,7 @@ class _ScannerEvaluatorMixin:
                 if weakest < min_vol_floor:
                     qualified = False
                     _vol_reject = True
+                    _disq_reason = "low_vol"
                     if logger.isEnabledFor(logging.INFO):
                         logger.info(
                             f"🚫 [{symbol}] REJECT: LOW_VOL "
@@ -781,6 +798,7 @@ class _ScannerEvaluatorMixin:
                 long_interval_hours=long_interval,
                 short_interval_hours=short_interval,
                 qualified=False,
+                disqualify_reason=_disq_reason,
                 mode=mode,
                 exit_before=exit_before,
                 n_collections=n_collections,

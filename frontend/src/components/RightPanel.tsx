@@ -37,6 +37,21 @@ const EXEC_STATUS_EMOJI: Record<string, string> = {
   unknown:              '❓',
 };
 
+/* ── Disqualify reason icons (dimmed rows) ────────────────────────
+ * Mirror the strings set in src/discovery/_scanner_evaluator.py at
+ * the qualified=False sites. Replaces the misleading "Below threshold
+ * (0.3%)" label with the actual reason for the rejection.
+ */
+const DISQ_REASON_EMOJI: Record<string, string> = {
+  vol_unknown:         '❓',
+  low_vol:             '🪶',
+  adverse_basis:       '📉',
+  funding_spread_low:  '📊',
+  funding_no_imminent: '⏱️',
+  funding_stale:       '🕰️',
+  cherry_unsuitable:   '🍒',
+};
+
 /* ── Opportunity table column definitions ────────────────────── */
 interface ColumnDef {
   /** Translation key from the settings context `t` object. */
@@ -273,6 +288,25 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 }}
               >
                 {EXEC_STATUS_EMOJI[opp.executable_status] ?? '⚠️'}
+              </span>
+            )}
+            {dimmed && opp.disqualify_reason && (
+              <span
+                title={
+                  (t as unknown as Record<string, string>)[`disqReason_${opp.disqualify_reason}`]
+                  ?? opp.disqualify_reason
+                }
+                style={{
+                  fontSize: 12,
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  background: 'rgba(148,163,184,0.10)',
+                  color: '#94a3b8',
+                  border: '1px solid rgba(148,163,184,0.25)',
+                  cursor: 'help',
+                }}
+              >
+                {DISQ_REASON_EMOJI[opp.disqualify_reason] ?? '🚫'}
               </span>
             )}
           </div>

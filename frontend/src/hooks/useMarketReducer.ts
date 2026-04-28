@@ -63,6 +63,10 @@ export interface Opportunity {
   // (insufficient_balance / lot_size_too_large / already_open) so the
   // dashboard can flag rows that look qualified but won't be executed.
   executable_status?: string | null;
+  // Why qualified=False — set by the scanner gate that rejected the opp.
+  // One of: vol_unknown / low_vol / adverse_basis / funding_spread_low
+  // / funding_no_imminent / funding_stale / cherry_unsuitable / null.
+  disqualify_reason?: string | null;
   [k: string]: unknown;
 }
 
