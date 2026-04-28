@@ -1,0 +1,67 @@
+name: Force rebuild — bypass docker layer cache
+
+# One-off escape hatch when `docker compose build bot` happily reuses a
+# stale frontend layer despite source files changing. Builds without
+# any cache (cost: +3-5 min) and recreates the container.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "rebuild" to confirm'
+        required: true
+        default: ""
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Verify confirm input
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "rebuild" ]; then
+            echo "::error::You must type 'rebuild' in the Confirm field."
+            exit 1
+          fi
+
+      - name: SSH and rebuild without cache
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          port: 22
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            cd /opt/ratebridge
+            echo "=== git fetch + pull main ==="
+            git fetch origin
+            git checkout main
+            git pull origin main --ff-only || true
+            echo "=== commit being deployed ==="
+            git log -1 --oneline
+            echo "=== docker compose build --no-cache bot (cold build, ~5 min) ==="
+            docker compose build --no-cache bot
+            echo "=== docker compose up -d --force-recreate bot ==="
+            docker compose up -d --force-recreate bot
+            echo "=== wait for FastAPI ==="
+            set +e
+            code=000
+            for i in $(seq 1 120); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:8000/openapi.json 2>/dev/null)
+              if [ "$code" = "200" ]; then
+                echo "FastAPI is up after ${i} × 5 s."
+                break
+              fi
+              sleep 5
+            done
+            set -e
+            if [ "$code" != "200" ]; then
+              echo "::error::FastAPI never came up — check 'docker logs trinity-bot'."
+              exit 1
+            fi
+            echo "=== verify new bundle ==="
+            BUNDLE=$(docker exec trinity-bot find /app/frontend/build/assets -name 'index-*.js' | head -1)
+            echo "bundle: $BUNDLE"
+            echo "DISQ_REASON_EMOJI count: $(docker exec trinity-bot grep -c 'DISQ_REASON_EMOJI\|disqReason_' "$BUNDLE" 2>/dev/null || echo 0)"
