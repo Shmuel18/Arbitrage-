@@ -33,5 +33,14 @@ jobs:
             BUILD_DIR=$(docker exec trinity-bot find /app/frontend/build/assets -name 'index-*.js' 2>/dev/null | head -1)
             echo "bundle: $BUILD_DIR"
             echo "DISQ count in bundle:" $(docker exec trinity-bot grep -c "DISQ_REASON_EMOJI\|disqReason_" "$BUILD_DIR" 2>/dev/null || echo 0)
-            echo "=== source files INSIDE running container ==="
-            docker exec trinity-bot grep -c "DISQ_REASON_EMOJI" /app/frontend/build/assets/index-*.js 2>/dev/null || true
+            echo "=== bundle file modification time ==="
+            docker exec trinity-bot ls -la /app/frontend/build/assets/ 2>/dev/null | head -10
+            echo "=== docker images ==="
+            docker images | grep ratebridge | head -3
+            echo "=== first 200 chars of bundle ==="
+            docker exec trinity-bot head -c 500 "$BUILD_DIR" 2>/dev/null | head -1
+            echo "=== count of all OPP-related fields in bundle ==="
+            for kw in disqualify_reason disqReason DISQ_REASON executable_status pnl_source; do
+              cnt=$(docker exec trinity-bot grep -c "$kw" "$BUILD_DIR" 2>/dev/null || echo 0)
+              echo "  $kw: $cnt"
+            done
