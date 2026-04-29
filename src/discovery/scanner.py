@@ -726,8 +726,18 @@ class Scanner(_ScannerEvaluatorMixin):
                 _old_watch = self._near_window_watch
                 self._near_window_watch = set()
                 for o in (all_opps if opps else []):
-                    if (not o.qualified
-                            and float(o.net_edge_pct) >= float(_tp_nw.min_funding_spread)
+                    # P3-3: do NOT condition on `not o.qualified`. The previous
+                    # version was self-defeating: the moment a symbol crossed
+                    # into the entry window (qualified flipped True), the
+                    # next scan_all evicted it from the watch. Then hot-scan
+                    # stopped touching it, so its dashboard row stayed stuck
+                    # on the pre-window state for up to 3 min until the
+                    # following scan_all republished. Observed 2026-04-29
+                    # 06:45-06:49 UTC: ZKJ flipped qualified=True at 06:45
+                    # but the dashboard didn't show it until 06:49.
+                    # Watch every symbol whose next funding is inside the
+                    # narrow_entry_window+margin, regardless of qualified.
+                    if (float(o.net_edge_pct) >= float(_tp_nw.min_funding_spread)
                             and o.entry_tier not in (None, "adverse")
                             and o.next_funding_ms is not None):
                         _mins_nw = (o.next_funding_ms - _now_ms_nw) / 60_000

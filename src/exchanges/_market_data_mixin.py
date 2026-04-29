@@ -142,6 +142,26 @@ class _MarketDataMixin:
 
     # ── Ticker / balance ─────────────────────────────────────────
 
+    def get_market_info(self, symbol: str) -> Dict[str, Any]:
+        """Return ccxt's loaded market info for *symbol* (no network call).
+
+        ccxt loads markets at connect-time; subsequent .market(sym) lookups
+        are local dict reads. This wrapper exists so callers don't need to
+        access the private ``self._exchange`` attribute directly.
+
+        Useful for venues whose `fetch_ticker` does NOT include 24h stats
+        (KuCoin Futures: ticker is L1 snapshot only; 24h turnover is in
+        the market record under info.turnoverOf24h / volumeOf24h).
+
+        Returns the full ccxt market dict (with `info` sub-dict for the
+        raw exchange payload), or an empty dict if the symbol is unknown.
+        """
+        try:
+            m = self._exchange.market(self._resolve_symbol(symbol))
+        except Exception:
+            return {}
+        return m or {}
+
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:
         async with self._rest_semaphore:
             return await self._exchange.fetch_ticker(self._resolve_symbol(symbol))

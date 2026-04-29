@@ -140,6 +140,40 @@ class _ScannerEvaluatorMixin:
                 break
 
         if vol is None:
+            # KuCoin Futures fallback: 24h turnover lives in market.info, not
+            # ticker.info. KuCoin's REST ticker is L1-snapshot only (bid/ask/
+            # last) so quoteVolume / baseVolume are always None there. The
+            # 24h stats are exposed via ccxt's market record under
+            # info.turnoverOf24h (USDT) and info.volumeOf24h (base).
+            # adapter.get_market_info() is a local dict lookup — no REST.
+            try:
+                _market = adapter.get_market_info(symbol)
+                _market_info = (_market or {}).get("info") or {}
+                _market_candidates = [
+                    _market_info.get("turnoverOf24h"),  # KuCoin Futures (USDT)
+                    _market_info.get("volValue"),       # KuCoin alt
+                    _market_info.get("turnover24h"),    # Bybit alt
+                    _market_info.get("usdtVolume"),     # Bitget alt
+                ]
+                for _raw_m in _market_candidates:
+                    if _raw_m is None or _raw_m == "" or _raw_m == "0":
+                        continue
+                    try:
+                        _vm = Decimal(str(_raw_m))
+                    except (InvalidOperation, ValueError, TypeError):
+                        continue
+                    if _vm > 0:
+                        vol = _vm
+                        break
+            except (AttributeError, KeyError) as exc:
+                # AttributeError: adapter without get_market_info (test mocks)
+                # KeyError: market lookup edge cases — fall through to baseVol calc
+                logger.debug(
+                    f"[VOL] {eid}:{symbol} market.info fallback failed: {exc}",
+                    extra={"exchange": eid, "symbol": symbol, "action": "volume_market_fallback_failed"},
+                )
+
+        if vol is None:
             # Final fallback: base volume × last price. If parsing fails here
             # we just return None (handled below) rather than blow up the
             # whole scan loop — caller treats None as "vol_unknown".
