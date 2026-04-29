@@ -54,18 +54,17 @@ class _MonitorMixin(_ExitLogicMixin):
         balance_snapshot_counter = 0  # snapshot every 180 cycles (30min)
         while self._running:
             try:
-                # ── Position reconciliation every ~30s (3 × 10s) ──
-                # P1-3: Was 120s (12×). Reduced to 30s so an exchange-side
-                # liquidation on one leg is detected and the orphan is closed
-                # within half a minute rather than up to 2 min of naked exposure.
+                # ── Position reconciliation every ~15s (15 × 1s) ──
+                # P1-3: Reduced cadence — was 30s, now 15s in absolute terms.
+                # Counter divisor adjusted to match the 1 s loop sleep below.
                 reconcile_counter += 1
-                if reconcile_counter >= 3:
+                if reconcile_counter >= 15:
                     reconcile_counter = 0
                     await self._reconcile_positions()
 
-                # ── Balance snapshot every ~30 min (180 × 10s) ──
+                # ── Balance snapshot every ~30 min (1800 × 1s) ──
                 balance_snapshot_counter += 1
-                if balance_snapshot_counter >= 180:
+                if balance_snapshot_counter >= 1800:
                     balance_snapshot_counter = 0
                     await self._journal_balance_snapshot()
 
@@ -86,10 +85,14 @@ class _MonitorMixin(_ExitLogicMixin):
                 return
             except Exception as e:
                 logger.error(f"Exit monitor error: {e}")
-            # FIX C: reduced from 10s → 5s for faster response to transient
-            # price peaks. Pairs with FIX A's 2-tick sustain guard so
-            # spikes are caught within ~10s of appearing.
-            await asyncio.sleep(5)
+            # P3-6: tightened from 5s → 1s so exits fire on the same
+            # second the gate flips. Each iteration runs `_check_trade`
+            # for every open trade in parallel; the heavy REST call inside
+            # is `get_vwap_and_depth` (one fetch_order_book per leg) gated
+            # by the per-exchange Semaphore(25). At normal load (1-2
+            # active trades) the per-second cost is 2-4 REST calls per
+            # exchange, well within rate limits.
+            await asyncio.sleep(1)
         # Cleanup fast-path task when monitor loop exits
         _liq_task.cancel()
         try:

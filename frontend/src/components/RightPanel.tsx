@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useSettings } from '../context/SettingsContext';
-import { TierBadge, advanceFundingTs, formatCountdown, formatFundingRateN } from '../utils/format';
+import { TierBadge, advanceFundingTs, formatCountdown, formatFundingRateN, liveDisqualifyReason } from '../utils/format';
 import { SkeletonRightPanel } from './Skeleton';
 import type { Opportunity, OpportunitySet } from '../hooks/useMarketReducer';
 
@@ -72,11 +72,33 @@ const OPP_COLUMNS: ColumnDef[] = [
   { tKey: 'colNextFunding',     align: 'end'   },
 ];
 
+/* ── 1-second tick hook for live time-dependent re-renders ──────
+ * The disqualify_reason badge depends on (next_funding_ms - now). We
+ * re-render every 1 s so the badge flips the instant a symbol crosses
+ * into / out of the entry window — without waiting for the bot to
+ * republish opp_data.
+ */
+const useNow = (intervalMs: number = 1000): number => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+};
+
 const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, status }) => {
   const thresholdPct = status?.min_funding_spread != null
     ? `${status.min_funding_spread}%`
     : '?%';
   const { t } = useSettings();
+  // Re-render every 1 s for live disqualify_reason badge updates.
+  const nowMs = useNow(1000);
+  // Frontend gate-config defaults. Match the bot's config.yaml so the live
+  // re-evaluation produces the same verdict as the bot would (modulo cache
+  // staleness, which is exactly what this client-side recompute fixes).
+  const narrowWindowMin = (status?.narrow_entry_window_minutes as number | undefined) ?? 15;
+  const minSpreadPctNum = (status?.min_funding_spread as number | undefined) ?? 0.30;
 
   // All hooks must be declared before any conditional return (Rules of Hooks).
   const opps = useMemo(() => opportunities?.opportunities ?? [], [opportunities]);
@@ -290,25 +312,38 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 {EXEC_STATUS_EMOJI[opp.executable_status] ?? '⚠️'}
               </span>
             )}
-            {dimmed && opp.disqualify_reason && (
-              <span
-                title={
-                  (t as unknown as Record<string, string>)[`disqReason_${opp.disqualify_reason}`]
-                  ?? opp.disqualify_reason
-                }
-                style={{
-                  fontSize: 12,
-                  padding: '1px 6px',
-                  borderRadius: 4,
-                  background: 'rgba(148,163,184,0.10)',
-                  color: '#94a3b8',
-                  border: '1px solid rgba(148,163,184,0.25)',
-                  cursor: 'help',
-                }}
-              >
-                {DISQ_REASON_EMOJI[opp.disqualify_reason] ?? '🚫'}
-              </span>
-            )}
+            {(() => {
+              // Live re-evaluation: each 1-s tick recomputes the badge
+              // against current time, so a symbol crossing the entry-
+              // window boundary flips its icon within the same second
+              // instead of waiting for the bot's next publish.
+              const liveReason = liveDisqualifyReason(
+                opp as unknown as import('../utils/format').LiveOpp,
+                nowMs,
+                narrowWindowMin,
+                minSpreadPctNum,
+              );
+              if (!dimmed || !liveReason) return null;
+              return (
+                <span
+                  title={
+                    (t as unknown as Record<string, string>)[`disqReason_${liveReason}`]
+                    ?? liveReason
+                  }
+                  style={{
+                    fontSize: 12,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    background: 'rgba(148,163,184,0.10)',
+                    color: '#94a3b8',
+                    border: '1px solid rgba(148,163,184,0.25)',
+                    cursor: 'help',
+                  }}
+                >
+                  {DISQ_REASON_EMOJI[liveReason] ?? '🚫'}
+                </span>
+              );
+            })()}
           </div>
         </td>
 

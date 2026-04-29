@@ -116,6 +116,78 @@ export const formatCountdown = (ms?: number | null, intervalHours?: number): str
   return `${hrs}h${rem > 0 ? rem + 'm' : ''}`;
 };
 
+/* ── Live disqualify-reason (frontend re-evaluation each tick) ──
+ * Time-dependent gates the bot publishes (funding_stale, funding_no_imminent,
+ * funding_spread_low) get stale between bot publishes — the bot evaluates
+ * with its `now_ms` snapshot, but real time keeps moving. We re-derive
+ * those gates here every render tick (1 s) so the badge always reflects
+ * the CURRENT relationship between now and next_funding_ms.
+ *
+ * Non-time gates (vol_unknown / low_vol / adverse_basis / cherry_unsuitable)
+ * pass through unchanged — they don't depend on time.
+ */
+const TIME_DEPENDENT_REASONS = new Set([
+  'funding_stale',
+  'funding_no_imminent',
+  'funding_spread_low',
+]);
+
+export interface LiveOpp {
+  qualified?: boolean;
+  disqualify_reason?: string | null;
+  long_funding_rate?: number;
+  short_funding_rate?: number;
+  long_next_funding_ms?: number | null;
+  short_next_funding_ms?: number | null;
+  long_interval_hours?: number;
+  short_interval_hours?: number;
+  immediate_spread_pct?: number;
+}
+
+export const liveDisqualifyReason = (
+  opp: LiveOpp,
+  nowMs: number,
+  narrowWindowMin = 15,
+  minSpreadPct = 0.30,
+): string | null => {
+  // 1. Trust the bot for non-time-dependent reasons.
+  if (opp.disqualify_reason && !TIME_DEPENDENT_REASONS.has(opp.disqualify_reason)) {
+    return opp.disqualify_reason;
+  }
+
+  // 2. Compute live time-state. Use advanceFundingTs so a stale ts
+  //    (cache lag, exchange race) gets pushed forward by interval.
+  const longRate = opp.long_funding_rate ?? 0;
+  const shortRate = opp.short_funding_rate ?? 0;
+  const longNext = advanceFundingTs(opp.long_next_funding_ms, opp.long_interval_hours);
+  const shortNext = advanceFundingTs(opp.short_next_funding_ms, opp.short_interval_hours);
+
+  const longMins = longNext && longNext > nowMs ? (longNext - nowMs) / 60_000 : null;
+  const shortMins = shortNext && shortNext > nowMs ? (shortNext - nowMs) / 60_000 : null;
+
+  const longIsIncome = longRate < 0;
+  const shortIsIncome = shortRate > 0;
+
+  const longImminent = longIsIncome && longMins !== null && longMins <= narrowWindowMin;
+  const shortImminent = shortIsIncome && shortMins !== null && shortMins <= narrowWindowMin;
+
+  // 3. Outside the entry window — funding_no_imminent (overrides any
+  //    stale `spread_low` or `stale` the bot published).
+  if (!longImminent && !shortImminent) {
+    return 'funding_no_imminent';
+  }
+
+  // 4. Inside window — check immediate spread vs the configured floor.
+  const spread = opp.immediate_spread_pct ?? 0;
+  if (spread < minSpreadPct) {
+    return 'funding_spread_low';
+  }
+
+  // 5. Qualified per live computation — no badge needed; caller falls
+  //    back to whatever the bot published (or null for tier display).
+  return null;
+};
+
 /* ── Numeric helpers ─────────────────────────────────────────────── */
 export const parseNum = (v?: string | null): number | null => {
   if (v == null || v === '') return null;
