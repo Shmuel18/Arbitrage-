@@ -151,12 +151,41 @@ class Scanner(_ScannerEvaluatorMixin):
         # The hot-scan loop injects these on its 1s timeout so they are
         # re-evaluated every second until they enter (or pass) the window.
         self._near_window_watch: set[str] = set()
+        # P3-4: Top-50 candidate pool maintained by scan_all. Hot-scan
+        # combines fresh hot evals with this pool to compute the displayed
+        # top-5 within ~1 s of any state change, instead of waiting for
+        # the full scan cycle (60-180 s) before a newly-qualified symbol
+        # appears in the dashboard ranking. Each entry is an OpportunityCandidate
+        # at the time of the last scan_all completion.
+        self._top_candidates: list[OpportunityCandidate] = []
         # Callback for entry dispatch — stored so scan_all() can dispatch
         # qualified opportunities immediately (not wait for gather to complete).
         self._scan_callback = None
         # Track routes already dispatched during the current scan_all() to
         # avoid double-dispatch when the main loop also processes results.
         self._early_dispatched: set[str] = set()
+
+    def _display_sort_key(self, o: OpportunityCandidate) -> tuple:
+        """Sort key for ranking opportunities on the dashboard.
+
+        Shared by scan_all (full ranking pass) and hot-scan (sub-second
+        re-rank when fresh evals arrive). Higher tuple = better rank.
+
+        Order: adverse-last → qualified → funding-imminent (≤1h) →
+               net_edge_pct + sticky-bonus - stale-penalty (1dp) → symbol.
+        """
+        opp_key = f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+        bonus = 0.10 if opp_key in self._prev_display_keys else 0.0
+        stale_pen = _STALE_DISPLAY_PENALTY if getattr(o, "stale_price", False) else 0.0
+        _now_ms = time.time() * 1000
+        _one_hour_ms = 3600 * 1000
+        return (
+            0 if o.entry_tier == "adverse" else 1,
+            1 if o.qualified else 0,
+            1 if (o.next_funding_ms is not None and (o.next_funding_ms - _now_ms) <= _one_hour_ms) else 0,
+            round(float(o.net_edge_pct) + bonus - stale_pen, 1),
+            o.symbol,
+        )
 
     async def _publish_display_if_changed(
         self,
@@ -590,6 +619,14 @@ class Scanner(_ScannerEvaluatorMixin):
                     )
                 all_opps.sort(key=_display_sort_key, reverse=True)
 
+                # P3-4: snapshot the top-50 candidate pool for hot-scan to use
+                # as the basis for sub-second top-5 promotion. Storing the full
+                # 50 (not just 5) lets a near-window symbol that ranks #6-#50
+                # at scan_all completion later get promoted to #1 by hot-scan
+                # within ~1 s of qualifying — instead of waiting up to a full
+                # scan cycle (60-180 s) before the dashboard sees it.
+                self._top_candidates = list(all_opps[:50])
+
                 display_top = all_opps[:5]
                 # Update sticky keys + retain cache for next cycle
                 self._prev_display_keys = set()
@@ -945,36 +982,72 @@ class Scanner(_ScannerEvaluatorMixin):
                 # symbol that wasn't already hot-scanned, with cheap=True
                 # (WS-cache only, no REST). 5 cheap evals ≈ 50ms — every
                 # row reflects the same funding-cache state at publish.
-                if self._prev_display_opps:
-                    _hot_index: Dict[str, OpportunityCandidate] = {
-                        f"{o.symbol}|{o.long_exchange}|{o.short_exchange}": o
-                        for o in _hot_evals
-                    }
-                    _display_symbols: set[str] = {
+                # P3-4: candidate-pool re-rank (sub-second top-5 promotion)
+                # ----------------------------------------------------------
+                # Build a pool of OpportunityCandidate objects to re-rank,
+                # then sort with the shared display_sort_key and publish
+                # the new top-5. The pool is composed of:
+                #
+                #   • Fresh hot evals from this pass (_hot_evals): includes
+                #     symbols that received WS ticks AND symbols in
+                #     _near_window_watch. These have CURRENT funding/qty/
+                #     qualified state — the most authoritative source.
+                #
+                #   • Cached top-50 candidate pool (self._top_candidates):
+                #     populated by scan_all every full cycle. Lets a symbol
+                #     that ranked #6-#50 at the last scan_all enter the top-5
+                #     within ~1 s if its fresh hot eval pushes it ahead of
+                #     a current display row.
+                #
+                #   • Cached display rows (self._prev_display_opps): fallback
+                #     for symbols not in either set above (incumbents that
+                #     didn't get a hot tick this pass).
+                #
+                # Order of priority: fresh > top_candidates_cached >
+                # prev_display_cached. Same key (symbol|long|short) higher
+                # in the priority list overwrites lower.
+                if self._prev_display_opps or self._top_candidates or _hot_evals:
+                    _pool: Dict[str, OpportunityCandidate] = {}
+                    # Lowest priority first — later writes overwrite.
+                    for opp_key, (cached_opp, _age) in self._prev_display_opps.items():
+                        _pool[opp_key] = cached_opp
+                    for cand in self._top_candidates:
+                        _pool[
+                            f"{cand.symbol}|{cand.long_exchange}|{cand.short_exchange}"
+                        ] = cand
+                    # Refresh any displayed-row symbols not covered by the
+                    # hot pass — keeps quiet incumbents from drifting on
+                    # funding-cache state changes (the original P3-2 fix).
+                    _hot_symbols_set: set[str] = {o.symbol for o in _hot_evals}
+                    _displayed_syms: set[str] = {
                         opp_key.split("|", 1)[0]
                         for opp_key in self._prev_display_opps.keys()
                     }
-                    _hot_symbols_set: set[str] = {o.symbol for o in _hot_evals}
-                    _missing_symbols: set[str] = _display_symbols - _hot_symbols_set
-                    for _sym in _missing_symbols:
+                    _missing_displayed: set[str] = _displayed_syms - _hot_symbols_set
+                    for _sym in _missing_displayed:
                         try:
                             _opps = await self._scan_symbol(
                                 _sym, adapters, exchange_ids, cooled_symbols, cheap=True,
                             )
-                            for _o in _opps:
-                                _hot_index[
-                                    f"{_o.symbol}|{_o.long_exchange}|{_o.short_exchange}"
-                                ] = _o
+                            _hot_evals.extend(_opps)
                         except Exception as exc:
                             if logger.isEnabledFor(logging.DEBUG):
                                 logger.debug(
                                     f"[hot-scan] display-row re-eval failed for {_sym}: {exc}",
                                 )
+                    # Highest priority last — fresh hot evals always win.
+                    for o in _hot_evals:
+                        _pool[
+                            f"{o.symbol}|{o.long_exchange}|{o.short_exchange}"
+                        ] = o
 
-                    _refreshed_top: list[OpportunityCandidate] = []
-                    for opp_key, (cached_opp, _age) in self._prev_display_opps.items():
-                        _refreshed_top.append(_hot_index.get(opp_key, cached_opp))
-                    if _refreshed_top:
+                    if _pool:
+                        _ranked = sorted(
+                            _pool.values(),
+                            key=self._display_sort_key,
+                            reverse=True,
+                        )
+                        _refreshed_top = _ranked[:5]
                         try:
                             await self._publish_display_if_changed(_refreshed_top)
                         except Exception as exc:
