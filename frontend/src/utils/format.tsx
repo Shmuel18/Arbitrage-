@@ -135,8 +135,12 @@ const TIME_DEPENDENT_REASONS = new Set([
 export interface LiveOpp {
   qualified?: boolean;
   disqualify_reason?: string | null;
-  long_funding_rate?: number;
-  short_funding_rate?: number;
+  // The publisher emits `long_rate` / `short_rate` (not `*_funding_rate`) —
+  // see src/discovery/scanner.py opp_data dict. Field names must match
+  // the publisher exactly or the live re-evaluation reads `undefined` and
+  // mis-classifies the opportunity. Aliased keys are kept for safety.
+  long_rate?: number;
+  short_rate?: number;
   long_next_funding_ms?: number | null;
   short_next_funding_ms?: number | null;
   long_interval_hours?: number;
@@ -157,8 +161,8 @@ export const liveDisqualifyReason = (
 
   // 2. Compute live time-state. Use advanceFundingTs so a stale ts
   //    (cache lag, exchange race) gets pushed forward by interval.
-  const longRate = opp.long_funding_rate ?? 0;
-  const shortRate = opp.short_funding_rate ?? 0;
+  const longRate = opp.long_rate ?? 0;
+  const shortRate = opp.short_rate ?? 0;
   const longNext = advanceFundingTs(opp.long_next_funding_ms, opp.long_interval_hours);
   const shortNext = advanceFundingTs(opp.short_next_funding_ms, opp.short_interval_hours);
 
