@@ -496,6 +496,26 @@ class _ScannerEvaluatorMixin:
         long_next = _to_ms(funding[long_eid].get("next_timestamp"))
         short_next = _to_ms(funding[short_eid].get("next_timestamp"))
 
+        # P3-5: Defensive auto-advance for stale next_timestamp.
+        # `get_funding_rate_cached` already advances on read, but the cache
+        # entry can be overwritten with a fresh-but-stale ts by a WS push
+        # whose `nextFundingTimestamp` is the just-fired boundary (some
+        # exchanges return the LAST fired ts for a few seconds before
+        # reporting the next one). If the eval reads the cache between
+        # such a WS overwrite and the next get_funding_rate_cached call,
+        # it sees stale and wrongly sets disqualify_reason="funding_stale".
+        # Mirror the auto-advance here so the eval is robust to that race.
+        # Observed 2026-04-29 14:48 UTC: ORCA on gateio briefly showed
+        # 🕰️ funding_stale on the dashboard ~12 min before its 15:00 funding.
+        _long_int_ms = (long_interval or 0) * 3_600_000
+        _short_int_ms = (short_interval or 0) * 3_600_000
+        if long_next is not None and long_next <= now_ms and _long_int_ms > 0:
+            while long_next <= now_ms:
+                long_next += _long_int_ms
+        if short_next is not None and short_next <= now_ms and _short_int_ms > 0:
+            while short_next <= now_ms:
+                short_next += _short_int_ms
+
         # Classify each side: income or cost?
         long_is_income = long_rate < 0   # long on negative → we get paid
         short_is_income = short_rate > 0  # short on positive → we get paid
