@@ -62,7 +62,15 @@ class ExchangeAdapter(
         # Symbol mapping: normalized (USDT) → original exchange symbol (e.g. USD for Kraken)
         self._symbol_map: Dict[str, str] = {}
         self._ws_tasks: List = []  # Track running WebSocket tasks
-        self._rest_semaphore = asyncio.Semaphore(10)  # Limit concurrent REST calls per exchange
+        # Per-exchange REST concurrency cap. With 5 exchanges this gives
+        # ~125 global concurrent calls. scan_all evaluates ~1920 opps × 6
+        # REST calls each ≈ 11k calls; previous cap of 10 stretched the cycle
+        # to 3 min (observed 2026-04-29 — dashboard top-5 display lagged
+        # 2-3 min behind actual qualification because scan_all is what
+        # promotes symbols into the displayed top-5). 25 keeps a safe margin
+        # vs major-venue rate limits (binance: 2400/min weighted, bybit:
+        # 600/min, etc.) while compressing the cycle to ~60-80 s.
+        self._rest_semaphore = asyncio.Semaphore(25)
         self._ws_funding_supported = True
         self._ws_funding_disabled_logged = False
         self._ws_ticker_supported = True
