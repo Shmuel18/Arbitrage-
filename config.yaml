@@ -42,8 +42,13 @@ trading_params:
   basis_recovery_tolerance_pct: 0.10 # Allow basis to be 0.10% below entry and still exit (avoid waiting forever)
   min_hold_seconds: 120 # Minimum seconds before any exit fires (except liquidation) — prevents immediate exit on stale timestamps
   liquidation_safety_pct:
-    5.0 # Exit when equity/margin < this % (i.e. when unrealized loss > 95% of margin).
-    # Example: 80.0 → exit at 20% loss; 5.0 → only exit at 95% loss (near liquidation!)
+    20.0 # Exit when equity/margin < this % (i.e. when unrealized loss > 80% of margin).
+    # On 5x leverage: 80% margin loss ≈ 16% adverse price move on the leg, leaving
+    # ~3pp buffer to actual exchange liquidation (~95-100% margin loss / -19-20% move).
+    # Tuned 2026-04-29 after DAM/USDT:USDT trade b6bb3da0-858 was liquidated by
+    # Gate.io at ~-14% before the previous safety_pct=5 threshold ever fired —
+    # exchange mark-price liquidation was faster than the bot's last-price check.
+    # Example: 80.0 → exit at 20% loss; 20.0 → exit at 80% margin loss (~-16% move on 5x).
 
 execution:
   concurrent_opportunities: 3

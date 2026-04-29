@@ -65,7 +65,7 @@ class TradingParams(BaseModel):
     min_basis_exit_pnl_pct: Decimal = Decimal("0.08")  # Soft basis exit requires minimum adjusted PnL after slippage buffer
     max_hold_hours: int = 24  # Absolute safety cap — force-close if held longer than this regardless of state
     min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
-    liquidation_safety_pct: Decimal = Decimal("5.0")  # Exit when equity/margin < this % (5 → exit at 95% loss, near liquidation)
+    liquidation_safety_pct: Decimal = Decimal("20.0")  # Exit when equity/margin < this % (20 → exit at 80% margin loss ≈ -16% price move on 5x, ~3pp buffer to exchange liquidation)
 
 
 class ExecutionConfig(BaseModel):
