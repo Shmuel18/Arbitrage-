@@ -7,7 +7,7 @@ import {
   formatFundingRate,
   formatUsd,
   formatCountdown,
-  formatDuration,
+  formatLiveDuration,
   pnlColor,
   getModeConfig,
   getTierInfo,
@@ -310,7 +310,7 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       const dd = String(d.getUTCDate()).padStart(2, '0');
                       const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
                       // Live duration ticks every second via useNow.
-                      const elapsed = formatDuration(p.opened_at, nowMs);
+                      const elapsed = formatLiveDuration(p.opened_at, nowMs);
                       return (
                         <span>
                           🕐 {dd}/{mo} {hh}:{mm} UTC · <span className="mono" style={{ color: 'var(--text-secondary)' }}>{elapsed}</span>

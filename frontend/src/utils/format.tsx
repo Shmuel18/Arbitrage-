@@ -193,11 +193,15 @@ export const liveDisqualifyReason = (
 };
 
 /* ── Live elapsed-duration formatter ──────────────────────────────
- * Returns a compact "Xm Ys" / "Xh Ym" string for "time since open".
- * Pair with a 1-s tick (useNow) at the call site so the value updates
- * every second on the dashboard.
+ * Returns a compact "Xs" / "Xm Ys" / "Xh Ym Zs" string for time
+ * since an ISO timestamp. Pair with a 1-s tick (useNow) at the call
+ * site so the value updates every second on the dashboard.
+ *
+ * Distinct from `formatDuration` (further down) which takes a minutes
+ * number — this one takes an ISO string and current `nowMs` so it can
+ * tick second-by-second.
  */
-export const formatDuration = (
+export const formatLiveDuration = (
   openedIso: string | null | undefined,
   nowMs: number,
 ): string => {
