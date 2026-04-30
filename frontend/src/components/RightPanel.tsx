@@ -4,6 +4,7 @@ import { useSettings } from '../context/SettingsContext';
 import { TierBadge, advanceFundingTs, formatCountdown, formatFundingRateN, liveDisqualifyReason } from '../utils/format';
 import { SkeletonRightPanel } from './Skeleton';
 import type { Opportunity, OpportunitySet } from '../hooks/useMarketReducer';
+import { useNow } from '../hooks/useNow';
 
 /* ── Virtual row descriptor ───────────────────────────────────── */
 type RowItem =
@@ -71,21 +72,6 @@ const OPP_COLUMNS: ColumnDef[] = [
   { tKey: 'colMode',            align: 'end'   },
   { tKey: 'colNextFunding',     align: 'end'   },
 ];
-
-/* ── 1-second tick hook for live time-dependent re-renders ──────
- * The disqualify_reason badge depends on (next_funding_ms - now). We
- * re-render every 1 s so the badge flips the instant a symbol crosses
- * into / out of the entry window — without waiting for the bot to
- * republish opp_data.
- */
-const useNow = (intervalMs: number = 1000): number => {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
-};
 
 const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, status }) => {
   const thresholdPct = status?.min_funding_spread != null

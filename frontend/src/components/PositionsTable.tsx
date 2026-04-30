@@ -7,10 +7,12 @@ import {
   formatFundingRate,
   formatUsd,
   formatCountdown,
+  formatDuration,
   pnlColor,
   getModeConfig,
   getTierInfo,
 } from '../utils/format';
+import { useNow } from '../hooks/useNow';
 
 interface PositionRow {
   id: string;
@@ -59,6 +61,11 @@ interface PositionsTableProps {
 const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
   const { t } = useSettings();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // 1-s tick: lets duration counters and the next-funding countdown
+  // refresh every second instead of only when the parent pushes new
+  // positions (every 2 s via broadcast). Cheap — re-render of N=1-3
+  // active position rows.
+  const nowMs = useNow(1000);
 
   const toggleExpand = (id: string) => {
     setExpandedId(prev => prev === id ? null : id);
@@ -302,9 +309,11 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
                       const mm = String(d.getUTCMinutes()).padStart(2, '0');
                       const dd = String(d.getUTCDate()).padStart(2, '0');
                       const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+                      // Live duration ticks every second via useNow.
+                      const elapsed = formatDuration(p.opened_at, nowMs);
                       return (
                         <span>
-                          🕐 {dd}/{mo} {hh}:{mm} UTC
+                          🕐 {dd}/{mo} {hh}:{mm} UTC · <span className="mono" style={{ color: 'var(--text-secondary)' }}>{elapsed}</span>
                         </span>
                       );
                     })()}

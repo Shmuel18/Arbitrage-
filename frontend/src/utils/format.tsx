@@ -192,6 +192,28 @@ export const liveDisqualifyReason = (
   return null;
 };
 
+/* ── Live elapsed-duration formatter ──────────────────────────────
+ * Returns a compact "Xm Ys" / "Xh Ym" string for "time since open".
+ * Pair with a 1-s tick (useNow) at the call site so the value updates
+ * every second on the dashboard.
+ */
+export const formatDuration = (
+  openedIso: string | null | undefined,
+  nowMs: number,
+): string => {
+  if (!openedIso) return '--';
+  const opened = new Date(openedIso);
+  if (Number.isNaN(opened.getTime())) return '--';
+  const diffMs = Math.max(0, nowMs - opened.getTime());
+  const totalSec = Math.floor(diffMs / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+};
+
 /* ── Numeric helpers ─────────────────────────────────────────────── */
 export const parseNum = (v?: string | null): number | null => {
   if (v == null || v === '') return null;
