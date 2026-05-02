@@ -54,6 +54,104 @@ def _funding_ts_to_dt(ts: float) -> "datetime":
 class _ExitLogicMixin(_ExitComputationsMixin):
     """Hold-or-exit decision logic — tier-aware profit-target strategy."""
 
+    async def _verify_exit_book_depth(
+        self,
+        trade: TradeRecord,
+        decision_price_pnl_pct: Decimal,
+        long_adapter,
+        short_adapter,
+        max_degradation_pct: Decimal = Decimal("0.30"),
+    ) -> bool:
+        """Re-fetch the order book and verify the exit estimate is still valid.
+
+        ``_calculate_current_pnl`` snapshots the book once per monitor tick
+        — but in fast-moving markets, the bids/asks visible at decision
+        time can vanish (ghost liquidity) by the time the close orders
+        actually land 1-3 s later. Observed 2026-05-02 LAB trade:
+        decision price_pnl was +1.27 % but actual fills produced -1.12 %
+        — a 2.39 % swing in 2.4 s.
+
+        This helper re-runs ``get_vwap_and_depth`` for both legs RIGHT
+        BEFORE the exit fires, recomputes the price PnL with the fresh
+        VWAPs, and aborts the exit if the fresh PnL has degraded by more
+        than ``max_degradation_pct`` from the decision-time estimate.
+
+        Returns:
+            True  — exit should proceed (book is still good)
+            False — exit aborted (book degraded; hold and re-check next tick)
+
+        Cost: ~100-300 ms (two ``fetch_order_book`` calls in parallel).
+        Runs only when an exit is about to fire — not on every monitor
+        tick — so it has near-zero impact on the loop cadence.
+        """
+        try:
+            results = await asyncio.gather(
+                long_adapter.get_vwap_and_depth(
+                    trade.symbol, trade.long_qty, side="sell"
+                ),
+                short_adapter.get_vwap_and_depth(
+                    trade.symbol, trade.short_qty, side="buy"
+                ),
+                return_exceptions=True,
+            )
+        except Exception as exc:
+            logger.debug(
+                f"[{trade.symbol}] Exit re-verify gather failed: {exc} — "
+                f"proceeding with exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return True
+
+        if any(isinstance(r, Exception) for r in results):
+            logger.debug(
+                f"[{trade.symbol}] Exit re-verify: one leg raised — "
+                f"proceeding with exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return True
+
+        try:
+            (l_now_raw, _l_ok), (s_now_raw, _s_ok) = results  # type: ignore[misc]
+            l_now = Decimal(str(l_now_raw)) if l_now_raw is not None else _ZERO
+            s_now = Decimal(str(s_now_raw)) if s_now_raw is not None else _ZERO
+        except Exception as exc:
+            logger.debug(
+                f"[{trade.symbol}] Exit re-verify parse failed: {exc} — "
+                f"proceeding with exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
+            )
+            return True
+
+        if l_now <= 0 or s_now <= 0:
+            return True
+        if not trade.entry_price_long or not trade.entry_price_short:
+            return True
+
+        notional = trade.entry_price_long * trade.long_qty
+        if notional <= 0:
+            return True
+
+        fresh_long_pnl = (l_now - trade.entry_price_long) * trade.long_qty
+        fresh_short_pnl = (trade.entry_price_short - s_now) * trade.short_qty
+        fresh_price_pnl = fresh_long_pnl + fresh_short_pnl
+        fresh_pct = fresh_price_pnl / notional * Decimal("100")
+
+        degradation = decision_price_pnl_pct - fresh_pct
+        if degradation > max_degradation_pct:
+            logger.warning(
+                f"🚫 [{trade.symbol}] Exit ABORTED: book degraded since decision. "
+                f"decision price_pnl={float(decision_price_pnl_pct):+.4f}% → "
+                f"fresh re-fetch={float(fresh_pct):+.4f}% "
+                f"(degraded {float(degradation):.4f}% > "
+                f"{float(max_degradation_pct)}% buffer) — holding for next tick",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "exit_aborted_book_degradation",
+                       "decision_pct": float(decision_price_pnl_pct),
+                       "fresh_pct": float(fresh_pct)},
+            )
+            return False
+        return True
+
     async def _check_exit(self, trade: TradeRecord) -> None:
         """Check if trade should be closed.
 
@@ -334,6 +432,23 @@ class _ExitLogicMixin(_ExitComputationsMixin):
         elif price_pnl_pct >= _PRICE_SPIKE_THRESHOLD_PCT:
             trade._price_spike_tick_count = _spike_ticks + 1
             if trade._price_spike_tick_count >= _PRICE_SPIKE_SUSTAIN_TICKS:
+                # P3-7 (mirror of profit_target gate): block price-spike
+                # exit before the first funding payment is collected. Same
+                # rationale — the whole point of a funding-arb trade is
+                # to harvest at least one payment; a phantom spike is the
+                # most common cause of premature exits that turn into
+                # losses (LAB 2026-05-02). Don't reset _price_spike_tick_count
+                # so that AFTER funding lands, a still-sustained spike can
+                # fire immediately on the next tick.
+                if trade.funding_collections == 0:
+                    logger.info(
+                        f"⚡ [{trade.symbol}] Price spike sustained "
+                        f"({float(price_pnl_pct):+.4f}%) but funding not yet "
+                        f"collected (collections=0) — holding for first payment",
+                        extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                               "action": "price_spike_pre_funding_block"},
+                    )
+                    return  # Hold; re-evaluate next tick
                 # P1-1 (extended to spike path): when income funding is
                 # imminent, prefer the GUARANTEED funding payment over a
                 # spike profit that could still fade between this tick and
@@ -369,6 +484,13 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                                "action": "price_spike_funding_lock"},
                     )
                 else:
+                    # P3-7b: Re-fetch the order book right before firing
+                    # the exit. If the bids/asks visible at decision time
+                    # have ghosted away, abort and re-evaluate next tick.
+                    if not await self._verify_exit_book_depth(
+                        trade, price_pnl_pct, long_adapter, short_adapter,
+                    ):
+                        return
                     _reason = f"price_spike_{float(price_pnl_pct):.4f}pct"
                     logger.info(
                         f"⚡ Trade {trade.trade_id}{tier_tag}: PRICE SPIKE TAKE-PROFIT! "
@@ -419,6 +541,24 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                            "action": "profit_target_refused_no_vwap"},
                 )
         elif adjusted_pnl >= profit_target:
+            # P3-7: Block profit_target ENTIRELY before the first funding
+            # payment is collected. The whole reason we opened a funding-
+            # arb trade is to harvest at least one funding payment; exiting
+            # on a price spike before any funding has fired forfeits the
+            # premise. Observed 2026-05-02 (LAB trade 24bb6fbc-893):
+            # profit_target fired at +1.04% from a phantom spike, real
+            # fills produced -1.34% loss — and zero funding had been
+            # collected. After this gate, the trade simply holds until the
+            # first payment lands, then profit_target can fire normally.
+            if trade.funding_collections == 0:
+                logger.info(
+                    f"[{trade.symbol}] Profit target hit ({float(adjusted_pnl):+.4f}%) "
+                    f"but funding not yet collected (collections=0) — holding for "
+                    f"first payment before considering exit",
+                    extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                           "action": "profit_target_pre_funding_block"},
+                )
+                return  # Hold; will re-evaluate next monitor tick
             # P1-1: Block profit-target exit when funding payment is imminent.
             # A price pump just before funding would cause us to exit and miss
             # the income payment we opened specifically to capture.
@@ -441,6 +581,13 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                     extra={"trade_id": trade.trade_id, "symbol": trade.symbol, "action": "profit_target_funding_lock"},
                 )
             else:
+                # P3-7b: Re-fetch the order book right before firing the
+                # exit. If the bids/asks visible at decision time have
+                # ghosted away, abort and re-evaluate next tick.
+                if not await self._verify_exit_book_depth(
+                    trade, price_pnl_pct, long_adapter, short_adapter,
+                ):
+                    return
                 _reason = f"profit_target_{float(total_pnl_pct):.4f}pct"
                 logger.info(
                     f"🎯 Trade {trade.trade_id}{tier_tag}: PROFIT TARGET HIT! "
