@@ -221,6 +221,57 @@ class RedisClient:
         key = self._key("positions", exchange_id)
         await self._c.set(key, json.dumps(positions, default=str), ex=120)
 
+    # ── Per-trade reconciliation records ──────────────────────────
+    # Audit of pre/post balance snapshots and per-exchange delta for each
+    # closed trade. Keyed by trade_id with a 7-day TTL; trade_ids are also
+    # tracked in a capped recent list so the dashboard can show history
+    # without scanning Redis for the per-trade keys.
+
+    _RECONCILE_RECENT_KEY = "trinity:reconcile:recent"
+    _RECONCILE_RECENT_MAX = 50
+
+    async def set_reconciliation(
+        self,
+        trade_id: str,
+        payload: Dict[str, Any],
+        ttl_sec: int = 7 * 86400,
+    ) -> None:
+        """Persist a reconciliation record and add it to the recent list."""
+        key = self._key("reconcile", trade_id)
+        await self._c.set(key, json.dumps(payload, default=str), ex=ttl_sec)
+        await self._c.lpush(self._RECONCILE_RECENT_KEY, trade_id)
+        await self._c.ltrim(
+            self._RECONCILE_RECENT_KEY, 0, self._RECONCILE_RECENT_MAX - 1,
+        )
+
+    async def get_reconciliation(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        raw = await self._c.get(self._key("reconcile", trade_id))
+        return json.loads(raw) if raw else None
+
+    async def list_recent_reconciliations(
+        self, n: int = 20,
+    ) -> list[Dict[str, Any]]:
+        """Return the most recent N reconciliation records (newest first).
+
+        Records whose underlying per-trade key has expired (past 7d TTL) are
+        silently skipped — the recent list trails the actual records.
+        """
+        safe_n = max(1, min(n, self._RECONCILE_RECENT_MAX))
+        ids = await self._c.lrange(self._RECONCILE_RECENT_KEY, 0, safe_n - 1)
+        if not ids:
+            return []
+        keys = [self._key("reconcile", tid) for tid in ids]
+        raws = await self._c.mget(*keys)
+        out: list[Dict[str, Any]] = []
+        for raw in raws:
+            if raw is None:
+                continue
+            try:
+                out.append(json.loads(raw))
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.debug(f"Skipping malformed reconciliation JSON: {exc}")
+        return out
+
     # ── Cooldown ─────────────────────────────────────────────────
 
     async def set_cooldown(self, symbol: str, seconds: int) -> None:

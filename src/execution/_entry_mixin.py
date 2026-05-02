@@ -286,7 +286,14 @@ class _EntryMixin:
                 long_adapter.ensure_trading_settings(opp.symbol),
                 short_adapter.ensure_trading_settings(opp.symbol),
             )
-            sizing, _ = await asyncio.gather(sizing_task, settings_task)
+            # Pre-entry balance snapshot — feeds per-trade reconciliation at
+            # close. Uses cached balances (3s TTL — status_publisher keeps
+            # them warm) so it doesn't add REST latency in the hot path.
+            # Best-effort: failure inside the helper is logged and swallowed.
+            pre_snapshot_task = self._capture_pre_snapshot(trade_id)
+            sizing, _, _ = await asyncio.gather(
+                sizing_task, settings_task, pre_snapshot_task,
+            )
             if sizing is None:
                 return
             order_qty, notional, long_spec, short_spec = sizing
@@ -811,6 +818,11 @@ class _EntryMixin:
             logger.error(f"Trade execution failed for {opp.symbol}: {e}",
                          extra={"symbol": opp.symbol})
         finally:
+            # Drop orphan pre-snapshot if entry aborted before _register_trade.
+            # The close path pops on success; this prevents the dict from
+            # leaking entries from failed entries.
+            if trade_id not in self._active_trades:
+                self._pending_pre_snapshots.pop(trade_id, None)
             await self._redis.release_lock(lock_key)
 
     # ── Exit monitor ─────────────────────────────────────────────

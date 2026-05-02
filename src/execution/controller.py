@@ -32,6 +32,7 @@ from src.core.contracts import (
     TradeRecord,
     TradeState,
 )
+from src.core.reconciliation import BalanceSnapshot
 from src.core.logging import get_logger
 from src.core.journal import get_journal
 from src.discovery.calculator import calculate_fees
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 from src.execution._entry_mixin import _EntryMixin
 from src.execution._monitor_mixin import _MonitorMixin
 from src.execution._close_mixin import _CloseMixin
+from src.execution._reconcile_mixin import _ReconcileMixin
 from src.execution._util_mixin import _UtilMixin
 
 logger = get_logger("execution")
@@ -107,8 +109,14 @@ class ControllerProtocol(Protocol):
     async def _close_trade(self, trade: TradeRecord) -> None: ...
     async def _record_manual_close(self, trade: TradeRecord) -> None: ...
     async def _log_exchange_balances(self) -> None: ...
+    async def _capture_pre_snapshot(self, trade_id: str) -> None: ...
+    async def _record_reconciliation(
+        self, trade: TradeRecord, expected_pnl: Decimal,
+    ) -> None: ...
 
-class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
+class ExecutionController(
+    _EntryMixin, _MonitorMixin, _CloseMixin, _ReconcileMixin, _UtilMixin,
+):
     # ── Cross-mixin constants (shared by _UtilMixin / _CloseMixin) ──
     _TIMEOUT_COOLDOWN_SEC = 600          # 10 min cooldown after first order timeout
     _TIMEOUT_BLACKLIST_THRESHOLD = 2     # blacklist after N consecutive timeouts
@@ -147,6 +155,9 @@ class ExecutionController(_EntryMixin, _MonitorMixin, _CloseMixin, _UtilMixin):
         self._symbols_entering: set[str] = set()
         # Upgrade cooldown: symbol -> expiry timestamp (prevents re-entry after upgrade exit)
         self._upgrade_cooldown: Dict[str, float] = {}
+        # Pre-entry balance snapshots — keyed by trade_id, popped on close.
+        # Best-effort: a missing entry just flags the reconciliation as partial.
+        self._pending_pre_snapshots: Dict[str, BalanceSnapshot] = {}
         # Trade journal for persistent audit trail
         self._journal = get_journal()
 

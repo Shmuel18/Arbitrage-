@@ -360,6 +360,12 @@ class _CloseFinalizeMixin:
                 },
             )
 
+        # Per-trade portfolio reconciliation: capture post-close balances,
+        # diff against the pre-entry snapshot, and persist. Best-effort —
+        # any failure inside the helper is logged and swallowed so it can
+        # never block close finalization.
+        await self._record_reconciliation(trade, expected_pnl=total_pnl)
+
         if self._cfg.logging.log_balances_after_trade:
             await self._log_exchange_balances()
 
@@ -557,5 +563,10 @@ class _CloseFinalizeMixin:
                 f"PnL=${float(total_pnl):.4f} (held {float(hold_minutes):.0f}min)",
                 extra={"trade_id": trade.trade_id, "action": "manual_close_recorded"},
             )
+            # Same reconciliation hook as the automated close path. The
+            # manual-close path lacks an exchange-fetched expected_pnl with
+            # exchange-reported PnL overrides, so the bot-computed total
+            # is used as the expected value for the drift calculation.
+            await self._record_reconciliation(trade, expected_pnl=total_pnl)
         except Exception as e:
             logger.error(f"Failed to record manual close for {trade.trade_id}: {e}")
