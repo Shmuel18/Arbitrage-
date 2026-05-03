@@ -672,6 +672,18 @@ class _ExitLogicMixin(_ExitComputationsMixin):
                            "action": "basis_recovery_refused_no_vwap"},
                 )
         elif _basis_favorable and _basis_exit_pnl_ok and _price_pnl_ok:
+            # P3-7b: Re-fetch the order book right before firing the exit
+            # (same protection as profit_target / price_spike). The decision
+            # above used the VWAP snapshot from the monitor tick — on thin
+            # low-cap books that snapshot can ghost in the seconds before
+            # the close orders land. Observed 2026-05-03 LAB trade
+            # (3b27d089-db6): basis_recovery decision saw current=+0.5089%,
+            # actual fills cleared at -0.4843% (Δ-1.0%), turning a $+0.42
+            # expected exit into a $-0.32 realized loss.
+            if not await self._verify_exit_book_depth(
+                trade, price_pnl_pct, long_adapter, short_adapter,
+            ):
+                return
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"
             logger.info(
                 f"✅ Trade {trade.trade_id}{tier_tag}: BASIS RECOVERED! "

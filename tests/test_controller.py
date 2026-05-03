@@ -1261,3 +1261,93 @@ class TestTradeRecordPersistence:
         assert restored.long_funding_rate is None
         assert restored.opened_at is None
         assert restored.funding_collected_usd == Decimal("0")
+
+
+# ── Basis recovery + book re-verify guard (regression for LAB 2026-05-03) ──
+
+class TestBasisRecoveryBookGuard:
+    """The basis_recovery exit path must re-verify the order book right
+    before firing — the same protection profit_target and price_spike
+    already have. Regression for LAB trade 3b27d089-db6 (2026-05-03):
+    decision saw current basis +0.5089%, real fills cleared at -0.4843%.
+    """
+
+    @staticmethod
+    def _setup_basis_recovery_ready(controller, config, mock_exchange_mgr):
+        """Build a trade that would normally trigger basis_recovery exit.
+
+        Long up 0.6% from entry → basis_favorable, price_pnl_ok, and
+        adjusted PnL clears the slippage buffer. profit_target_pct is
+        kept high so basis_recovery is the only path that fires.
+        """
+        config.trading_params.exit_offset_seconds = 0
+        config.trading_params.profit_target_pct = Decimal("9.9")
+        config.trading_params.basis_recovery_tolerance_pct = Decimal("0.10")
+        config.trading_params.basis_exit_buffer_pct = Decimal("0.10")
+        config.trading_params.min_basis_exit_pnl_pct = Decimal("0.01")
+
+        past_ms = (time.time() - 1200) * 1000
+        for eid in ("exchange_a", "exchange_b"):
+            adapter = mock_exchange_mgr.get(eid)
+            rate = Decimal("-0.0001") if eid == "exchange_a" else Decimal("0.0001")
+            data = {"rate": rate, "next_timestamp": past_ms, "interval_hours": 8}
+            adapter._funding_rate_cache["BTC/USDT"] = data
+
+        # VWAP shows long up 0.6%, short flat → current basis = +0.6%
+        # which clears entry_basis (0) + buffer (0.10%) = target 0.10%.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth.return_value = (
+            Decimal("50300"), True,
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth.return_value = (
+            Decimal("50000"), True,
+        )
+
+        trade = _make_trade(controller, spread_pct="1.0")
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal("0")
+        trade._exit_check_active = True
+        trade._funding_paid_long = True
+        trade._funding_paid_short = True
+        trade._funding_paid_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        trade.funding_collected_usd = Decimal("0.20")
+        return trade
+
+    @pytest.mark.asyncio
+    async def test_exits_when_book_depth_verified(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """basis_recovery fires normally when the fresh book confirms."""
+        trade = self._setup_basis_recovery_ready(
+            controller, config, mock_exchange_mgr,
+        )
+        # Stub the verify helper so we don't depend on the second adapter
+        # call cluster: assert that it's called and let it pass.
+        controller._verify_exit_book_depth = AsyncMock(return_value=True)
+
+        await controller._check_exit(trade)
+
+        controller._verify_exit_book_depth.assert_called_once()
+        assert trade.trade_id not in controller._active_trades
+        assert trade._exit_reason and trade._exit_reason.startswith("basis_recovery_")
+
+    @pytest.mark.asyncio
+    async def test_aborts_when_book_degraded(
+        self, controller, config, mock_exchange_mgr, mock_redis
+    ):
+        """When the fresh re-fetch shows degraded book → exit is aborted,
+        trade stays open for the next monitor tick."""
+        trade = self._setup_basis_recovery_ready(
+            controller, config, mock_exchange_mgr,
+        )
+        controller._verify_exit_book_depth = AsyncMock(return_value=False)
+
+        await controller._check_exit(trade)
+
+        controller._verify_exit_book_depth.assert_called_once()
+        # Trade must still be active — no exit fired.
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        # No basis_recovery reason was assigned because the gate aborted
+        # before the reason string was set.
+        assert not (trade._exit_reason or "").startswith("basis_recovery_")
