@@ -309,12 +309,19 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                 narrowWindowMin,
                 minSpreadPctNum,
               );
-              if (!dimmed || !liveReason) return null;
+              // Fallback: when the live re-eval can't pin a reason (e.g. spread
+              // momentarily ticked above the floor) but the row is still dimmed
+              // because the bot's last snapshot disqualified it, surface the
+              // bot's reason so the user always sees an explanatory badge —
+              // the alternative was an unmarked dimmed row, which read as a UI
+              // bug ("why no icon on this one?").
+              const reason = liveReason ?? opp.disqualify_reason ?? null;
+              if (!dimmed || !reason) return null;
               return (
                 <span
                   title={
-                    (t as unknown as Record<string, string>)[`disqReason_${liveReason}`]
-                    ?? liveReason
+                    (t as unknown as Record<string, string>)[`disqReason_${reason}`]
+                    ?? reason
                   }
                   style={{
                     fontSize: 12,
@@ -326,7 +333,7 @@ const RightPanel: React.FC<RightPanelProps> = React.memo(({ opportunities, statu
                     cursor: 'help',
                   }}
                 >
-                  {DISQ_REASON_EMOJI[liveReason] ?? '🚫'}
+                  {DISQ_REASON_EMOJI[reason] ?? '🚫'}
                 </span>
               );
             })()}
