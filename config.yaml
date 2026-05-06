@@ -32,7 +32,12 @@ trading_params:
   execute_only_best_opportunity: true
   # Tier-based entry strategy
   weak_min_funding_excess: 0.5 # WEAK tier: funding must exceed adverse price spread by this % to enter
-  # Post-entry validation (last-resort safety net — pre-entry book check fires first)
+  # Whitelist of allowed entry tiers. Empty list or omission = all tiers (default).
+  # Set to ["top"] for TOP-only entries (favorable price spread + funding income).
+  entry_tier_whitelist: ["top"]
+  # Post-entry validation: actual fill basis must be ≤ this. If exceeded, both legs
+  # are immediately closed reduce-only and the symbol enters cooldown. Catches
+  # scan-vs-fill drift on thin books (TOP scan-classification ghosting on fill).
   max_entry_basis_spread_pct: 0.15 # Reject if actual fill spread > this (0.15% tolerance for altcoin slippage)
   # Exit strategy
   profit_target_pct: 0.7 # Exit at 0.7% profit on notional

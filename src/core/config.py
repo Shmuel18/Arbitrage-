@@ -51,6 +51,12 @@ class TradingParams(BaseModel):
     execute_only_best_opportunity: bool = True
     # Tier-based entry strategy
     weak_min_funding_excess: Decimal = Decimal("0.5")  # WEAK tier: funding must exceed adverse spread by this %
+    # Whitelist of entry tiers allowed. Default = empty list = no filter
+    # (preserves prior behavior: any classified tier or None passes).
+    # Set to ["top"] for TOP-only (favorable price spread + funding income).
+    # Comparison is case-insensitive; opp.entry_tier of None is rejected when
+    # the whitelist is non-empty.
+    entry_tier_whitelist: List[str] = Field(default_factory=list)
     # Post-entry validation — tolerance for price basis widening between scan and fill.
     # At 0 (default): any adverse fill basis triggers emergency close (too strict for market orders).
     # Pydantic v2 BaseModel silently drops unknown YAML fields, so this MUST be declared here

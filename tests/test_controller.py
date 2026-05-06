@@ -1263,6 +1263,123 @@ class TestTradeRecordPersistence:
         assert restored.funding_collected_usd == Decimal("0")
 
 
+# ── Entry tier whitelist (TOP-only entry option) ──
+
+class TestEntryTierWhitelist:
+    """Restrict entries to specific tiers via trading_params.entry_tier_whitelist."""
+
+    @pytest.mark.asyncio
+    async def test_blocks_when_tier_not_in_whitelist(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        config.trading_params.entry_tier_whitelist = ["top"]
+        opp = replace(sample_opportunity, entry_tier="medium")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 0
+
+    @pytest.mark.asyncio
+    async def test_allows_when_tier_in_whitelist(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        config.trading_params.entry_tier_whitelist = ["top"]
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_whitelist_allows_all(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        # Default behavior: empty list means no filter.
+        config.trading_params.entry_tier_whitelist = []
+        opp = replace(sample_opportunity, entry_tier="medium")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 1
+
+    @pytest.mark.asyncio
+    async def test_none_tier_blocked_by_active_whitelist(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        config.trading_params.entry_tier_whitelist = ["top"]
+        # entry_tier defaults to None on sample_opportunity
+        await controller.handle_opportunity(sample_opportunity)
+        assert len(controller._active_trades) == 0
+
+    @pytest.mark.asyncio
+    async def test_whitelist_is_case_insensitive(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        config.trading_params.entry_tier_whitelist = ["TOP"]
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 1
+
+
+# ── Post-fill basis sanity check (catches scan-vs-fill drift) ──
+
+class TestPostFillBasisCheck:
+    """When the scanner classifies TOP at scan time but the orderbook
+    drifts before fills land, the actual basis can be adverse. The check
+    aborts the trade before _register_trade and closes both legs.
+    Regression for WIF/USDT trade 855ab281-a02 (2026-05-06): scan
+    price_spread=-0.22% (favorable), fills cleared at +0.43% basis.
+    """
+
+    @pytest.mark.asyncio
+    async def test_aborts_when_actual_basis_exceeds_max(
+        self, controller, config, sample_opportunity,
+        mock_exchange_mgr, mock_redis,
+    ):
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # Asymmetric fills: long at 50100, short at 50000 → basis = 0.20% > 0.15%
+        mock_exchange_mgr.get("exchange_a").place_order.return_value = {
+            "id": "order-long", "filled": 0.01, "average": 50100.0,
+            "status": "closed",
+        }
+        mock_exchange_mgr.get("exchange_b").place_order.return_value = {
+            "id": "order-short", "filled": 0.01, "average": 50000.0,
+            "status": "closed",
+        }
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        # No trade registered — the post-fill abort short-circuits before
+        # _register_trade.
+        assert len(controller._active_trades) == 0
+        # Cooldown was set on the symbol.
+        mock_redis.set_cooldown.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_passes_when_basis_within_tolerance(
+        self, controller, config, sample_opportunity, mock_redis
+    ):
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # Default fixture fills: both at 50000 → basis = 0% — passes.
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 1
+
+    @pytest.mark.asyncio
+    async def test_zero_max_disables_check(
+        self, controller, config, sample_opportunity,
+        mock_exchange_mgr, mock_redis,
+    ):
+        # Setting max=0 disables the post-fill basis check entirely.
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0")
+        # Asymmetric fills with huge basis — should still register because
+        # the check is disabled.
+        mock_exchange_mgr.get("exchange_a").place_order.return_value = {
+            "id": "order-long", "filled": 0.01, "average": 51000.0,
+            "status": "closed",
+        }
+        mock_exchange_mgr.get("exchange_b").place_order.return_value = {
+            "id": "order-short", "filled": 0.01, "average": 50000.0,
+            "status": "closed",
+        }
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        assert len(controller._active_trades) == 1
+
+
 # ── Basis recovery + book re-verify guard (regression for LAB 2026-05-03) ──
 
 class TestBasisRecoveryBookGuard:

@@ -115,6 +115,21 @@ class _EntryMixin:
                 )
                 return
 
+        # ── Tier whitelist gate ──────────────────────────────────────
+        # Restrict entries to tiers configured in trading_params.entry_tier_whitelist.
+        # Default is ["top","medium","weak"] (no-op). Setting ["top"] only allows
+        # opportunities the scanner classified as TOP — i.e. price_spread_pct ≤ 0
+        # at scan time (favorable basis). Note: TOP at scan-time can still drift
+        # adverse by fill-time on thin books — the post-fill basis check below
+        # catches that.
+        _whitelist = [t.lower() for t in (tp.entry_tier_whitelist or [])]
+        if _whitelist and (opp.entry_tier or "").lower() not in _whitelist:
+            logger.info(
+                f"🚧 Skipping {opp.symbol}: tier={opp.entry_tier or 'none'} "
+                f"not in whitelist {_whitelist}"
+            )
+            return
+
         long_adapter = self._exchanges.get(opp.long_exchange)
         short_adapter = self._exchanges.get(opp.short_exchange)
 
@@ -621,6 +636,71 @@ class _EntryMixin:
                 )
                 return
 
+            # ── Post-fill basis sanity check ──────────────────────────
+            # The scanner classifies tiers using BID/ASK at scan time, but
+            # thin books drift in the seconds between scan and fill.
+            # Observed 2026-05-06 (WIF trade 855ab281-a02): scan_classified
+            # TOP at price_spread=-0.22% (favorable), fills cleared at
+            # entry_basis=+0.43% (adverse) — 0.65% drift in 3.5s latency.
+            # Catch this now and close both legs before the trade registers,
+            # so we never carry a known-adverse fill basis into the hold.
+            _max_basis = tp.max_entry_basis_spread_pct
+            if _max_basis > 0 and abs(entry_basis_pct) > _max_basis:
+                logger.error(
+                    f"🚨 [{opp.symbol}] Post-fill basis check FAILED: "
+                    f"actual_basis={float(entry_basis_pct):+.4f}% > "
+                    f"max={float(_max_basis):.4f}% "
+                    f"(scan-classified tier={opp.entry_tier}, "
+                    f"scan price_spread={float(opp.price_spread_pct):+.4f}%) — "
+                    f"closing both legs reduce-only and entering cooldown.",
+                    extra={"trade_id": trade_id, "symbol": opp.symbol,
+                           "action": "post_fill_basis_abort",
+                           "entry_basis_pct": float(entry_basis_pct),
+                           "max_allowed_pct": float(_max_basis)},
+                )
+                await asyncio.gather(
+                    self._close_orphan(
+                        long_adapter, opp.long_exchange, opp.symbol,
+                        OrderSide.SELL,
+                        {"filled": float(long_filled_qty)},
+                        long_filled_qty,
+                    ),
+                    self._close_orphan(
+                        short_adapter, opp.short_exchange, opp.symbol,
+                        OrderSide.BUY,
+                        {"filled": float(short_filled_qty)},
+                        short_filled_qty,
+                    ),
+                    return_exceptions=True,
+                )
+                await self._redis.set_cooldown(
+                    opp.symbol, tp.cooldown_after_close_seconds,
+                )
+                if self._publisher:
+                    try:
+                        await self._publisher.publish_alert(
+                            (
+                                f"🚨 Post-fill basis abort: {opp.symbol} "
+                                f"basis={float(entry_basis_pct):+.4f}% > "
+                                f"max={float(_max_basis):.4f}% — both legs closed."
+                            ),
+                            severity="warning",
+                            alert_type="post_fill_basis_abort",
+                            symbol=opp.symbol,
+                            payload={
+                                "trade_id": trade_id,
+                                "scan_tier": opp.entry_tier,
+                                "scan_price_spread_pct": float(opp.price_spread_pct),
+                                "actual_basis_pct": float(entry_basis_pct),
+                                "max_allowed_pct": float(_max_basis),
+                            },
+                        )
+                    except Exception as _alert_exc:
+                        logger.debug(
+                            f"[{opp.symbol}] post-fill abort alert failed: {_alert_exc}",
+                        )
+                return
+
             # ── Snapshot 24h quote volume on both legs ────────────────
             # Recorded at entry so the trade card can show liquidity context.
             # Failures here must not block the trade — use None on error.
@@ -741,7 +821,7 @@ class _EntryMixin:
                 f"  SHORT:     {opp.short_exchange} qty={short_filled_qty} @ ${float(entry_price_short or 0):.6f} "
                     f"| funding={sr_pct:+.4f}%\n"
                 f"  Price Spread: {float(opp.price_spread_pct):+.4f}% "
-                    f"({'favorable ✅' if opp.price_spread_pct > 0 else 'adverse ⚠️' if opp.price_spread_pct < 0 else 'neutral'})\n"
+                    f"({'favorable ✅' if opp.price_spread_pct < 0 else 'adverse ⚠️' if opp.price_spread_pct > 0 else 'neutral'})\n"
                 f"  Notional:  ${entry_notional:.2f} per leg\n"
                 f"  Spread:    {float(immediate_spread):.4f}% (immediate)\n"
                 f"  Net edge:  {float(opp.net_edge_pct):.4f}% (after fees)\n"
