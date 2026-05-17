@@ -1379,6 +1379,36 @@ class TestPostFillBasisCheck:
         await controller.handle_opportunity(opp)
         assert len(controller._active_trades) == 1
 
+    @pytest.mark.asyncio
+    async def test_favorable_basis_is_not_rejected(
+        self, controller, config, sample_opportunity,
+        mock_exchange_mgr, mock_redis,
+    ):
+        """Regression: favorable basis (negative — we got the spread going
+        our way) must NEVER trigger the abort, even when |basis| > max.
+        Earlier code used abs() and wrongly rejected favorable fills like
+        STORJ 2026-05-17 02:46/02:53 (basis=-0.48%/-0.42%).
+        """
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # Long fill 0.5% BELOW short → entry_basis = -0.5% (favorable).
+        # |basis|=0.5% > max=0.15%, but direction is favorable: must pass.
+        mock_exchange_mgr.get("exchange_a").place_order.return_value = {
+            "id": "order-long", "filled": 0.01, "average": 49750.0,
+            "status": "closed",
+        }
+        mock_exchange_mgr.get("exchange_b").place_order.return_value = {
+            "id": "order-short", "filled": 0.01, "average": 50000.0,
+            "status": "closed",
+        }
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+        # Favorable basis → trade should register normally.
+        assert len(controller._active_trades) == 1
+        trade = list(controller._active_trades.values())[0]
+        # Sanity-check the recorded basis sign.
+        assert trade.entry_basis_pct is not None
+        assert trade.entry_basis_pct < Decimal("0")
+
 
 # ── Basis recovery + book re-verify guard (regression for LAB 2026-05-03) ──
 

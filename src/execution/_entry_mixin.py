@@ -644,8 +644,17 @@ class _EntryMixin:
             # entry_basis=+0.43% (adverse) — 0.65% drift in 3.5s latency.
             # Catch this now and close both legs before the trade registers,
             # so we never carry a known-adverse fill basis into the hold.
+            #
+            # IMPORTANT: only adverse drift is rejected. entry_basis_pct
+            # convention is (long-short)/short — positive = adverse (long
+            # paid > short received → embedded loss if basis converges),
+            # negative = favorable (we got the basis going our way and
+            # can profit on it). The earlier implementation used abs(),
+            # which incorrectly rejected favorable fills like STORJ
+            # (2026-05-17 02:46/02:53: basis=-0.48%/-0.42% — both
+            # favorable, both wrongly aborted, $ left on the table).
             _max_basis = tp.max_entry_basis_spread_pct
-            if _max_basis > 0 and abs(entry_basis_pct) > _max_basis:
+            if _max_basis > 0 and entry_basis_pct > _max_basis:
                 logger.error(
                     f"🚨 [{opp.symbol}] Post-fill basis check FAILED: "
                     f"actual_basis={float(entry_basis_pct):+.4f}% > "
