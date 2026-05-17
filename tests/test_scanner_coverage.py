@@ -413,6 +413,68 @@ class TestEvaluateDirection:
         )
         assert opp is None
 
+    # ── Price anomaly gate (data-corruption guard) ───────────────
+
+    @pytest.mark.asyncio
+    async def test_price_anomaly_rejects_extreme_positive_spread(
+        self, config,
+    ) -> None:
+        """|price_spread| > max_price_spread_anomaly_pct → reject with
+        disqualify_reason='price_anomaly' (regression for EDGE -90% case).
+        """
+        config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.max_price_spread_anomaly_pct = Decimal("5.0")
+        opp = await self._eval(
+            config,
+            long_rate=Decimal("-0.005"),
+            short_rate=Decimal("0.005"),
+            # 100% positive spread (50000 vs 100000) = adverse anomaly
+            long_price=100000.0,
+            short_price=50000.0,
+        )
+        assert opp is not None
+        assert opp.qualified is False
+        assert opp.disqualify_reason == "price_anomaly"
+
+    @pytest.mark.asyncio
+    async def test_price_anomaly_rejects_extreme_negative_spread(
+        self, config,
+    ) -> None:
+        """Symmetric: |price_spread|=−90% (EDGE case) also rejected as
+        anomaly even though the math direction is 'favorable'. Such
+        extremes always indicate data corruption."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.max_price_spread_anomaly_pct = Decimal("5.0")
+        opp = await self._eval(
+            config,
+            long_rate=Decimal("-0.005"),
+            short_rate=Decimal("0.005"),
+            # ~ -90% spread — the EDGE/gateio case
+            long_price=5000.0,
+            short_price=50000.0,
+        )
+        assert opp is not None
+        assert opp.qualified is False
+        assert opp.disqualify_reason == "price_anomaly"
+
+    @pytest.mark.asyncio
+    async def test_price_anomaly_disabled_when_threshold_zero(
+        self, config,
+    ) -> None:
+        """Setting max_price_spread_anomaly_pct = 0 disables the gate."""
+        config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.max_price_spread_anomaly_pct = Decimal("0")
+        opp = await self._eval(
+            config,
+            long_rate=Decimal("-0.005"),
+            short_rate=Decimal("0.005"),
+            long_price=100000.0,   # would normally be flagged
+            short_price=50000.0,
+        )
+        # No anomaly reason should be set when gate is disabled.
+        assert opp is not None
+        assert opp.disqualify_reason != "price_anomaly"
+
     # ── POT mode (both sides income) ─────────────────────────────
 
     @pytest.mark.asyncio

@@ -566,7 +566,28 @@ class _ScannerEvaluatorMixin:
         # Surface why the gate rejected so the UI can render a specific
         # badge instead of the generic "below 0.3%" label.
         _disq_reason: Optional[str] = None
-        if long_stale or short_stale:
+        # Sanity floor on cross-exchange price spread. Beyond the configured
+        # cap (default ±5%) we treat the opportunity as data corruption —
+        # stale price, wrong contract, decimal scaling bug. Observed
+        # 2026-05-05 EDGE/USDT (gateio↔others) ran price_spread=-90% across
+        # the dashboard for hours because of a contract mismatch on gateio;
+        # without this gate it was always one config tweak away from getting
+        # entered. The flag also blocks cherry_pick rescue further down.
+        _price_anomalous = (
+            tp.max_price_spread_anomaly_pct > 0
+            and abs(price_spread_pct) > tp.max_price_spread_anomaly_pct
+        )
+        if _price_anomalous:
+            hold_qualified = False
+            _disq_reason = "price_anomaly"
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"[{symbol}] Price anomaly: spread="
+                    f"{float(price_spread_pct):+.4f}% exceeds ±"
+                    f"{float(tp.max_price_spread_anomaly_pct):.2f}% cap "
+                    f"— likely data corruption, skipping"
+                )
+        elif long_stale or short_stale:
             hold_qualified = False
             _disq_reason = "funding_stale"
         elif not (long_imminent or short_imminent):
@@ -704,7 +725,12 @@ class _ScannerEvaluatorMixin:
                         minutes_until_income = ms_until_income / 60_000
 
                         _MIN_INCOME_MINUTES = 2.0
-                        if (minutes_until_cost >= _MIN_WINDOW_MINUTES
+                        # Never let cherry_pick rescue an opportunity flagged
+                        # by the price-anomaly gate above — the underlying
+                        # price math is unreliable regardless of funding.
+                        if _price_anomalous:
+                            pass
+                        elif (minutes_until_cost >= _MIN_WINDOW_MINUTES
                                 and minutes_until_income >= _MIN_INCOME_MINUTES
                                 and (minutes_until_cost - minutes_until_income) >= _MIN_CHERRY_GAP_MINUTES
                                 and minutes_until_income < minutes_until_cost

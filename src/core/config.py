@@ -62,6 +62,16 @@ class TradingParams(BaseModel):
     # Pydantic v2 BaseModel silently drops unknown YAML fields, so this MUST be declared here
     # (using hasattr() as a fallback produces Decimal("0") and triggers false rejections).
     max_entry_basis_spread_pct: Decimal = Decimal("0.15")  # 0.15% tolerance for altcoin slippage
+    # Scanner-side sanity gate on cross-exchange price spread. Genuine arb
+    # opportunities show very small price spreads between exchanges (sub-1%);
+    # spreads in the 5-100% range almost always mean DATA CORRUPTION (stale
+    # price, wrong contract, decimal scaling bug — e.g. EDGE on gateio scored
+    # price_spread=-90% in 2026-05-05 because the bot was reading a different
+    # contract). Opportunities with |price_spread_pct| above this cap are
+    # disqualified with reason="price_anomaly" before entering. Set to 0 to
+    # disable. Symmetric — both adverse +X% and "favorable" -X% extremes are
+    # rejected since both indicate the same underlying data issue.
+    max_price_spread_anomaly_pct: Decimal = Decimal("5.0")
     # Exit strategy
     profit_target_pct: Decimal = Decimal("0.7")  # Exit at 0.7% profit on notional
     exit_slippage_buffer_pct: Decimal = Decimal("0.3")  # Extra margin deducted from PnL before profit target check

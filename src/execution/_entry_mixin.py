@@ -162,10 +162,13 @@ class _EntryMixin:
         tier_emoji = {"top": "🏆", "medium": "📊", "bad": "⚠️"}.get(tier or "", "")
 
         # ── Minimum time-to-funding guard ────────────────────────────────
-        # Never enter if funding is < 120 seconds away. At that point the
-        # order placement + settlement overhead risks straddling the payment
-        # boundary, causing negative or missed funding.
-        _MIN_ENTRY_SECS_BEFORE_FUNDING = 120
+        # Never enter if funding is too close. At that point the order
+        # placement + settlement overhead risks straddling the payment
+        # boundary, causing negative or missed funding. Was hardcoded 120s
+        # for months — now reads from tp.min_entry_secs_before_funding so
+        # ops can tune per market without redeploys (the config field was
+        # declared but unused before this fix).
+        _MIN_ENTRY_SECS_BEFORE_FUNDING = tp.min_entry_secs_before_funding
 
         if tier in ("top", "medium", "bad"):
             # All tiers: require entry within entry_offset_seconds window before funding

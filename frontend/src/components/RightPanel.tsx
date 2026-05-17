@@ -51,6 +51,9 @@ const DISQ_REASON_EMOJI: Record<string, string> = {
   funding_no_imminent: '⏱️',
   funding_stale:       '🕰️',
   cherry_unsuitable:   '🍒',
+  // Data-corruption gate: scanner saw |price_spread| > max_price_spread_anomaly_pct
+  // (default 5%). Almost always means stale price or wrong contract on one leg.
+  price_anomaly:       '🛑',
 };
 
 /* ── Opportunity table column definitions ────────────────────── */

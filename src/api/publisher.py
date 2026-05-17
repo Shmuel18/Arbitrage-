@@ -210,13 +210,29 @@ class APIPublisher:
         # Fan out to Telegram — strictly fire-and-forget so a slow/failed
         # sendMessage never blocks the caller (which may be inside the
         # hot trading path). Errors are swallowed inside send_alert().
+        # Task is named + has a done callback per CLAUDE.md so failures
+        # are logged instead of vanishing silently.
         if self._telegram is not None:
             try:
-                asyncio.create_task(self._enrich_and_send_telegram(entry))
+                _alert_type = entry.get("type") or "alert"
+                _tg_task = asyncio.create_task(
+                    self._enrich_and_send_telegram(entry),
+                    name=f"telegram-{_alert_type}",
+                )
+                _tg_task.add_done_callback(self._telegram_task_done)
             except RuntimeError:
                 # No running loop (sync test context). Skip — Redis write
                 # above is the durable record; Telegram is best-effort.
                 pass
+
+    @staticmethod
+    def _telegram_task_done(t: asyncio.Task) -> None:
+        """Log failures from fire-and-forget Telegram fan-out tasks."""
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc:
+            logger.debug("Telegram fan-out task failed: %s", exc)
 
     async def _enrich_and_send_telegram(self, entry: Dict[str, Any]) -> None:
         """Wrap send_alert with payload enrichment for trade_close events.
