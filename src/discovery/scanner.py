@@ -151,6 +151,14 @@ class Scanner(_ScannerEvaluatorMixin):
         # The hot-scan loop injects these on its 1s timeout so they are
         # re-evaluated every second until they enter (or pass) the window.
         self._near_window_watch: set[str] = set()
+        # Dedicated 1s sniper loop for near_window_watch symbols. The existing
+        # hot-scan path depends on the WS price queue + 1s timeout fallback,
+        # but in practice has been unreliable for low-volume symbols (SYS on
+        # 2026-05-19: in near_window_watch from 07:41:54 but didn't fire until
+        # scan_all reached it 5+ min later at 07:47:20). The sniper runs
+        # *independently*, forcibly re-evaluating every near-window symbol on
+        # a strict 1s tick, regardless of whether WS ticks are arriving.
+        self._sniper_task: Optional[asyncio.Task] = None
         # P3-4: Top-50 candidate pool maintained by scan_all. Hot-scan
         # combines fresh hot evals with this pool to compute the displayed
         # top-5 within ~1 s of any state change, instead of waiting for
@@ -390,6 +398,15 @@ class Scanner(_ScannerEvaluatorMixin):
             self._ob_refresh_loop(), name="ob-refresh"
         )
         self._ob_refresh_task.add_done_callback(_ob_refresh_task_done)
+
+        # Run sniper loop: dedicated 1s fast-path for near_window_watch symbols.
+        # Safety-net for the WS-driven hot-scan, which has been unreliable for
+        # low-volume symbols (see SYS on 2026-05-19: 5min late). Hot-scan stays
+        # alive — sniper is purely additive.
+        self._sniper_task = asyncio.create_task(
+            self._sniper_loop(callback), name="sniper"
+        )
+        self._sniper_task.add_done_callback(_hot_scan_task_done)
 
         logger.info(
             f"Scanner started (interval: {scan_interval}s, WebSocket monitoring {len(all_symbols)} symbols)",
@@ -804,6 +821,8 @@ class Scanner(_ScannerEvaluatorMixin):
             self._hot_scan_task.cancel()
         if self._ob_refresh_task and not self._ob_refresh_task.done():
             self._ob_refresh_task.cancel()
+        if self._sniper_task and not self._sniper_task.done():
+            self._sniper_task.cancel()
         # Cancel all WebSocket watcher tasks via the adapter's public method,
         # which avoids accessing private attributes from outside the class.
         for adapter in self._exchanges.all().values():
@@ -1060,6 +1079,90 @@ class Scanner(_ScannerEvaluatorMixin):
                 return
             except Exception as exc:
                 logger.warning(f"[hot-scan] Unexpected loop error: {exc}")
+
+    # ── Sniper loop (near-window fast-path) ─────────────────────
+
+    async def _sniper_loop(self, callback) -> None:
+        """Dedicated 1s sniper loop for near_window_watch symbols.
+
+        The WS-driven hot-scan has proven unreliable for low-volume symbols:
+        on 2026-05-19 SYS/USDT was in near_window_watch from 07:41:54 but
+        hot-scan never fired for it. Entry came via the slow scan_all path
+        at 07:47:20 — over 5 minutes after first becoming eligible.
+
+        This loop is *additive* — runs alongside hot-scan and scan_all — and
+        forces re-evaluation of every near-window symbol every second using
+        ``_scan_symbol`` directly. When a symbol qualifies it dispatches the
+        entry callback immediately. The existing ``_hot_cb_last_fire`` 10s
+        per-route debounce is honored to avoid double-dispatch with hot-scan.
+
+        Cost: ``_scan_symbol(cheap=True)`` is WS-cache only (no REST) for the
+        common path — typically <50ms per symbol. With a watch set of ~5
+        symbols this is ~250ms work every 1s = ~25% of one core, well within
+        budget.
+        """
+        _SNIPER_INTERVAL_SEC = 1.0
+        while self._running:
+            try:
+                await asyncio.sleep(_SNIPER_INTERVAL_SEC)
+                # Snapshot to avoid mutation races with scan_all rebuilding the set.
+                watch = set(self._near_window_watch)
+                if not watch:
+                    continue
+                if not self._common_symbols_cache:
+                    continue
+                sniper_symbols = watch & self._common_symbols_cache
+                if not sniper_symbols:
+                    continue
+                adapters = self._exchanges.all()
+                exchange_ids = list(adapters.keys())
+                if len(exchange_ids) < 2:
+                    continue
+                cooled_symbols = await self._redis.get_cooled_down_symbols(
+                    list(sniper_symbols)
+                )
+                for symbol in sniper_symbols:
+                    try:
+                        opps = await self._scan_symbol(
+                            symbol, adapters, exchange_ids, cooled_symbols, cheap=True,
+                        )
+                        for opp in opps:
+                            if not opp.qualified:
+                                continue
+                            route_key = (
+                                f"{opp.symbol}|{opp.long_exchange}|{opp.short_exchange}"
+                            )
+                            # Honor the same per-route cooldown that hot-scan uses
+                            # so we don't double-dispatch if hot-scan also catches it.
+                            _now = time.monotonic()
+                            _last = self._hot_cb_last_fire.get(route_key, 0.0)
+                            if _now - _last < _HOT_CALLBACK_COOLDOWN_SEC:
+                                continue
+                            self._hot_cb_last_fire[route_key] = _now
+                            logger.info(
+                                f"🎯 [sniper] {opp.symbol} "
+                                f"{opp.long_exchange}↔{opp.short_exchange} "
+                                f"net={opp.net_edge_pct:.4f}% "
+                                f"price_spread={opp.price_spread_pct:+.4f}% — "
+                                f"firing entry (near_window fast-path)",
+                                extra={
+                                    "action": "sniper_fire",
+                                    "symbol": opp.symbol,
+                                },
+                            )
+                            _t = asyncio.create_task(
+                                callback(opp),
+                                name=f"sniper-entry:{symbol}",
+                            )
+                            _t.add_done_callback(_hot_entry_task_done)
+                    except asyncio.CancelledError:
+                        return
+                    except Exception as exc:
+                        logger.debug(f"[sniper] {symbol} eval error: {exc}")
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.warning(f"[sniper] Unexpected loop error: {exc}")
 
     # ── Mini-OB refresh loop ────────────────────────────────────
 
