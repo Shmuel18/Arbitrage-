@@ -290,7 +290,10 @@ class _FundingCacheMixin:
                 if next_ts <= now_ms:
                     while next_ts <= now_ms:
                         next_ts += interval_ms
-                    cached["next_timestamp"] = next_ts
+                    # Return a copy with the advanced timestamp rather than mutating
+                    # the shared cache entry — a concurrent WS push (_update_funding_cache)
+                    # can overwrite this dict while a caller still holds the reference.
+                    cached = {**cached, "next_timestamp": next_ts}
         # Guard f-string formatting: called ~1000×/scan, skip when not in DEBUG mode.
         if cached and logger.isEnabledFor(logging.DEBUG):
             logger.debug(

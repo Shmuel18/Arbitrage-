@@ -87,9 +87,10 @@ class _BotCommands:
         self._allowed: List[int] = list(cfg.allowed_user_ids)
 
     def _is_allowed(self, user_id: int) -> bool:
-        # Empty allowlist = allow anyone who can DM the bot. Once the user
-        # knows their own ID (printed in reply to /start) they can lock it down.
-        return not self._allowed or user_id in self._allowed
+        # Deny-by-default: an empty allowlist authorizes NO ONE. Users learn
+        # their own ID from the access-denied reply (see dispatch) and add it
+        # to TELEGRAM_ALLOWED_USER_IDS to authorize themselves.
+        return user_id in self._allowed
 
     async def dispatch(
         self, session: aiohttp.ClientSession, message: Dict[str, Any],
@@ -151,8 +152,8 @@ class _BotCommands:
                 for r in raws or []:
                     try:
                         history.append(json.loads(r) if isinstance(r, (str, bytes)) else r)
-                    except Exception:
-                        pass
+                    except (json.JSONDecodeError, TypeError):
+                        logger.debug("skipping malformed AI history entry")
             except Exception as exc:  # noqa: BLE001
                 logger.debug("history load failed: %s", exc)
 
@@ -176,9 +177,9 @@ class _BotCommands:
                 await self._redis.expire(hist_key, 86400)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("history persist failed: %s", exc)
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("/ask failed")
-            answer = f"🤖 Error: <code>{str(exc)[:200]}</code>"
+            answer = "🤖 Error processing your question — please try again."
         await self._send(session, chat_id, answer)
 
     async def _cmd_start(
@@ -284,6 +285,12 @@ async def bot_commands_loop(
 
     logger.info("Telegram command loop started (mini_app=%s)",
                 "yes" if mini_app_url else "no")
+    if not cfg.allowed_user_ids:
+        logger.warning(
+            "Telegram allowlist is EMPTY — all inbound commands will be denied. "
+            "DM the bot to see your Telegram ID in the access-denied reply, then "
+            "set TELEGRAM_ALLOWED_USER_IDS to authorize yourself."
+        )
 
     async with aiohttp.ClientSession() as session:
         while not shutdown_event.is_set():

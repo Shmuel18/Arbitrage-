@@ -696,9 +696,9 @@ async def _answer_with_gemini(
     except _ProviderQuotaError:
         # Let the outer dispatcher fall through to the next provider
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("Gemini request failed")
-        return f"🤖 Gemini error: <code>{str(exc)[:300]}</code>"
+        return "🤖 Gemini request failed — please try again."
 
 
 # ── Groq provider (free) ───────────────────────────────────────
@@ -849,4 +849,4 @@ async def _answer_with_groq(
         if _is_tool_schema_error(exc):
             raise _ProviderToolError(str(exc)) from exc
         logger.exception("Groq request failed")
-        return f"🤖 Groq error: <code>{str(exc)[:300]}</code>"
+        return "🤖 Groq request failed — please try again."

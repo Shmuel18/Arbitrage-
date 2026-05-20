@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
 from contextlib import asynccontextmanager
+import hmac
 import logging
 import os
 import asyncio
@@ -128,7 +129,9 @@ async def request_id_middleware(request: Request, call_next):
             response.headers["X-Request-ID"] = req_id
             response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.2f}"
 
-# CORS middleware — restrict to known origins; falls back to ["*"] if env not set
+# CORS middleware — restrict to known origins. When CORS_ORIGINS is unset it
+# falls back to the localhost dev origins below (NOT "*"), which is required
+# because allow_credentials=True is incompatible with a wildcard origin.
 _cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 app.add_middleware(
     CORSMiddleware,
@@ -267,7 +270,7 @@ async def health_check(
     if redis_client:
         try:
             redis_ok = await redis_client.health_check()
-        except Exception:
+        except Exception:  # health probe must never raise — any error means "down"
             redis_ok = False
 
     uptime_s = (datetime.now(timezone.utc) - _start_time).total_seconds()
@@ -337,7 +340,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     cookies = getattr(websocket, "cookies", {})
     token_candidate = cookies.get("trinity_ws_token")
-    if token_candidate != expected:
+    if not (token_candidate and hmac.compare_digest(token_candidate, expected)):
         await websocket.close(code=1008, reason="Unauthorized")
         logger.warning("WebSocket connection rejected: invalid token")
         return

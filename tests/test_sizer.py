@@ -162,8 +162,10 @@ class TestPositionSizer:
         result = await sizer.compute(_make_opp("50000"), long_a, short_a)
         assert result is not None
         _, notional, _, _ = result
-        # 100 × 1.0 × 5 = 500 (using min leverage = 5)
-        assert notional == Decimal("500")
+        # Min leverage = 5 → raw notional 100 × 1.0 × 5 = 500, i.e. margin = 100 =
+        # 100% of free balance. The 90% margin-safety cap reduces that to margin 90,
+        # so notional = 90 × 5 = 450. (Had it wrongly used the 10x leg, it would be 900.)
+        assert notional == Decimal("450")
 
     async def test_qty_minimum_is_one_lot(self):
         # If calculated qty is below one lot the sizer must return None (skip trade)

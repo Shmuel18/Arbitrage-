@@ -16,7 +16,12 @@ import hashlib
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
-from ..auth import require_command_token, require_config_token, require_emergency_token
+from ..auth import (
+    require_command_token,
+    require_config_token,
+    require_emergency_token,
+    require_read_token,
+)
 from ..deps import require_redis_client
 
 logger = logging.getLogger("trinity.api.controls")
@@ -119,7 +124,9 @@ def _validate_config_update_value(key: str, value: Any) -> Any:
                 status_code=400,
                 detail=f"{key} out of range ({min_v} - {max_v})",
             )
-        return float(numeric)
+        # Persist as a string so the bot can round-trip through Decimal without
+        # float imprecision — these values feed the trading loop.
+        return str(numeric)
 
     if key in {"strategy", "mode"}:
         if not isinstance(value, str) or not value.strip():
@@ -257,6 +264,7 @@ async def emergency_stop(
 @router.get("/exchanges")
 async def get_exchanges(
     redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_read_token),
 ):
     """Get exchange statuses"""
     try:

@@ -90,6 +90,19 @@ def _asyncio_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -
     loop.default_exception_handler(context)
 
 
+def _task_done_handler(task: asyncio.Task) -> None:
+    """Log unexpected exits of long-lived background tasks.
+
+    CLAUDE.md requires every create_task to carry a done callback so a crash
+    mid-run is surfaced immediately instead of sitting unretrieved on the task.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error(f"Task {task.get_name()} exited with error: {exc}")
+
+
 async def main() -> None:
     # ── Suppress ccxt WS ping-pong noise ─────────────────────────
     asyncio.get_running_loop().set_exception_handler(_asyncio_exception_handler)
@@ -263,20 +276,13 @@ async def main() -> None:
         uvicorn_server = uvicorn.Server(uvicorn_config)
 
         api_task = asyncio.create_task(uvicorn_server.serve(), name="api-server")
+        api_task.add_done_callback(_task_done_handler)
         # Start the WebSocket broadcast loop (extracted to BroadcastService)
         broadcast_svc = BroadcastService(ws_manager, redis)
         broadcast_task = asyncio.create_task(
             broadcast_svc.run_forever(), name="ws-broadcast",
         )
-
-        def _broadcast_done(t: asyncio.Task) -> None:
-            if t.cancelled():
-                return
-            exc = t.exception()
-            if exc:
-                logger.error(f"Task {t.get_name()} failed: {exc}")
-
-        broadcast_task.add_done_callback(_broadcast_done)
+        broadcast_task.add_done_callback(_task_done_handler)
         logger.info("Embedded API server started on port 8000",
                     extra={"action": "api_started"})
 
@@ -299,10 +305,12 @@ async def main() -> None:
     scan_task = asyncio.create_task(
         scanner.start(controller.handle_opportunity), name="scanner",
     )
+    scan_task.add_done_callback(_task_done_handler)
     
     # ── Run status publisher in background ─────────────────────────
     status_pub = StatusPublisher(cfg, mgr, controller, redis, publisher, shutdown_event)
     status_task = asyncio.create_task(status_pub.run(), name="status_publisher")
+    status_task.add_done_callback(_task_done_handler)
 
     # ── Daily summary (Telegram) ─────────────────────────────────
     summary_task = None
@@ -312,6 +320,7 @@ async def main() -> None:
             daily_summary_loop(publisher, redis, cfg.telegram, shutdown_event),
             name="daily_summary",
         )
+        summary_task.add_done_callback(_task_done_handler)
 
     # ── Telegram command loop (inbound /start /status /menu) ────
     bot_cmd_task = None
@@ -322,6 +331,7 @@ async def main() -> None:
                               mini_app_url=cfg.telegram.mini_app_url),
             name="telegram_commands",
         )
+        bot_cmd_task.add_done_callback(_task_done_handler)
 
     logger.info("Bot is running — press Ctrl+C to stop")
     await shutdown_event.wait()

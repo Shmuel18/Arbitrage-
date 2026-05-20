@@ -52,9 +52,9 @@ async def chat(
     """
     try:
         from src.notifications.ai_assistant import answer_question, _resolve_provider
-    except ImportError as exc:
+    except ImportError:
         logger.exception("AI assistant import failed")
-        raise HTTPException(status_code=500, detail=f"AI module missing: {exc}")
+        raise HTTPException(status_code=500, detail="AI service unavailable")
 
     provider = _resolve_provider()
     if provider == "none":
@@ -74,8 +74,8 @@ async def chat(
             lang=body.lang,
             history=history,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("AI chat failed")
-        raise HTTPException(status_code=502, detail=f"AI error: {exc}")
+        raise HTTPException(status_code=502, detail="AI request failed")
 
     return ChatResponse(answer=answer, provider=provider)

@@ -101,7 +101,7 @@ const RecentTradesPanel: React.FC<RecentTradesPanelProps> = ({ trades, tradesLoa
                   <td className="text-end mono">{formatPnl(tr.total_pnl)}</td>
                   <td className="text-end mono col-hide-sm">
                     <span className={`nx-trades-funding ${fundingNet >= 0 ? 'nx-trades-pnl--positive' : 'nx-trades-pnl--negative'}`}>
-                      {fundingNet >= 0 ? '+' : ''}{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(fundingNet)}
+                      {fundingNet >= 0 ? '+' : ''}{formatCurrency(fundingNet)}
                     </span>
                   </td>
                   <td className="text-end" style={{ whiteSpace: 'nowrap' }}>

@@ -192,7 +192,7 @@ class PositionSizer:
             )
             return None
 
-        qty_rounded = Decimal(str(round(float(steps * lot), 8)))
+        qty_rounded = (steps * lot).quantize(Decimal("1E-8"))
         order_qty = qty_rounded
 
         # Margin safety validation — some exchanges (e.g. GateIO) apply higher
@@ -214,7 +214,7 @@ class PositionSizer:
                     f"Even 1 lot requires ${float(lot * _price_for_sizing / _lev_dec):.2f}."
                 )
                 return None
-            qty_rounded = Decimal(str(round(float(_safe_steps * lot), 8)))
+            qty_rounded = (_safe_steps * lot).quantize(Decimal("1E-8"))
             order_qty = qty_rounded
             notional = order_qty * _price_for_sizing
             logger.warning(

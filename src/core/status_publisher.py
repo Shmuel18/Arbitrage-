@@ -16,7 +16,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.core.logging import get_logger
 from src.discovery.calculator import calculate_funding_spread
@@ -448,7 +448,7 @@ class StatusPublisher:
                             "realized": point.get("realized", 0),
                             "timestamp": float(score),
                         })
-                    except Exception as exc:
+                    except (json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
                         logger.debug(f"PnL data-point parse failed: {exc}")
             pnl_payload = {
                 "data_points": data_points,

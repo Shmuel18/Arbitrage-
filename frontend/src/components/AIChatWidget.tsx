@@ -107,8 +107,9 @@ export const AIChatWidget: React.FC = () => {
       const resp = await api.post('/ai/chat', { question, lang, history });
       const answer: string = resp.data?.answer || '(empty)';
       setMessages((prev) => [...prev, { role: 'ai', text: answer, ts: Date.now() }]);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail || err?.message || 'Request failed';
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      const detail = e?.response?.data?.detail || e?.message || 'Request failed';
       setMessages((prev) => [
         ...prev,
         { role: 'ai', text: detail, ts: Date.now(), error: true },

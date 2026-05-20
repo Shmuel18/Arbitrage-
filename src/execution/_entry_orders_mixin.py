@@ -1,9 +1,9 @@
 """
-Entry order execution mixin — extracted from _entry_mixin.py.
-Contains _EntryOrdersMixin with _execute_entry_orders().
+Entry order-execution mixin — order-placement helpers split out of
+_entry_mixin.py to keep each file under the size limit.
 
-Do NOT import this module directly; _EntryMixin inherits from it,
-and ExecutionController inherits from _EntryMixin.
+Do NOT import this module directly; ``_EntryMixin`` inherits from
+``_EntryOrdersMixin``, and ``ExecutionController`` inherits from ``_EntryMixin``.
 """
 from __future__ import annotations
 
@@ -11,286 +11,300 @@ import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
-from src.core.contracts import (
-    OpportunityCandidate,
-    OrderRequest,
-    OrderSide,
-    TradeRecord,
-)
+from src.core.contracts import OrderRequest, OrderSide
 from src.core.logging import get_logger
 from src.execution import helpers as _h
 
 if TYPE_CHECKING:
-    pass  # all attribute access via self (mixin pattern)
+    from src.core.contracts import OpportunityCandidate
 
 logger = get_logger("execution")
 
 _ONE: Decimal = Decimal("1")
 _FALLBACK_LOT: Decimal = Decimal("0.001")  # last-resort lot step when spec is missing
+_ENTRY_LIQUIDITY_TIMEOUT_SEC: float = 3.0  # bound the pre-entry order-book depth check
 
 
 class _EntryOrdersMixin:
     """Order-placement helpers for trade entry — inherited by _EntryMixin."""
 
-    async def _execute_entry_orders(
+    async def _check_pre_entry_liquidity(
         self,
-        opp: OpportunityCandidate,
+        opp: "OpportunityCandidate",
         long_adapter,
         short_adapter,
-    ) -> Optional[dict]:
-        """Execute sizing, order placement, fill verification, and delta correction.
+        order_qty: Decimal,
+    ) -> bool:
+        """Fresh order-book depth gate, run immediately before placing orders.
 
-        Returns None if entry should be aborted; otherwise returns a dict with
-        all fill data needed to construct a TradeRecord:
-          order_qty, long_filled_qty, short_filled_qty,
-          entry_price_long, entry_price_short, entry_fees,
-          long_spec, short_spec, entry_basis_pct
+        Returns False (skip entry) if either leg's live book cannot absorb
+        ``order_qty`` in one shot, or if the depth fetch errors/times out.
+        Prevention at entry is cheaper than a post-fill emergency unwind (2× fees).
+        The long leg is a BUY (walks asks); the short leg is a SELL (walks bids).
         """
-        # ── Position sizing ──────────────────────────────────────
-        sizing = await self._sizer.compute(opp, long_adapter, short_adapter)
-        if sizing is None:
-            return None
-        order_qty, notional, long_spec, short_spec = sizing
-
-        # ── Pre-apply trading settings on BOTH exchanges CONCURRENTLY ──
-        await asyncio.gather(
-            long_adapter.ensure_trading_settings(opp.symbol),
-            short_adapter.ensure_trading_settings(opp.symbol),
-        )
-        # ── Pre-entry order book depth + VWAP check (P0-2) ──────────────
-        # Placed HERE (after settings, immediately before the first order) to
-        # minimise the adverse-selection window: scanner snapshot → settings
-        # → FRESH L1 snapshot → first order. The prior location (before sizing
-        # and settings) left a 400ms–1.4s gap during which price could move.
-        if not await self._check_pre_entry_liquidity(opp, long_adapter, short_adapter, order_qty):
-            return None
-        # NOTE: grace period (mark_trade_opened) is set AFTER both legs fill
-        # — see below the "🔓 Trade FULLY OPEN" log. Setting it here (before any
-        # orders) created a 60-second delta-skip window while long was open
-        # and short had not yet been placed (P0-2).
-
-        # ── Place long order ─────────────────────────────────────
-        long_fill = await self._place_with_timeout(
-            long_adapter,
-            OrderRequest(
-                exchange=opp.long_exchange,
-                symbol=opp.symbol,
-                side=OrderSide.BUY,
-                quantity=order_qty,
-                reduce_only=False,
-            ),
-        )
-        if not long_fill:
-            # asyncio.wait_for may cancel the coroutine but the order could have filled
-            try:
-                _long_positions = await long_adapter.get_positions(opp.symbol)
-                _long_pos = next(
-                    (p for p in _long_positions if p.side == OrderSide.BUY), None,
-                )
-            except Exception as _lpe:
-                logger.warning(
-                    f"[{opp.symbol}] Position check on {opp.long_exchange} "
-                    f"after timeout failed: {_lpe}",
-                )
-                _long_pos = None
-
-            if _long_pos and _long_pos.quantity > 0:
-                logger.warning(
-                    f"⚠️ [{opp.symbol}] Long order FILLED despite timeout on "
-                    f"{opp.long_exchange}: qty={_long_pos.quantity} — "
-                    f"closing orphan immediately",
-                )
-                _synth_fill = {
-                    "filled": float(_long_pos.quantity),
-                    "average": float(_long_pos.entry_price),
-                }
-                await self._close_orphan(
-                    long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, _synth_fill, _long_pos.quantity,
-                )
-            return None
-
-        # ── Zero-fill guard (long) ────────────────────────────────
-        long_raw_filled = float(long_fill.get("filled", 0))
-        if long_raw_filled <= 0:
-            logger.error(
-                f"❌ [{opp.symbol}] Long ZERO-FILL on {opp.long_exchange}: "
-                f"order accepted but nothing executed (filled={long_raw_filled}). "
-                f"Aborting entry.",
-                extra={"symbol": opp.symbol, "exchange": opp.long_exchange, "action": "zero_fill"},
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    long_adapter.get_vwap_and_depth(opp.symbol, order_qty, side="buy"),
+                    short_adapter.get_vwap_and_depth(opp.symbol, order_qty, side="sell"),
+                    return_exceptions=True,
+                ),
+                timeout=_ENTRY_LIQUIDITY_TIMEOUT_SEC,
             )
-            await self._redis.set_cooldown(opp.symbol, 300)
-            # P2: Zero-fill is exchange-specific (the long exchange rejected the order);
-            # route cooldown prevents retry on this pair, symbol stays open for other routes.
-            await self._redis.set_route_cooldown(
-                opp.symbol, opp.long_exchange, opp.short_exchange, 300, reason="zero_fill_long",
-            )
-            return None
-
-        long_adapter.update_taker_fee_from_fill(opp.symbol, long_fill)
-
-        # ── Sync-Fire: adjust short qty to long's ACTUAL filled qty ──
-        long_actual_filled = Decimal(str(long_fill["filled"]))
-        is_partial_fill = long_actual_filled < order_qty
-        if is_partial_fill:
+        except asyncio.TimeoutError:
             logger.warning(
-                f"⚠️ [{opp.symbol}] PARTIAL FILL DETECTED: "
-                f"Long filled {long_actual_filled} / {order_qty} — "
-                f"Sync-Fire: adjusting short order to {long_actual_filled}"
+                f"⏱️ [{opp.symbol}] Pre-entry depth check timed out "
+                f"({_ENTRY_LIQUIDITY_TIMEOUT_SEC}s) — skipping entry (fail-closed)",
+                extra={"symbol": opp.symbol, "action": "pre_entry_liquidity_timeout"},
             )
-            short_order_qty = long_actual_filled
-        else:
-            short_order_qty = order_qty
+            return False
 
-        # ── Place short order ─────────────────────────────────────
-        short_fill = await self._place_with_timeout(
-            short_adapter,
-            OrderRequest(
-                exchange=opp.short_exchange,
-                symbol=opp.symbol,
-                side=OrderSide.SELL,
-                quantity=short_order_qty,
-                reduce_only=False,
-            ),
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning(
+                    f"🚫 [{opp.symbol}] Pre-entry depth check failed ({r}) — "
+                    f"skipping entry (fail-closed)",
+                    extra={"symbol": opp.symbol, "action": "pre_entry_liquidity_error"},
+                )
+                return False
+
+        (_, long_ok), (_, short_ok) = results
+        if not (long_ok and short_ok):
+            logger.warning(
+                f"🚫 [{opp.symbol}] Insufficient book depth for qty={order_qty} "
+                f"(long_book_ok={long_ok}, short_book_ok={short_ok}) — skipping entry",
+                extra={"symbol": opp.symbol, "action": "pre_entry_liquidity_thin"},
+            )
+            return False
+        return True
+
+    async def _abort_on_residual_delta(
+        self,
+        opp: "OpportunityCandidate",
+        long_adapter,
+        short_adapter,
+        long_filled_qty: Decimal,
+        short_filled_qty: Decimal,
+        long_spec,
+        short_spec,
+        tp,
+    ) -> bool:
+        """Emergency-close both legs if the delta correction left a residual
+        imbalance larger than half a lot step, and set a cooldown.
+
+        Returns True if the trade was aborted (caller must stop), else False.
+        An unhedged residual would otherwise pass the 60s risk-guard grace
+        period undetected.
+        """
+        _long_cs = Decimal(str(long_spec.contract_size)) if long_spec and long_spec.contract_size else _ONE
+        _short_cs = Decimal(str(short_spec.contract_size)) if short_spec and short_spec.contract_size else _ONE
+        _long_lot_base = Decimal(str(long_spec.lot_size)) * _long_cs if long_spec else _FALLBACK_LOT
+        _short_lot_base = Decimal(str(short_spec.lot_size)) * _short_cs if short_spec else _FALLBACK_LOT
+        _lot = max(_long_lot_base, _short_lot_base)
+        post_correction_residual = abs(long_filled_qty - short_filled_qty)
+        if post_correction_residual <= _lot * Decimal("0.5"):
+            return False
+
+        logger.error(
+            f"❌ [{opp.symbol}] Residual delta {post_correction_residual} after correction "
+            f"(L={long_filled_qty} S={short_filled_qty}, threshold={_lot * Decimal('0.5')}) — "
+            f"aborting trade registration and emergency-closing both legs",
+            extra={"symbol": opp.symbol, "action": "residual_delta_abort"},
         )
-        if not short_fill:
-            # Check if short actually filled on exchange despite timeout
-            try:
-                _short_positions = await short_adapter.get_positions(opp.symbol)
-                _short_pos = next(
-                    (p for p in _short_positions if p.side == OrderSide.SELL), None,
+        _failed: list = []
+        try:
+            close_tasks = []
+            if long_filled_qty > 0:
+                close_tasks.append(
+                    self._place_with_timeout(
+                        long_adapter,
+                        OrderRequest(
+                            exchange=opp.long_exchange,
+                            symbol=opp.symbol,
+                            side=OrderSide.SELL,
+                            quantity=long_filled_qty,
+                            reduce_only=True,
+                        ),
+                    )
                 )
-            except Exception as _spe:
-                logger.warning(
-                    f"[{opp.symbol}] Position check on {opp.short_exchange} "
-                    f"after timeout failed: {_spe}",
+            if short_filled_qty > 0:
+                close_tasks.append(
+                    self._place_with_timeout(
+                        short_adapter,
+                        OrderRequest(
+                            exchange=opp.short_exchange,
+                            symbol=opp.symbol,
+                            side=OrderSide.BUY,
+                            quantity=short_filled_qty,
+                            reduce_only=True,
+                        ),
+                    )
                 )
-                _short_pos = None
-
-            if _short_pos and _short_pos.quantity > 0:
-                # Order DID fill — construct synthetic fill and register trade
-                logger.warning(
-                    f"⚠️ [{opp.symbol}] Short order FILLED despite timeout on "
-                    f"{opp.short_exchange}: qty={_short_pos.quantity} "
-                    f"price={_short_pos.entry_price} — registering trade",
-                )
-                short_fill = {
-                    "filled": float(_short_pos.quantity),
-                    "average": float(_short_pos.entry_price),
-                    "fee": {"cost": None},
-                    "_recovered_from_position": True,
-                }
-                # Fall through to trade registration below
-            else:
-                # Order truly didn't fill — close orphan long
-                logger.error(f"Short leg failed — closing orphan long for {opp.symbol}")
-                await self._close_orphan(
-                    long_adapter, opp.long_exchange, opp.symbol,
-                    OrderSide.SELL, long_fill, long_actual_filled,
-                )
-                # Journal the ghost trade so it appears in history
-                _orphan_price = _h.extract_avg_price(long_fill) or opp.reference_price
-                _orphan_notional = float(_orphan_price * long_actual_filled) if _orphan_price else 0.0
-                _orphan_fee_est = float(long_actual_filled * _orphan_price * Decimal("0.001")) if _orphan_price else 0.0
-                self._journal.event(
-                    "ghost_trade",
-                    symbol=opp.symbol,
-                    long_exchange=opp.long_exchange,
-                    short_exchange=opp.short_exchange,
-                    reason="short_leg_failed",
-                    qty=float(long_actual_filled),
-                    notional=_orphan_notional,
-                    estimated_loss=_orphan_fee_est * 2,
-                )
-                return None
-
-        # ── Zero-fill guard (short) ───────────────────────────────
-        short_raw_filled = float(short_fill.get("filled", 0))
-        if short_raw_filled <= 0:
+            if close_tasks:
+                _close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
+                _failed = [r for r in _close_results if isinstance(r, Exception) or r is None]
+                if _failed:
+                    logger.error(
+                        f"❌ [{opp.symbol}] Emergency unwind FAILED ({len(_failed)} legs) — "
+                        f"MANUAL INTERVENTION REQUIRED"
+                    )
+                else:
+                    logger.info(
+                        f"✅ [{opp.symbol}] Emergency unwind after residual delta: both legs closed"
+                    )
+        except Exception as _unwind_err:
             logger.error(
-                f"❌ [{opp.symbol}] Short ZERO-FILL on {opp.short_exchange}: "
-                f"order accepted but nothing executed (filled={short_raw_filled}). "
-                f"Closing orphan long.",
-                extra={"symbol": opp.symbol, "exchange": opp.short_exchange, "action": "zero_fill"},
+                f"❌ [{opp.symbol}] Emergency unwind ERROR: {_unwind_err} — "
+                f"MANUAL INTERVENTION REQUIRED"
             )
-            await self._close_orphan(
-                long_adapter, opp.long_exchange, opp.symbol,
-                OrderSide.SELL, long_fill, long_actual_filled,
-            )
-            return None
+            _failed = [True]
 
-        short_adapter.update_taker_fee_from_fill(opp.symbol, short_fill)
-
-        short_actual_filled = Decimal(str(short_fill["filled"]))
-        logger.info(
-            f"🔓 Trade FULLY OPEN {opp.symbol}: "
-            f"LONG({opp.long_exchange})={long_actual_filled} | "
-            f"SHORT({opp.short_exchange})={short_actual_filled} — "
-            f"Expecting delta=0 in next position fetch"
+        # 24h cooldown when the unwind itself failed — a position may still be
+        # open on the exchange with no trade record, so force manual review.
+        _cooldown_secs = 86400 if _failed else tp.cooldown_after_close_seconds
+        await self._redis.set_cooldown(opp.symbol, _cooldown_secs)
+        await self._redis.set_route_cooldown(
+            opp.symbol, opp.long_exchange, opp.short_exchange,
+            _cooldown_secs,
+            reason="residual_delta_unwind_failed" if _failed else "residual_delta",
         )
-        # P0-2: Mark grace period only AFTER both legs are confirmed hedged.
-        # Activating the grace period before the long order (old location) left
-        # the risk guard blind for up to 60 s while a naked long was open (short
-        # might still fail or time out). Bilateral hedge is proven at this point.
-        if self._risk_guard:
-            self._risk_guard.mark_trade_opened(opp.symbol)
-            logger.info(
-                f"✅ [{opp.symbol}] Grace period activated (60s delta skip) "
-                f"— bilateral hedge confirmed"
-            )
+        return True
 
-        # ── Extract fill quantities and prices ────────────────────
-        long_filled_qty = Decimal(str(long_fill["filled"]))
-        short_filled_qty = Decimal(str(short_fill["filled"]))
-        entry_price_long = _h.extract_avg_price(long_fill)
-        entry_price_short = _h.extract_avg_price(short_fill)
+    async def _reject_on_adverse_basis(
+        self,
+        opp: "OpportunityCandidate",
+        long_adapter,
+        short_adapter,
+        long_filled_qty: Decimal,
+        short_filled_qty: Decimal,
+        entry_basis_pct: Decimal,
+        trade_id: str,
+        tp,
+    ) -> bool:
+        """Post-fill basis sanity check. Thin books drift in the seconds between
+        the scan classification (bid/ask) and the fill. If the realized entry
+        basis is adverse beyond ``max_entry_basis_spread_pct``, close both legs
+        before registering and enter cooldown. Returns True if rejected.
 
-        # Fallback: if exchange didn't return avg price, use ticker
-        if entry_price_long is None:
+        Convention: entry_basis_pct = (long - short)/short — positive = adverse
+        (long paid more than short received). Only adverse drift is rejected;
+        favorable (negative) fills are kept.
+        """
+        _max_basis = tp.max_entry_basis_spread_pct
+        if not (_max_basis > 0 and entry_basis_pct > _max_basis):
+            return False
+
+        logger.error(
+            f"🚨 [{opp.symbol}] Post-fill basis check FAILED: "
+            f"actual_basis={float(entry_basis_pct):+.4f}% > "
+            f"max={float(_max_basis):.4f}% "
+            f"(scan-classified tier={opp.entry_tier}, "
+            f"scan price_spread={float(opp.price_spread_pct):+.4f}%) — "
+            f"closing both legs reduce-only and entering cooldown.",
+            extra={"trade_id": trade_id, "symbol": opp.symbol,
+                   "action": "post_fill_basis_abort",
+                   "entry_basis_pct": float(entry_basis_pct),
+                   "max_allowed_pct": float(_max_basis)},
+        )
+        await asyncio.gather(
+            self._close_orphan(
+                long_adapter, opp.long_exchange, opp.symbol,
+                OrderSide.SELL,
+                {"filled": float(long_filled_qty)},
+                long_filled_qty,
+            ),
+            self._close_orphan(
+                short_adapter, opp.short_exchange, opp.symbol,
+                OrderSide.BUY,
+                {"filled": float(short_filled_qty)},
+                short_filled_qty,
+            ),
+            return_exceptions=True,
+        )
+        await self._redis.set_cooldown(
+            opp.symbol, tp.cooldown_after_close_seconds,
+        )
+        if self._publisher:
             try:
-                t = await long_adapter.get_ticker(opp.symbol)
-                entry_price_long = Decimal(str(t.get("last", 0)))
-                logger.info(f"[{opp.symbol}] Long entry price from ticker: {entry_price_long}")
-            except Exception as _e:
-                logger.debug(f"[{opp.symbol}] Long ticker fallback failed: {_e} — using reference_price")
-                entry_price_long = opp.reference_price
-        if entry_price_short is None:
-            try:
-                t = await short_adapter.get_ticker(opp.symbol)
-                entry_price_short = Decimal(str(t.get("last", 0)))
-                logger.info(f"[{opp.symbol}] Short entry price from ticker: {entry_price_short}")
-            except Exception as _e:
-                logger.debug(f"[{opp.symbol}] Short ticker fallback failed: {_e} — using reference_price")
-                entry_price_short = opp.reference_price
+                await self._publisher.publish_alert(
+                    (
+                        f"🚨 Post-fill basis abort: {opp.symbol} "
+                        f"basis={float(entry_basis_pct):+.4f}% > "
+                        f"max={float(_max_basis):.4f}% — both legs closed."
+                    ),
+                    severity="warning",
+                    alert_type="post_fill_basis_abort",
+                    symbol=opp.symbol,
+                    payload={
+                        "trade_id": trade_id,
+                        "scan_tier": opp.entry_tier,
+                        "scan_price_spread_pct": float(opp.price_spread_pct),
+                        "actual_basis_pct": float(entry_basis_pct),
+                        "max_allowed_pct": float(_max_basis),
+                    },
+                )
+            except Exception as _alert_exc:
+                logger.debug(
+                    f"[{opp.symbol}] post-fill abort alert failed: {_alert_exc}",
+                )
+        return True
 
-        # Refresh specs (in case cache was stale before)
-        long_spec = await long_adapter.get_instrument_spec(opp.symbol)
-        short_spec = await short_adapter.get_instrument_spec(opp.symbol)
+    async def _reconcile_and_correct_fills(
+        self,
+        opp: "OpportunityCandidate",
+        long_adapter,
+        short_adapter,
+        long_fill: dict,
+        short_fill: dict,
+        long_filled_qty: Decimal,
+        short_filled_qty: Decimal,
+        order_qty: Decimal,
+        short_order_qty: Decimal,
+        is_partial_fill: bool,
+        entry_price_long: Optional[Decimal],
+        entry_price_short: Optional[Decimal],
+        long_spec,
+        short_spec,
+    ) -> tuple:
+        """Reconcile entry fees from the trades API, compute the entry basis, and
+        correct any leg imbalance from partial fills (trim the larger leg).
 
+        Returns ``(long_filled_qty, short_filled_qty, entry_fees, entry_basis_pct)``
+        with the possibly-trimmed quantities and accumulated fees.
+        """
         # ── Reconcile entry fees from actual trade data ──────────
+        # createOrder response may lack fee data — fetch from trades API
+        # for exchange-accurate fee totals.
         _long_oid = long_fill.get("id") if long_fill else None
         _short_oid = short_fill.get("id") if short_fill else None
-        _entry_details: list = [None, None]
+        _entry_details: list = [None, None]  # [long, short]
         _entry_tasks = []
         _entry_indices: list[int] = []
 
         if _long_oid:
             _entry_tasks.append(
-                long_adapter.fetch_fill_details_from_trades(opp.symbol, _long_oid)
+                long_adapter.fetch_fill_details_from_trades(
+                    opp.symbol, _long_oid,
+                )
             )
             _entry_indices.append(0)
         if _short_oid:
             _entry_tasks.append(
-                short_adapter.fetch_fill_details_from_trades(opp.symbol, _short_oid)
+                short_adapter.fetch_fill_details_from_trades(
+                    opp.symbol, _short_oid,
+                )
             )
             _entry_indices.append(1)
 
         if _entry_tasks:
-            _entry_results = await asyncio.gather(*_entry_tasks, return_exceptions=True)
+            _entry_results = await asyncio.gather(
+                *_entry_tasks, return_exceptions=True,
+            )
             for idx, res in zip(_entry_indices, _entry_results):
                 if isinstance(res, dict):
                     _entry_details[idx] = res
 
+        # Use actual fees from trades API when available, else estimate
         if _entry_details[0] and _entry_details[0]["total_fee"] > 0:
             entry_fee_long = _entry_details[0]["total_fee"]
         else:
@@ -302,37 +316,19 @@ class _EntryOrdersMixin:
 
         entry_fees = entry_fee_long + entry_fee_short
 
-        # ── Reconcile entry prices from trades API (more precise than fill avg) ──
-        # The CCXT fill `average` field can differ from the exchange-confirmed
-        # price by 1 pip, because some exchanges compute averages server-side
-        # with different rounding.  fetch_fill_details_from_trades returns the
-        # exchange-authoritative avg_price which we prefer when available.
-        if _entry_details[0] and _entry_details[0].get("avg_price"):
-            _ep_long_confirmed = Decimal(str(_entry_details[0]["avg_price"]))
-            if _ep_long_confirmed > 0 and _ep_long_confirmed != entry_price_long:
-                logger.debug(
-                    f"[{opp.symbol}] Long entry price refined: "
-                    f"{entry_price_long} → {_ep_long_confirmed} (trades API)"
-                )
-                entry_price_long = _ep_long_confirmed
-        if _entry_details[1] and _entry_details[1].get("avg_price"):
-            _ep_short_confirmed = Decimal(str(_entry_details[1]["avg_price"]))
-            if _ep_short_confirmed > 0 and _ep_short_confirmed != entry_price_short:
-                logger.debug(
-                    f"[{opp.symbol}] Short entry price refined: "
-                    f"{entry_price_short} → {_ep_short_confirmed} (trades API)"
-                )
-                entry_price_short = _ep_short_confirmed
-
-        # ── Entry price basis ─────────────────────────────────────
+        # Entry price basis: (long_price − short_price) / short_price × 100
+        # Positive = long was more expensive than short at entry.
+        # This becomes the break-even threshold for exit: exiting at the same
+        # spread means zero price loss.
         if entry_price_long and entry_price_short and entry_price_short > 0:
             entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * Decimal("100")
         else:
             entry_basis_pct = Decimal("0")
 
-        # ── Log partial fill / mismatch summary ──────────────────
+        # Log any partial fills and mismatches
         short_partial = short_filled_qty < short_order_qty
         qty_mismatch = long_filled_qty != short_filled_qty
+
         if is_partial_fill or short_partial or qty_mismatch:
             logger.warning(
                 f"📊 [{opp.symbol}] Fill Report: "
@@ -341,7 +337,7 @@ class _EntryOrdersMixin:
                 f"| Mismatch={qty_mismatch} | Fees=${float(entry_fees):.2f}"
             )
 
-        # ── Delta correction: fix unhedged qty from partial fills ──
+        # ── Delta correction: fix unhedged exposure from a partial fill ──
         if qty_mismatch and long_filled_qty > short_filled_qty:
             excess = long_filled_qty - short_filled_qty
             logger.warning(
@@ -358,8 +354,9 @@ class _EntryOrdersMixin:
                 )
                 trim_fill = await self._place_with_timeout(long_adapter, trim_req)
                 if trim_fill:
-                    # P0-1: Never use `else excess` fallback — a zero-fill on the trim
-                    # is a real failure.  Set trimmed=0 so P0-3 residual check aborts.
+                    # Never assume the trim filled `excess` — a zero/partial fill
+                    # is a real failure. Use the ACTUAL filled qty so the P0-3
+                    # residual check below catches a still-unhedged position.
                     _trim_raw = float(trim_fill.get("filled", 0))
                     trimmed = Decimal(str(_trim_raw))
                     if trimmed > 0:
@@ -372,7 +369,7 @@ class _EntryOrdersMixin:
                     else:
                         logger.error(
                             f"❌ DELTA CORRECTION ZERO-FILL for {opp.symbol} — "
-                            f"trim order accepted but filled=0 (unhedged {excess} on "
+                            f"trim accepted but filled=0 (unhedged {excess} on "
                             f"{opp.long_exchange}) — P0-3 residual check will abort"
                         )
                 else:
@@ -401,8 +398,9 @@ class _EntryOrdersMixin:
                 )
                 trim_fill = await self._place_with_timeout(short_adapter, trim_req)
                 if trim_fill:
-                    # P0-1: Never use `else excess` fallback — a zero-fill on the trim
-                    # is a real failure.  Set trimmed=0 so P0-3 residual check aborts.
+                    # Never assume the trim filled `excess` — a zero/partial fill
+                    # is a real failure. Use the ACTUAL filled qty so the P0-3
+                    # residual check below catches a still-unhedged position.
                     _trim_raw = float(trim_fill.get("filled", 0))
                     trimmed = Decimal(str(_trim_raw))
                     if trimmed > 0:
@@ -415,7 +413,7 @@ class _EntryOrdersMixin:
                     else:
                         logger.error(
                             f"❌ DELTA CORRECTION ZERO-FILL for {opp.symbol} — "
-                            f"trim order accepted but filled=0 (unhedged {excess} on "
+                            f"trim accepted but filled=0 (unhedged {excess} on "
                             f"{opp.short_exchange}) — P0-3 residual check will abort"
                         )
                 else:
@@ -429,102 +427,4 @@ class _EntryOrdersMixin:
                     f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
                 )
 
-        # ── P0-3: Verify delta correction result ─────────────────────────────
-        # A partial-fill on the correction order itself can leave a residual
-        # imbalance.  If it exceeds half a lot step we cannot safely register
-        # the trade — an unhedged position would sail through the 60-second
-        # grace period undetected by the risk guard.
-        _long_cs = Decimal(str(long_spec.contract_size)) if long_spec and long_spec.contract_size else _ONE
-        _short_cs = Decimal(str(short_spec.contract_size)) if short_spec and short_spec.contract_size else _ONE
-        _long_lot_base = Decimal(str(long_spec.lot_size)) * _long_cs if long_spec else _FALLBACK_LOT
-        _short_lot_base = Decimal(str(short_spec.lot_size)) * _short_cs if short_spec else _FALLBACK_LOT
-        _lot = max(_long_lot_base, _short_lot_base)
-        post_correction_residual = abs(long_filled_qty - short_filled_qty)
-        if post_correction_residual > _lot * Decimal("0.5"):
-            logger.error(
-                f"❌ [{opp.symbol}] Residual delta {post_correction_residual} after correction "
-                f"(L={long_filled_qty} S={short_filled_qty}, threshold={_lot * Decimal('0.5')}) — "
-                f"aborting trade registration and emergency-closing both legs",
-                extra={"symbol": opp.symbol, "action": "residual_delta_abort"},
-            )
-            # Emergency close: unwind whichever leg is larger
-            _failed: list = []  # initialise before try so the cooldown calc always has a value
-            try:
-                close_tasks = []
-                if long_filled_qty > 0:
-                    close_tasks.append(
-                        self._place_with_timeout(
-                            long_adapter,
-                            OrderRequest(
-                                exchange=opp.long_exchange,
-                                symbol=opp.symbol,
-                                side=OrderSide.SELL,
-                                quantity=long_filled_qty,
-                                reduce_only=True,
-                            ),
-                        )
-                    )
-                if short_filled_qty > 0:
-                    close_tasks.append(
-                        self._place_with_timeout(
-                            short_adapter,
-                            OrderRequest(
-                                exchange=opp.short_exchange,
-                                symbol=opp.symbol,
-                                side=OrderSide.BUY,
-                                quantity=short_filled_qty,
-                                reduce_only=True,
-                            ),
-                        )
-                    )
-                if close_tasks:
-                    _close_results = await asyncio.gather(*close_tasks, return_exceptions=True)
-                    _failed = [r for r in _close_results if isinstance(r, Exception) or r is None]
-                    if _failed:
-                        logger.error(
-                            f"❌ [{opp.symbol}] Emergency unwind FAILED ({len(_failed)} legs) — "
-                            f"MANUAL INTERVENTION REQUIRED"
-                        )
-                    else:
-                        logger.info(
-                            f"✅ [{opp.symbol}] Emergency unwind after residual delta: both legs closed"
-                        )
-            except Exception as _unwind_err:
-                logger.error(
-                    f"❌ [{opp.symbol}] Emergency unwind ERROR: {_unwind_err} — "
-                    f"MANUAL INTERVENTION REQUIRED"
-                )
-                _failed = [True]  # treat exception as failure for cooldown below
-
-            # P1-3: Apply a much longer cooldown when the emergency close itself
-            # failed — the position may still be open on the exchange with no
-            # trade record in _active_trades.  24 h forces manual review;
-            # 300 s is only appropriate when the unwind confirmed success.
-            _cooldown_secs = 86400 if _failed else 300
-            await self._redis.set_cooldown(opp.symbol, _cooldown_secs)
-            # P2: Also set route cooldown with same duration.
-            # The 86400 s (24 h) case means positions may still be open on this route —
-            # block re-entry on this specific pair until manual review.
-            await self._redis.set_route_cooldown(
-                opp.symbol, opp.long_exchange, opp.short_exchange,
-                _cooldown_secs,
-                reason="residual_delta_unwind_failed" if _failed else "residual_delta",
-            )
-            return None
-
-        # If after correction both legs are zero, abort trade
-        if long_filled_qty <= 0 or short_filled_qty <= 0:
-            logger.error(f"❌ [{opp.symbol}] No viable position after fills — aborting trade")
-            return None
-
-        return {
-            "order_qty": order_qty,
-            "long_filled_qty": long_filled_qty,
-            "short_filled_qty": short_filled_qty,
-            "entry_price_long": entry_price_long,
-            "entry_price_short": entry_price_short,
-            "entry_fees": entry_fees,
-            "long_spec": long_spec,
-            "short_spec": short_spec,
-            "entry_basis_pct": entry_basis_pct,
-        }
+        return long_filled_qty, short_filled_qty, entry_fees, entry_basis_pct

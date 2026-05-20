@@ -186,7 +186,7 @@ def verify_telegram_or_read_token(
     """
     # Try Read Token first (fast path — no crypto)
     expected = os.environ.get("READ_TOKEN") or os.environ.get("ADMIN_TOKEN")
-    if expected and x_read_token == expected:
+    if expected and x_read_token and hmac.compare_digest(x_read_token, expected):
         return
 
     # Fall back to Telegram init-data

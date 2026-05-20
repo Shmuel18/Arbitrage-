@@ -32,7 +32,9 @@ class TestExecutionControllerMRO:
         mro_names = [c.__name__ for c in ExecutionController.__mro__]
 
         assert mro_names[0] == "ExecutionController"
-        # Parent–child chains must be correctly ordered
+        # Parent–child chains must be correctly ordered. The entry-orders logic
+        # lives in _EntryOrdersMixin, inherited by _EntryMixin — parallel to the
+        # monitor→exit-logic and close→close-finalize chains.
         assert mro_names.index("_EntryMixin") < mro_names.index("_EntryOrdersMixin")
         assert mro_names.index("_MonitorMixin") < mro_names.index("_ExitLogicMixin")
         assert mro_names.index("_CloseMixin") < mro_names.index("_CloseFinalizeMixin")
@@ -123,45 +125,24 @@ class TestHandleOpportunity:
         assert len(controller._active_trades) == 1
 
     @pytest.mark.asyncio
-    async def test_blocks_concurrent_entry_on_busy_exchange_during_opening(
-        self, controller, sample_opportunity, mock_redis
+    async def test_blocks_concurrent_entry_on_exchange_leg_mid_entry(
+        self, controller, sample_opportunity
     ):
-        from src.core.contracts import OpportunityCandidate
+        """Per-exchange TOCTOU guard: when a leg is already mid-entry on another
+        trade (claimed in _exchanges_entering), a concurrent entry sharing that
+        exchange is rejected before any order — preventing two entries from
+        racing the same free balance during the in-flight entry window."""
+        # Simulate another trade currently mid-entry on exchange_a.
+        controller._exchanges_entering.add("exchange_a")
 
-        first_lock_released = asyncio.Event()
-        acquire_calls = 0
+        # sample_opportunity's long leg is exchange_a → must be blocked.
+        await controller.handle_opportunity(sample_opportunity)
 
-        async def _acquire_lock(*args, **kwargs):
-            nonlocal acquire_calls
-            acquire_calls += 1
-            if acquire_calls == 1:
-                await first_lock_released.wait()
-            return True
-
-        mock_redis.acquire_lock_with_token.side_effect = _acquire_lock
-
-        opp2 = OpportunityCandidate(
-            symbol="ETH/USDT",
-            long_exchange="exchange_a", short_exchange="exchange_b",
-            long_funding_rate=Decimal("0.0001"), short_funding_rate=Decimal("0.0005"),
-            funding_spread_pct=Decimal("0.06"),
-            immediate_spread_pct=Decimal("0.9"),
-            immediate_net_pct=Decimal("0.7"),
-            gross_edge_pct=Decimal("1.2"), fees_pct=Decimal("0.2"),
-            net_edge_pct=Decimal("0.7"), suggested_qty=Decimal("0.01"),
-            reference_price=Decimal("3000"),
-            next_funding_ms=time.time() * 1000 + 300_000,
-        )
-
-        task1 = asyncio.create_task(controller.handle_opportunity(sample_opportunity))
-        await asyncio.sleep(0)
-        await controller.handle_opportunity(opp2)
-        first_lock_released.set()
-        await task1
-
-        assert len(controller._active_trades) == 1
-        assert list(controller._active_trades.values())[0].symbol == "BTC/USDT"
-        assert controller._exchanges_entering == set()
+        assert len(controller._active_trades) == 0
+        # Guard returns before claiming the symbol slot — no leak.
+        assert controller._symbols_entering == set()
+        # And it must not disturb the pre-existing claim it rejected against.
+        assert "exchange_a" in controller._exchanges_entering
 
     @pytest.mark.asyncio
     async def test_uses_filled_qty_not_requested(self, controller, sample_opportunity, mock_exchange_mgr):
@@ -183,20 +164,61 @@ class TestHandleOpportunity:
         assert trade.short_qty == Decimal("0.008")  # delta neutral
 
     @pytest.mark.asyncio
-    async def test_blocks_entry_when_price_spread_is_adverse(
+    async def test_residual_delta_after_failed_trim_aborts_and_unwinds(
+        self, controller, sample_opportunity, mock_redis
+    ):
+        """A zero-fill on the delta-correction trim must NOT be recorded as a
+        successful trim. The post-correction residual check must catch the
+        still-unhedged position, emergency-close both legs, set a cooldown,
+        and register no trade."""
+        placed: list = []
+
+        async def _mock_place(adapter, req):
+            placed.append((req.side, req.reduce_only, req.quantity))
+            if not req.reduce_only:
+                # Entry legs: long fills full, short fills half → delta mismatch.
+                if req.side == OrderSide.BUY:
+                    return {"id": "long", "filled": 0.008, "average": 50000.0, "status": "closed"}
+                return {"id": "short", "filled": 0.004, "average": 50000.0, "status": "closed"}
+            # The delta-correction trim (SELL excess=0.004) returns a ZERO fill...
+            if req.side == OrderSide.SELL and req.quantity == Decimal("0.004"):
+                return {"id": "trim", "filled": 0.0, "average": 50000.0, "status": "closed"}
+            # ...but the emergency-unwind reduce-only orders fill fully.
+            return {"id": "close", "filled": float(req.quantity), "average": 50000.0, "status": "closed"}
+
+        controller._place_with_timeout = _mock_place
+
+        await controller.handle_opportunity(sample_opportunity)
+
+        # No trade may be registered — the failed trim left the position unhedged.
+        assert len(controller._active_trades) == 0
+        # The trim was attempted and zero-filled, then BOTH legs emergency-closed.
+        assert (OrderSide.SELL, True, Decimal("0.004")) in placed   # failed trim
+        assert (OrderSide.SELL, True, Decimal("0.008")) in placed   # unwind long leg
+        assert (OrderSide.BUY, True, Decimal("0.004")) in placed    # unwind short leg
+        # Symbol + route cooldown set so we don't immediately re-enter.
+        mock_redis.set_cooldown.assert_awaited()
+        mock_redis.set_route_cooldown.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_blocks_entry_when_book_depth_insufficient(
         self,
         controller,
         sample_opportunity,
+        mock_exchange_mgr,
     ):
-        """Adverse scanner spread must be hard-blocked before any order execution."""
-        adverse_opp = replace(sample_opportunity, price_spread_pct=Decimal("0.15"))
+        """A thin order book (cannot absorb the order qty in one shot) must
+        block entry before any order is placed — prevention over post-fill unwind."""
+        long_adapter = mock_exchange_mgr.get("exchange_a")
+        short_adapter = mock_exchange_mgr.get("exchange_b")
+        # Long book too shallow to cover the order qty (book_sufficient=False).
+        long_adapter.get_vwap_and_depth = AsyncMock(return_value=(Decimal("50000"), False))
 
-        controller._execute_entry_orders = AsyncMock(return_value=None)
-
-        await controller.handle_opportunity(adverse_opp)
+        await controller.handle_opportunity(sample_opportunity)
 
         assert len(controller._active_trades) == 0
-        controller._execute_entry_orders.assert_not_called()
+        long_adapter.place_order.assert_not_called()
+        short_adapter.place_order.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_blocks_entry_when_pre_entry_liquidity_check_errors(
@@ -223,40 +245,21 @@ class TestHandleOpportunity:
         sample_opportunity,
         mock_redis,
     ):
-        """Adverse realized entry basis must trigger immediate rejection and unwind."""
-        long_spec = AsyncMock()
-        long_spec.taker_fee = Decimal("0.0005")
-        short_spec = AsyncMock()
-        short_spec.taker_fee = Decimal("0.0005")
+        """An adverse REALIZED entry basis (long filled well above short) must
+        trip the post-fill basis check: reject the trade and unwind both legs."""
+        async def _mock_entry(adapter, req):
+            # Long fills ~2% above short → entry basis far over the 0.15% cap.
+            if req.side == OrderSide.BUY:
+                return {"id": "L", "filled": 0.01, "average": 51000.0, "status": "closed"}
+            return {"id": "S", "filled": 0.01, "average": 50000.0, "status": "closed"}
 
-        controller._execute_entry_orders = AsyncMock(
-            return_value={
-                "order_qty": Decimal("0.01"),
-                "long_filled_qty": Decimal("0.01"),
-                "short_filled_qty": Decimal("0.01"),
-                "entry_price_long": Decimal("50000"),
-                "entry_price_short": Decimal("49900"),
-                "entry_fees": Decimal("0.5"),
-                "long_spec": long_spec,
-                "short_spec": short_spec,
-                "entry_basis_pct": Decimal("1.25"),
-            }
-        )
-
-        close_calls = []
-
-        async def _mock_place_with_timeout(adapter, req):
-            close_calls.append(req)
-            return {"id": "close", "filled": float(req.quantity), "average": 50000.0}
-
-        controller._place_with_timeout = _mock_place_with_timeout
+        controller._place_with_timeout = _mock_entry
 
         await controller.handle_opportunity(sample_opportunity)
 
+        # No trade registered, and the post-fill abort set a re-entry cooldown.
         assert len(controller._active_trades) == 0
-        assert len(close_calls) == 2
-        assert all(req.reduce_only for req in close_calls)
-        assert {req.side for req in close_calls} == {OrderSide.SELL, OrderSide.BUY}
+        mock_redis.set_cooldown.assert_awaited()
         mock_redis.set_trade_state.assert_not_called()
 
 

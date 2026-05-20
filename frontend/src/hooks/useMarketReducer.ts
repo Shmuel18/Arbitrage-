@@ -147,10 +147,10 @@ interface HttpFetchResultAction {
     opportunities: PromiseSettledResult<OpportunitySet>;
     logs: PromiseSettledResult<{ logs: LogEntry[] }>;
     summary: PromiseSettledResult<SummaryData>;
-    positions: PromiseSettledResult<any>;
+    positions: PromiseSettledResult<unknown>;
     pnl: PromiseSettledResult<PnlData>;
     dailyPnl: PromiseSettledResult<PnlData>;
-    trades: PromiseSettledResult<any>;
+    trades: PromiseSettledResult<unknown>;
   };
 }
 
@@ -195,19 +195,21 @@ function sameExchangeList(left: string[], right: string[]): boolean {
 
 /* ---------- Extraction helpers ---------- */
 
-function extractPositions(raw: any): PositionRow[] {
+function extractPositions(raw: unknown): PositionRow[] {
   if (!raw) return [];
-  const arr = raw.positions;
-  if (Array.isArray(arr)) return arr as PositionRow[];
-  if (Array.isArray(raw)) return raw as unknown as PositionRow[];
+  if (Array.isArray(raw)) return raw as PositionRow[];
+  if (typeof raw === 'object' && Array.isArray((raw as { positions?: unknown }).positions)) {
+    return (raw as { positions: PositionRow[] }).positions;
+  }
   return [];
 }
 
-function extractTrades(raw: any): Trade[] {
+function extractTrades(raw: unknown): Trade[] {
   if (!raw) return [];
-  const arr = raw.trades;
-  if (Array.isArray(arr)) return arr;
-  if (Array.isArray(raw)) return raw as unknown as Trade[];
+  if (Array.isArray(raw)) return raw as Trade[];
+  if (typeof raw === 'object' && Array.isArray((raw as { trades?: unknown }).trades)) {
+    return (raw as { trades: Trade[] }).trades;
+  }
   return [];
 }
 
@@ -300,9 +302,9 @@ function marketReducer(prev: FullData, action: MarketAction): FullData {
         } else if (
           d.positions &&
           typeof d.positions === 'object' &&
-          Array.isArray((d.positions as any).positions)
+          Array.isArray((d.positions as { positions?: unknown }).positions)
         ) {
-          posArr = (d.positions as any).positions;
+          posArr = (d.positions as { positions: PositionRow[] }).positions;
         }
         if (posArr === null) return prev.positions;
         if (posArr.length === 0) return [];

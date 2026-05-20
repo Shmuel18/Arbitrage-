@@ -481,6 +481,7 @@ class TestEvaluateDirection:
     async def test_pot_mode_both_income(self, config) -> None:
         """Both sides generate income → POT mode."""
         config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.min_24h_volume_usd = Decimal("0")  # not testing the volume gate
         opp = await self._eval(
             config,
             long_rate=Decimal("-0.005"),   # long receives (income)
@@ -515,6 +516,7 @@ class TestEvaluateDirection:
         """Income within window, cost far away → CHERRY_PICK."""
         config.trading_params.min_funding_spread = Decimal("0.01")
         config.trading_params.narrow_entry_window_minutes = 15
+        config.trading_params.min_24h_volume_usd = Decimal("0")  # not testing the volume gate
         opp = await self._eval(
             config,
             long_rate=Decimal("-0.010"),   # income side (long gets paid)
@@ -982,6 +984,7 @@ class TestHotScanLoop:
     async def test_hot_scan_calls_callback_on_qualified_opportunity(self, config) -> None:
         """When a qualified opportunity is found for a hot symbol, callback fires."""
         config.trading_params.min_funding_spread = Decimal("0.01")
+        config.trading_params.min_24h_volume_usd = Decimal("0")  # not testing the volume gate
 
         a = _make_adapter("ex_a", Decimal("-0.005"), next_minutes=10, interval=8)
         b = _make_adapter("ex_b", Decimal("0.005"), next_minutes=10, interval=8)

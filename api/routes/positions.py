@@ -14,7 +14,7 @@ import logging
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
-from ..auth import require_trade_token
+from ..auth import require_read_token, require_trade_token
 from ..deps import require_redis_client
 
 logger = logging.getLogger("trinity.api.positions")
@@ -26,6 +26,7 @@ router = APIRouter(redirect_slashes=False)
 @router.get("")
 async def get_positions(
     redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_read_token),
 ):
     """Get all active positions"""
     try:
@@ -56,6 +57,7 @@ async def get_positions(
 async def get_position(
     position_id: str,
     redis_client: RedisClient = Depends(require_redis_client),
+    _auth: None = Depends(require_read_token),
 ):
     """Get specific position details"""
     try:

@@ -522,10 +522,14 @@ class _ExitComputationsMixin:
             if short_is_income and short_mins is not None:
                 if _next_income_mins is None or short_mins < _next_income_mins:
                     _next_income_mins = short_mins
+            _mins_str = (
+                f"{int(_next_income_mins)}min"
+                if _next_income_mins is not None
+                else "unknown"
+            )
             logger.info(
-                f"🔍 [{trade.symbol}] Next income payment too far: "
-                f"{int(_next_income_mins)}min" if _next_income_mins is not None else "unknown"
-                f" > entry_window={int(entry_window_min)}min — EXIT",
+                f"🔍 [{trade.symbol}] Next income payment too far: {_mins_str} "
+                f"> entry_window={int(entry_window_min)}min — EXIT",
                 extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
             )
             return False
@@ -680,7 +684,7 @@ class _ExitComputationsMixin:
 
         Returns True if trade was closed due to liquidation risk.
         """
-        safety_pct = float(self._cfg.trading_params.liquidation_safety_pct)
+        safety_pct = Decimal(str(self._cfg.trading_params.liquidation_safety_pct))
 
         try:
             long_positions, short_positions = await asyncio.wait_for(
@@ -726,7 +730,7 @@ class _ExitComputationsMixin:
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
                                    "action": "cross_margin_fallback"},
                         )
-                    margin = float(pos.entry_price * pos.quantity) / leverage if pos.entry_price > 0 else 0
+                    margin = (pos.entry_price * pos.quantity) / Decimal(leverage) if pos.entry_price > 0 else Decimal("0")
                     if margin <= 0:
                         continue
                     # P0-1: Some exchanges omit unrealized_pnl (Gate, Bitget under load).
@@ -739,8 +743,8 @@ class _ExitComputationsMixin:
                             extra={"trade_id": trade.trade_id, "symbol": trade.symbol},
                         )
                         continue
-                    equity = margin + float(pos.unrealized_pnl)
-                    margin_ratio = (equity / margin) * 100
+                    equity = margin + Decimal(str(pos.unrealized_pnl))
+                    margin_ratio = (equity / margin) * Decimal("100")
 
                     if margin_ratio < safety_pct:
                         logger.warning(

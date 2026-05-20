@@ -14,11 +14,15 @@ import logging
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
+from ..auth import require_read_token
 from ..deps import require_redis_client
 
 logger = logging.getLogger("trinity.api.analytics")
 
-router = APIRouter(redirect_slashes=False)
+router = APIRouter(
+    redirect_slashes=False,
+    dependencies=[Depends(require_read_token)],
+)
 
 
 @router.get("/performance")

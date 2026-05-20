@@ -4,6 +4,7 @@ Shared authentication helpers for Trinity API routes.
 
 from __future__ import annotations
 
+import hmac
 import os
 from typing import Optional
 
@@ -30,7 +31,7 @@ def require_admin_token(x_admin_token: Optional[str] = Header(None)) -> None:
             status_code=403,
             detail="Admin access is not configured on this server",
         )
-    if x_admin_token != expected:
+    if not hmac.compare_digest(x_admin_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing admin token")
 
 
@@ -46,7 +47,7 @@ def require_emergency_token(x_emergency_token: Optional[str] = Header(None)) -> 
             status_code=403,
             detail="Emergency token is not configured on this server",
         )
-    if x_emergency_token != expected:
+    if not hmac.compare_digest(x_emergency_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing emergency token")
 
 
@@ -63,7 +64,7 @@ def require_read_token(x_read_token: Optional[str] = Header(None)) -> None:
             status_code=403,
             detail="Read API access is not configured on this server",
         )
-    if x_read_token != expected:
+    if not hmac.compare_digest(x_read_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing read token")
 
 
@@ -80,7 +81,7 @@ def require_command_token(x_command_token: Optional[str] = Header(None)) -> None
             status_code=403,
             detail="Command access is not configured on this server",
         )
-    if x_command_token != expected:
+    if not hmac.compare_digest(x_command_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing command token")
 
 
@@ -97,7 +98,7 @@ def require_config_token(x_config_token: Optional[str] = Header(None)) -> None:
             status_code=403,
             detail="Config access is not configured on this server",
         )
-    if x_config_token != expected:
+    if not hmac.compare_digest(x_config_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing config token")
 
 
@@ -114,5 +115,5 @@ def require_trade_token(x_trade_token: Optional[str] = Header(None)) -> None:
             status_code=403,
             detail="Trade action access is not configured on this server",
         )
-    if x_trade_token != expected:
+    if not hmac.compare_digest(x_trade_token or "", expected):
         raise HTTPException(status_code=403, detail="Invalid or missing trade token")

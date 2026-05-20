@@ -21,14 +21,18 @@ from src.core.contracts import (
 )
 from src.core.logging import get_logger
 from src.execution import helpers as _h
+from src.execution._entry_orders_mixin import _EntryOrdersMixin
 
 if TYPE_CHECKING:
     pass  # all attribute access via self (mixin pattern)
 
 logger = get_logger("execution")
 
+_ONE: Decimal = Decimal("1")
+_FALLBACK_LOT: Decimal = Decimal("0.001")  # last-resort lot step when spec is missing
 
-class _EntryMixin:
+
+class _EntryMixin(_EntryOrdersMixin):
     async def handle_opportunity(self, opp: OpportunityCandidate) -> None:
         """Validate and execute a new funding-arb trade."""
         logger.info(
@@ -65,11 +69,25 @@ class _EntryMixin:
         if opp.symbol in self._symbols_entering:
             logger.info(f"🔒 Skipping {opp.symbol}: entry already in progress")
             return
+        # Per-exchange TOCTOU guard — claim BOTH legs in the same await-free
+        # critical section so a concurrent entry for a DIFFERENT symbol on a
+        # shared exchange can't race the same free balance during the entry
+        # window. _busy_exchanges only guards exchanges once a trade is already
+        # OPEN; this closes the in-flight gap. Released in finally below.
+        _legs = (opp.long_exchange, opp.short_exchange)
+        if any(ex in self._exchanges_entering for ex in _legs):
+            logger.info(
+                f"🔒 Skipping {opp.symbol}: an exchange leg "
+                f"({opp.long_exchange}↔{opp.short_exchange}) is mid-entry on another trade"
+            )
+            return
         self._symbols_entering.add(opp.symbol)
+        self._exchanges_entering.update(_legs)
         try:
             return await self._handle_opportunity_inner(opp)
         finally:
             self._symbols_entering.discard(opp.symbol)
+            self._exchanges_entering.difference_update(_legs)
 
     async def _handle_opportunity_inner(self, opp: OpportunityCandidate) -> None:
         """Inner implementation — called only after the TOCTOU guard is held."""
@@ -316,6 +334,15 @@ class _EntryMixin:
                 return
             order_qty, notional, long_spec, short_spec = sizing
 
+            # ── Pre-entry liquidity gate ──────────────────────────────
+            # Fresh order-book depth walk on both legs immediately before the
+            # first order. Skip (don't enter) on a thin book rather than eat
+            # slippage — prevention here avoids a post-fill emergency unwind.
+            if not await self._check_pre_entry_liquidity(
+                opp, long_adapter, short_adapter, order_qty,
+            ):
+                return
+
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)
@@ -374,6 +401,13 @@ class _EntryMixin:
                     extra={"symbol": opp.symbol, "exchange": opp.long_exchange, "action": "zero_fill"},
                 )
                 await self._redis.set_cooldown(opp.symbol, 300)  # 5 min cooldown
+                # Route-specific cooldown: this exchange rejected the order, so
+                # block re-entry on this pair while leaving the symbol open for
+                # other routes.
+                await self._redis.set_route_cooldown(
+                    opp.symbol, opp.long_exchange, opp.short_exchange, 300,
+                    reason="zero_fill_long",
+                )
                 return
 
             # Update cached taker_fee from actual fill (real account rate)
@@ -443,6 +477,20 @@ class _EntryMixin:
                         long_adapter, opp.long_exchange, opp.symbol,
                         OrderSide.SELL, long_fill, long_actual_filled,
                     )
+                    # Journal the ghost trade so the orphan shows up in history.
+                    _orphan_price = _h.extract_avg_price(long_fill) or opp.reference_price
+                    _orphan_notional = float(_orphan_price * long_actual_filled) if _orphan_price else 0.0
+                    _orphan_fee_est = float(long_actual_filled * _orphan_price * Decimal("0.001")) if _orphan_price else 0.0
+                    self._journal.event(
+                        "ghost_trade",
+                        symbol=opp.symbol,
+                        long_exchange=opp.long_exchange,
+                        short_exchange=opp.short_exchange,
+                        reason="short_leg_failed",
+                        qty=float(long_actual_filled),
+                        notional=_orphan_notional,
+                        estimated_loss=_orphan_fee_est * 2,
+                    )
                     return
 
             # ── Zero-fill guard for short leg ──
@@ -482,155 +530,41 @@ class _EntryMixin:
                     t = await long_adapter.get_ticker(opp.symbol)
                     entry_price_long = Decimal(str(t.get("last", 0)))
                     logger.info(f"[{opp.symbol}] Long entry price from ticker: {entry_price_long}")
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"[{opp.symbol}] long ticker fallback failed: {exc} — using reference_price")
                     entry_price_long = opp.reference_price  # last resort
             if entry_price_short is None:
                 try:
                     t = await short_adapter.get_ticker(opp.symbol)
                     entry_price_short = Decimal(str(t.get("last", 0)))
                     logger.info(f"[{opp.symbol}] Short entry price from ticker: {entry_price_short}")
-                except Exception:
+                except Exception as exc:
+                    logger.debug(f"[{opp.symbol}] short ticker fallback failed: {exc} — using reference_price")
                     entry_price_short = opp.reference_price  # last resort
 
             long_spec = await long_adapter.get_instrument_spec(opp.symbol)
             short_spec = await short_adapter.get_instrument_spec(opp.symbol)
 
-            # ── Reconcile entry fees from actual trade data ──────────
-            # createOrder response may lack fee data — fetch from trades API
-            # for exchange-accurate fee totals.
-            _long_oid = long_fill.get("id") if long_fill else None
-            _short_oid = short_fill.get("id") if short_fill else None
-            _entry_details: list = [None, None]  # [long, short]
-            _entry_tasks = []
-            _entry_indices: list[int] = []
+            # ── Reconcile fees, compute entry basis, correct delta ──────
+            # (extracted to _EntryOrdersMixin to keep this file under the limit)
+            (
+                long_filled_qty,
+                short_filled_qty,
+                entry_fees,
+                entry_basis_pct,
+            ) = await self._reconcile_and_correct_fills(
+                opp, long_adapter, short_adapter, long_fill, short_fill,
+                long_filled_qty, short_filled_qty, order_qty, short_order_qty,
+                is_partial_fill, entry_price_long, entry_price_short,
+                long_spec, short_spec,
+            )
 
-            if _long_oid:
-                _entry_tasks.append(
-                    long_adapter.fetch_fill_details_from_trades(
-                        opp.symbol, _long_oid,
-                    )
-                )
-                _entry_indices.append(0)
-            if _short_oid:
-                _entry_tasks.append(
-                    short_adapter.fetch_fill_details_from_trades(
-                        opp.symbol, _short_oid,
-                    )
-                )
-                _entry_indices.append(1)
-
-            if _entry_tasks:
-                _entry_results = await asyncio.gather(
-                    *_entry_tasks, return_exceptions=True,
-                )
-                for idx, res in zip(_entry_indices, _entry_results):
-                    if isinstance(res, dict):
-                        _entry_details[idx] = res
-
-            # Use actual fees from trades API when available, else estimate
-            if _entry_details[0] and _entry_details[0]["total_fee"] > 0:
-                entry_fee_long = _entry_details[0]["total_fee"]
-            else:
-                entry_fee_long = _h.extract_fee(long_fill, long_spec.taker_fee)
-            if _entry_details[1] and _entry_details[1]["total_fee"] > 0:
-                entry_fee_short = _entry_details[1]["total_fee"]
-            else:
-                entry_fee_short = _h.extract_fee(short_fill, short_spec.taker_fee)
-
-            entry_fees = entry_fee_long + entry_fee_short
-
-            # Entry price basis: (long_price − short_price) / short_price × 100
-            # Positive = long was more expensive than short at entry.
-            # This becomes the break-even threshold for exit: exiting at the same
-            # spread means zero price loss.
-            if entry_price_long and entry_price_short and entry_price_short > 0:
-                entry_basis_pct = (entry_price_long - entry_price_short) / entry_price_short * Decimal("100")
-            else:
-                entry_basis_pct = Decimal("0")
-
-            # Log any partial fills and mismatches
-            short_partial = short_filled_qty < short_order_qty
-            qty_mismatch = long_filled_qty != short_filled_qty
-            
-            if is_partial_fill or short_partial or qty_mismatch:
-                logger.warning(
-                    f"📊 [{opp.symbol}] Fill Report: "
-                    f"Long={long_filled_qty}/{order_qty} "
-                    f"| Short={short_filled_qty}/{short_order_qty} "
-                    f"| Mismatch={qty_mismatch} | Fees=${float(entry_fees):.2f}"
-                )
-
-            # ── Delta correction: fix unhedged exposure from short partial fill ──
-            if qty_mismatch and long_filled_qty > short_filled_qty:
-                excess = long_filled_qty - short_filled_qty
-                logger.warning(
-                    f"🔴 DELTA CORRECTION: L={long_filled_qty} > S={short_filled_qty} — "
-                    f"trimming {excess} on {opp.long_exchange} (reduceOnly)"
-                )
-                try:
-                    trim_req = OrderRequest(
-                        exchange=opp.long_exchange,
-                        symbol=opp.symbol,
-                        side=OrderSide.SELL,
-                        quantity=excess,
-                        reduce_only=True,
-                    )
-                    trim_fill = await self._place_with_timeout(long_adapter, trim_req)
-                    if trim_fill:
-                        _trim_raw = float(trim_fill.get("filled", 0))
-                        trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
-                        long_filled_qty -= trimmed
-                        trim_fee = _h.extract_fee(trim_fill, long_spec.taker_fee)
-                        entry_fees += trim_fee
-                        logger.info(
-                            f"✅ Delta corrected: trimmed {trimmed} on {opp.long_exchange}, "
-                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
-                        )
-                    else:
-                        logger.error(
-                            f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
-                            f"unhedged {excess} on {opp.long_exchange}! MANUAL CHECK REQUIRED"
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"❌ DELTA CORRECTION ERROR for {opp.symbol}: {e} — "
-                        f"unhedged {excess} on {opp.long_exchange}! MANUAL CHECK REQUIRED"
-                    )
-            elif qty_mismatch and short_filled_qty > long_filled_qty:
-                excess = short_filled_qty - long_filled_qty
-                logger.warning(
-                    f"🔴 DELTA CORRECTION: S={short_filled_qty} > L={long_filled_qty} — "
-                    f"trimming {excess} on {opp.short_exchange} (reduceOnly)"
-                )
-                try:
-                    trim_req = OrderRequest(
-                        exchange=opp.short_exchange,
-                        symbol=opp.symbol,
-                        side=OrderSide.BUY,
-                        quantity=excess,
-                        reduce_only=True,
-                    )
-                    trim_fill = await self._place_with_timeout(short_adapter, trim_req)
-                    if trim_fill:
-                        _trim_raw = float(trim_fill.get("filled", 0))
-                        trimmed = Decimal(str(_trim_raw)) if _trim_raw > 0 else excess
-                        short_filled_qty -= trimmed
-                        trim_fee = _h.extract_fee(trim_fill, short_spec.taker_fee)
-                        entry_fees += trim_fee
-                        logger.info(
-                            f"✅ Delta corrected: trimmed {trimmed} on {opp.short_exchange}, "
-                            f"L={long_filled_qty} S={short_filled_qty} now balanced"
-                        )
-                    else:
-                        logger.error(
-                            f"❌ DELTA CORRECTION FAILED for {opp.symbol} — "
-                            f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"❌ DELTA CORRECTION ERROR for {opp.symbol}: {e} — "
-                        f"unhedged {excess} on {opp.short_exchange}! MANUAL CHECK REQUIRED"
-                    )
+            # ── P0-3: residual-delta abort (extracted to _EntryOrdersMixin) ──
+            if await self._abort_on_residual_delta(
+                opp, long_adapter, short_adapter,
+                long_filled_qty, short_filled_qty, long_spec, short_spec, tp,
+            ):
+                return
 
             # If after correction both legs are zero, abort trade
             if long_filled_qty <= 0 or short_filled_qty <= 0:
@@ -639,78 +573,11 @@ class _EntryMixin:
                 )
                 return
 
-            # ── Post-fill basis sanity check ──────────────────────────
-            # The scanner classifies tiers using BID/ASK at scan time, but
-            # thin books drift in the seconds between scan and fill.
-            # Observed 2026-05-06 (WIF trade 855ab281-a02): scan_classified
-            # TOP at price_spread=-0.22% (favorable), fills cleared at
-            # entry_basis=+0.43% (adverse) — 0.65% drift in 3.5s latency.
-            # Catch this now and close both legs before the trade registers,
-            # so we never carry a known-adverse fill basis into the hold.
-            #
-            # IMPORTANT: only adverse drift is rejected. entry_basis_pct
-            # convention is (long-short)/short — positive = adverse (long
-            # paid > short received → embedded loss if basis converges),
-            # negative = favorable (we got the basis going our way and
-            # can profit on it). The earlier implementation used abs(),
-            # which incorrectly rejected favorable fills like STORJ
-            # (2026-05-17 02:46/02:53: basis=-0.48%/-0.42% — both
-            # favorable, both wrongly aborted, $ left on the table).
-            _max_basis = tp.max_entry_basis_spread_pct
-            if _max_basis > 0 and entry_basis_pct > _max_basis:
-                logger.error(
-                    f"🚨 [{opp.symbol}] Post-fill basis check FAILED: "
-                    f"actual_basis={float(entry_basis_pct):+.4f}% > "
-                    f"max={float(_max_basis):.4f}% "
-                    f"(scan-classified tier={opp.entry_tier}, "
-                    f"scan price_spread={float(opp.price_spread_pct):+.4f}%) — "
-                    f"closing both legs reduce-only and entering cooldown.",
-                    extra={"trade_id": trade_id, "symbol": opp.symbol,
-                           "action": "post_fill_basis_abort",
-                           "entry_basis_pct": float(entry_basis_pct),
-                           "max_allowed_pct": float(_max_basis)},
-                )
-                await asyncio.gather(
-                    self._close_orphan(
-                        long_adapter, opp.long_exchange, opp.symbol,
-                        OrderSide.SELL,
-                        {"filled": float(long_filled_qty)},
-                        long_filled_qty,
-                    ),
-                    self._close_orphan(
-                        short_adapter, opp.short_exchange, opp.symbol,
-                        OrderSide.BUY,
-                        {"filled": float(short_filled_qty)},
-                        short_filled_qty,
-                    ),
-                    return_exceptions=True,
-                )
-                await self._redis.set_cooldown(
-                    opp.symbol, tp.cooldown_after_close_seconds,
-                )
-                if self._publisher:
-                    try:
-                        await self._publisher.publish_alert(
-                            (
-                                f"🚨 Post-fill basis abort: {opp.symbol} "
-                                f"basis={float(entry_basis_pct):+.4f}% > "
-                                f"max={float(_max_basis):.4f}% — both legs closed."
-                            ),
-                            severity="warning",
-                            alert_type="post_fill_basis_abort",
-                            symbol=opp.symbol,
-                            payload={
-                                "trade_id": trade_id,
-                                "scan_tier": opp.entry_tier,
-                                "scan_price_spread_pct": float(opp.price_spread_pct),
-                                "actual_basis_pct": float(entry_basis_pct),
-                                "max_allowed_pct": float(_max_basis),
-                            },
-                        )
-                    except Exception as _alert_exc:
-                        logger.debug(
-                            f"[{opp.symbol}] post-fill abort alert failed: {_alert_exc}",
-                        )
+            # ── Post-fill basis sanity check (extracted to _EntryOrdersMixin) ──
+            if await self._reject_on_adverse_basis(
+                opp, long_adapter, short_adapter,
+                long_filled_qty, short_filled_qty, entry_basis_pct, trade_id, tp,
+            ):
                 return
 
             # ── Snapshot 24h quote volume on both legs ────────────────
