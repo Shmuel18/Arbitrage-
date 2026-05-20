@@ -25,9 +25,11 @@ while staying market-neutral.
 
 ### Repo
 - GitHub: `https://github.com/Shmuel18/Arbitrage-` (note the trailing dash)
-- **Primary branch**: `main` (all latest code lives here)
-- Legacy: `v3-live` is pushed in sync with main (same commits)
-- Local working copy: `C:\Users\shh92\Documents\Arbitrage` (Windows)
+- **Only branch**: `main` — single source of truth. All other branches
+  (v3-live, feature branches, claude/* worktree branches) were deleted on
+  2026-04-23 during a cleanup. Do NOT recreate `v3-live`.
+- Local working copy: `C:\Users\shh92\Documents\Arbitrage` (Windows), on `main`
+- Latest HEAD at cleanup: `64b15ea` (sniper loop)
 
 ### Server (Vultr Tokyo)
 - **IP**: `149.28.23.129`
@@ -255,11 +257,13 @@ cd /opt/ratebridge/frontend && npm run build
    git -C /opt/ratebridge log --oneline -5
    ```
 3. Pick a pending task from section 4, starting with P1.
-4. When committing, push to both `main` and `v3-live`:
+4. When committing, push to `main` only (no other branches exist):
    ```
    git push origin main
-   git push origin main:v3-live
    ```
+   For risky changes (trading logic, money), create a short-lived feature
+   branch, review it, then merge to main — don't push experimental work
+   straight to main since it auto-deploys.
 5. Deploy on server: `git pull origin main --ff-only && docker compose build bot && docker compose up -d --force-recreate bot`.
 
 Good luck!
