@@ -152,6 +152,107 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             return False
         return True
 
+    async def _check_basis_lock_via_vwap(
+        self,
+        trade: TradeRecord,
+        long_adapter,
+        short_adapter,
+    ) -> bool:
+        """Strict basis-lock pre-flight check for basis_recovery exits.
+
+        Re-fetches the book and computes the EXPECTED exit basis using the
+        VWAPs that would be realized when closing the legs:
+            long  side sells at the bid-side VWAP
+            short side buys at the ask-side VWAP
+        Only allows the exit to proceed when the expected exit basis is at
+        least ``entry_basis_pct + strict_basis_lock_cushion_pct`` — i.e., the
+        actual fills will NOT lose basis vs the entry (the book-ghost pattern
+        observed on LAB 2026-05-03, where the snapshot showed favorable basis
+        but fills cleared 1% worse).
+
+        Returns:
+            True  — VWAP confirms fills should land at >= entry basis + cushion.
+            False — fills would slip below the threshold; hold and re-check.
+
+        Fail-closed: any fetch error / thin book / div-by-zero returns False,
+        so we hold the trade rather than risk an adverse-basis close.
+        """
+        try:
+            results = await asyncio.gather(
+                long_adapter.get_vwap_and_depth(
+                    trade.symbol, trade.long_qty, side="sell",
+                ),
+                short_adapter.get_vwap_and_depth(
+                    trade.symbol, trade.short_qty, side="buy",
+                ),
+                return_exceptions=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[{trade.symbol}] basis_lock: VWAP fetch raised ({exc}) — REFUSING exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_fetch_error"},
+            )
+            return False
+
+        if any(isinstance(r, Exception) for r in results):
+            logger.warning(
+                f"[{trade.symbol}] basis_lock: one VWAP leg raised — REFUSING exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_leg_error"},
+            )
+            return False
+
+        try:
+            (l_vwap_raw, l_book_ok), (s_vwap_raw, s_book_ok) = results  # type: ignore[misc]
+        except Exception as exc:
+            logger.warning(
+                f"[{trade.symbol}] basis_lock: VWAP unpack failed ({exc}) — REFUSING exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_unpack_error"},
+            )
+            return False
+
+        if not (l_book_ok and s_book_ok):
+            logger.info(
+                f"[{trade.symbol}] basis_lock: book too thin for full-qty VWAP "
+                f"(long_ok={l_book_ok}, short_ok={s_book_ok}) — REFUSING exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_thin_book"},
+            )
+            return False
+
+        l_vwap = Decimal(str(l_vwap_raw)) if l_vwap_raw else _ZERO
+        s_vwap = Decimal(str(s_vwap_raw)) if s_vwap_raw else _ZERO
+        if l_vwap <= 0 or s_vwap <= 0:
+            logger.info(
+                f"[{trade.symbol}] basis_lock: invalid VWAPs (l={l_vwap}, s={s_vwap}) — REFUSING exit",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_invalid_vwap"},
+            )
+            return False
+
+        expected_exit_basis = (l_vwap - s_vwap) / s_vwap * Decimal("100")
+        entry_basis = trade.entry_basis_pct if trade.entry_basis_pct is not None else _ZERO
+        cushion = self._cfg.trading_params.strict_basis_lock_cushion_pct
+        threshold = entry_basis + cushion
+
+        if expected_exit_basis < threshold:
+            logger.info(
+                f"[{trade.symbol}] basis_lock: expected exit_basis "
+                f"{float(expected_exit_basis):+.4f}% < threshold "
+                f"{float(threshold):+.4f}% (entry={float(entry_basis):+.4f}% "
+                f"+ cushion={float(cushion):.4f}%) — REFUSING exit, holding",
+                extra={"trade_id": trade.trade_id, "symbol": trade.symbol,
+                       "action": "basis_lock_refused_below_entry",
+                       "expected_exit_basis_pct": float(expected_exit_basis),
+                       "entry_basis_pct": float(entry_basis),
+                       "threshold_pct": float(threshold)},
+            )
+            return False
+
+        return True
+
     async def _check_exit(self, trade: TradeRecord) -> None:
         """Check if trade should be closed.
 
@@ -682,6 +783,14 @@ class _ExitLogicMixin(_ExitComputationsMixin):
             # expected exit into a $-0.32 realized loss.
             if not await self._verify_exit_book_depth(
                 trade, price_pnl_pct, long_adapter, short_adapter,
+            ):
+                return
+            # Strict basis lock: VWAP-projected exit basis must be >= entry
+            # basis + cushion. Prevents the book-ghost pattern where the
+            # snapshot showed favorable basis but the actual fills clear
+            # at an adverse basis (eats the funding profit).
+            if not await self._check_basis_lock_via_vwap(
+                trade, long_adapter, short_adapter,
             ):
                 return
             _reason = f"basis_recovery_{float(_current_basis):+.4f}pct"

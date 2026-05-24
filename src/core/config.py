@@ -79,6 +79,7 @@ class TradingParams(BaseModel):
     basis_recovery_tolerance_pct: Decimal = Decimal("0.10")  # Tolerance (%) for basis recovery — exit if within this of entry
     basis_exit_buffer_pct: Decimal = Decimal("0.10")  # Basis-recovery exit requires cushion above entry basis
     min_basis_exit_pnl_pct: Decimal = Decimal("0.08")  # Soft basis exit requires minimum adjusted PnL after slippage buffer
+    strict_basis_lock_cushion_pct: Decimal = Decimal("0.02")  # Pre-flight VWAP check on basis_recovery exit: refuse exit if expected exit basis < entry_basis + this cushion (guards against book-ghost slippage between decision and fills)
     max_hold_hours: int = 24  # Absolute safety cap — force-close if held longer than this regardless of state
     min_hold_seconds: int = 120  # Minimum hold time before any exit can trigger (except liquidation)
     liquidation_safety_pct: Decimal = Decimal("20.0")  # Exit when equity/margin < this % (20 → exit at 80% margin loss ≈ -16% price move on 5x, ~3pp buffer to exchange liquidation)

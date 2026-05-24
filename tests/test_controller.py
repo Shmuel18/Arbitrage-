@@ -1501,3 +1501,200 @@ class TestBasisRecoveryBookGuard:
         # No basis_recovery reason was assigned because the gate aborted
         # before the reason string was set.
         assert not (trade._exit_reason or "").startswith("basis_recovery_")
+
+
+class TestStrictBasisLock:
+    """`_check_basis_lock_via_vwap` is the second gate in front of the
+    basis_recovery exit: it re-fetches VWAP for both legs and refuses to
+    close if the projected exit basis would land below
+    `entry_basis_pct + strict_basis_lock_cushion_pct`. This prevents the
+    book-ghost pattern where a momentarily favourable snapshot tempts an
+    exit that actually clears 1 % worse on the real fills (LAB
+    2026-05-03).
+    """
+
+    @staticmethod
+    def _make_basis_trade(controller, entry_basis_pct="0.10"):
+        """Build a held trade with a known entry basis."""
+        now = datetime.now(timezone.utc)
+        trade = TradeRecord(
+            trade_id="basis-lock-test",
+            symbol="BTC/USDT",
+            state=TradeState.OPEN,
+            long_exchange="exchange_a",
+            short_exchange="exchange_b",
+            long_qty=Decimal("0.01"),
+            short_qty=Decimal("0.01"),
+            entry_edge_pct=Decimal("1.0"),
+            opened_at=now - timedelta(minutes=30),
+            mode=TradeMode.HOLD,
+        )
+        trade.entry_price_long = Decimal("50000")
+        trade.entry_price_short = Decimal("50000")
+        trade.entry_basis_pct = Decimal(entry_basis_pct)
+        controller._active_trades[trade.trade_id] = trade
+        return trade
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_expected_basis_above_threshold(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """Expected exit basis (long_vwap - short_vwap)/short_vwap clears
+        entry_basis + cushion → helper returns True (exit proceeds)."""
+        config.trading_params.strict_basis_lock_cushion_pct = Decimal("0.02")
+        trade = self._make_basis_trade(controller, entry_basis_pct="0.10")
+
+        # long sells at 50300, short buys at 50000 → expected basis = +0.60%
+        # threshold = entry(0.10%) + cushion(0.02%) = 0.12% → 0.60% >= 0.12% PASS.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50300"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_basis_lock_via_vwap(
+            trade,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_expected_basis_below_threshold(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """Expected exit basis falls below entry + cushion → REFUSE
+        (book-ghost: snapshot looked good, projected fills clear worse)."""
+        config.trading_params.strict_basis_lock_cushion_pct = Decimal("0.02")
+        trade = self._make_basis_trade(controller, entry_basis_pct="0.50")
+
+        # long sells at 50000, short buys at 50100 → expected basis ≈ -0.20%
+        # threshold = entry(0.50%) + cushion(0.02%) = 0.52% → -0.20% < 0.52% FAIL.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50100"), True),
+        )
+
+        ok = await controller._check_basis_lock_via_vwap(
+            trade,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_book_too_thin(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """When either leg reports book_ok=False (insufficient depth for
+        full close qty) the gate must REFUSE — fail-closed."""
+        config.trading_params.strict_basis_lock_cushion_pct = Decimal("0.02")
+        trade = self._make_basis_trade(controller, entry_basis_pct="0.10")
+
+        # Long-leg book has insufficient depth (book_ok=False).
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50300"), False),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_basis_lock_via_vwap(
+            trade,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_one_leg_raises(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """Fetch error on either leg → REFUSE (fail-closed)."""
+        config.trading_params.strict_basis_lock_cushion_pct = Decimal("0.02")
+        trade = self._make_basis_trade(controller, entry_basis_pct="0.10")
+
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            side_effect=RuntimeError("orderbook ws down"),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_basis_lock_via_vwap(
+            trade,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_refuses_on_zero_vwap(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """Zero / None VWAP from an adapter → REFUSE (can't compute basis)."""
+        config.trading_params.strict_basis_lock_cushion_pct = Decimal("0.02")
+        trade = self._make_basis_trade(controller, entry_basis_pct="0.10")
+
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("0"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_basis_lock_via_vwap(
+            trade,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_basis_recovery_exit_aborted_when_lock_refuses(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """End-to-end: _check_exit calls _check_basis_lock_via_vwap after
+        _verify_exit_book_depth. When the lock refuses, the trade stays
+        open and no basis_recovery exit reason is set."""
+        # Use the same setup as TestBasisRecoveryBookGuard so the
+        # basis_recovery branch is reachable.
+        trade = TestBasisRecoveryBookGuard._setup_basis_recovery_ready(
+            controller, config, mock_exchange_mgr,
+        )
+        # Let the book-depth guard pass; verify the basis-lock gate
+        # closes the door.
+        controller._verify_exit_book_depth = AsyncMock(return_value=True)
+        controller._check_basis_lock_via_vwap = AsyncMock(return_value=False)
+
+        await controller._check_exit(trade)
+
+        controller._verify_exit_book_depth.assert_called_once()
+        controller._check_basis_lock_via_vwap.assert_called_once()
+        # Trade must still be active.
+        assert trade.trade_id in controller._active_trades
+        assert trade.state == TradeState.OPEN
+        assert not (trade._exit_reason or "").startswith("basis_recovery_")
+
+    @pytest.mark.asyncio
+    async def test_basis_recovery_exit_fires_when_lock_approves(
+        self, controller, config, mock_exchange_mgr,
+    ):
+        """End-to-end: when both _verify_exit_book_depth and
+        _check_basis_lock_via_vwap return True, basis_recovery fires
+        normally."""
+        trade = TestBasisRecoveryBookGuard._setup_basis_recovery_ready(
+            controller, config, mock_exchange_mgr,
+        )
+        controller._verify_exit_book_depth = AsyncMock(return_value=True)
+        controller._check_basis_lock_via_vwap = AsyncMock(return_value=True)
+
+        await controller._check_exit(trade)
+
+        controller._verify_exit_book_depth.assert_called_once()
+        controller._check_basis_lock_via_vwap.assert_called_once()
+        assert trade.trade_id not in controller._active_trades
+        assert trade._exit_reason and trade._exit_reason.startswith("basis_recovery_")
