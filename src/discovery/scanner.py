@@ -934,55 +934,73 @@ class Scanner(_ScannerEvaluatorMixin):
                 # second a funding payment fires).
                 _hot_evals: list[OpportunityCandidate] = []
 
-                for symbol in hot_symbols:
-                    try:
+                # Evaluate every hot symbol in parallel — cheap=True takes the
+                # WS-cache-only path with no REST, so the cohort cost is roughly
+                # the cost of the SLOWEST symbol rather than the sum. Without
+                # this, a single CPU-bound or blocked symbol stalls the entire
+                # hot pass and pushes the next pass 100 ms+ later.
+                # The callback bookkeeping below (cooldown + dispatch) stays
+                # sequential — it mutates self._hot_cb_last_fire and must process
+                # symbols in a deterministic order.
+                _hot_symbols_list = list(hot_symbols)
+                _hot_results = await asyncio.gather(
+                    *[
                         # cheap=True: skip _build_opportunity REST calls (balance+ticker+VWAP).
                         # The hot path only needs a WS-cache qualification signal;
                         # suggested_qty=0 is safe because the entry sizer always
                         # recalculates from order_qty at execution time (P1-1).
-                        opps = await self._scan_symbol(
-                            symbol, adapters, exchange_ids, cooled_symbols, cheap=True,
+                        self._scan_symbol(
+                            sym, adapters, exchange_ids, cooled_symbols, cheap=True,
                         )
-                        _hot_evals.extend(opps)
-                        for opp in opps:
-                            if opp.qualified:
-                                # P1-2: Key debounce by route, not just symbol.
-                                # With 3+ exchanges a symbol can have multiple qualified
-                                # routes (e.g. Binance↔Bybit AND Binance↔OKX). The old
-                                # symbol-only key silenced the second route for 10 s even
-                                # when it had a higher net spread.
-                                _cb_key = f"{opp.symbol}|{opp.long_exchange}|{opp.short_exchange}"
-                                _now = time.monotonic()
-                                _last = self._hot_cb_last_fire.get(_cb_key, 0.0)
-                                if _now - _last < _HOT_CALLBACK_COOLDOWN_SEC:
-                                    if logger.isEnabledFor(logging.DEBUG):
-                                        logger.debug(
-                                            f"[hot-scan] Debounced {opp.symbol} "
-                                            f"({_now - _last:.1f}s since last fire)",
-                                        )
-                                    continue
-                                self._hot_cb_last_fire[_cb_key] = _now
-                                logger.info(
-                                    f"🔥 [hot-scan] {opp.symbol} "
-                                    f"{opp.long_exchange}↔{opp.short_exchange} "
-                                    f"net={opp.net_edge_pct:.4f}%",
-                                    extra={"action": "hot_scan_opportunity", "symbol": opp.symbol},
-                                )
-                                # Fire-and-forget with supervision: entry path runs in its
-                                # own task so the discovery loop is never blocked by order
-                                # placement, pre-flight REST, or lock acquisition.
-                                _task_name = (
-                                    f"hot-entry:{opp.symbol}"
-                                    f"|{opp.long_exchange}|{opp.short_exchange}"
-                                )
-                                _t = asyncio.create_task(
-                                    callback(opp), name=_task_name,
-                                )
-                                _t.add_done_callback(_hot_entry_task_done)
-                    except asyncio.CancelledError:
+                        for sym in _hot_symbols_list
+                    ],
+                    return_exceptions=True,
+                )
+                for symbol, opps_or_exc in zip(_hot_symbols_list, _hot_results):
+                    if isinstance(opps_or_exc, asyncio.CancelledError):
                         return
-                    except Exception as exc:
-                        logger.warning(f"[hot-scan] Error evaluating {symbol}: {exc}")
+                    if isinstance(opps_or_exc, Exception):
+                        logger.warning(
+                            f"[hot-scan] Error evaluating {symbol}: {opps_or_exc!r}",
+                        )
+                        continue
+                    opps = opps_or_exc
+                    _hot_evals.extend(opps)
+                    for opp in opps:
+                        if opp.qualified:
+                            # P1-2: Key debounce by route, not just symbol.
+                            # With 3+ exchanges a symbol can have multiple qualified
+                            # routes (e.g. Binance↔Bybit AND Binance↔OKX). The old
+                            # symbol-only key silenced the second route for 10 s even
+                            # when it had a higher net spread.
+                            _cb_key = f"{opp.symbol}|{opp.long_exchange}|{opp.short_exchange}"
+                            _now = time.monotonic()
+                            _last = self._hot_cb_last_fire.get(_cb_key, 0.0)
+                            if _now - _last < _HOT_CALLBACK_COOLDOWN_SEC:
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(
+                                        f"[hot-scan] Debounced {opp.symbol} "
+                                        f"({_now - _last:.1f}s since last fire)",
+                                    )
+                                continue
+                            self._hot_cb_last_fire[_cb_key] = _now
+                            logger.info(
+                                f"🔥 [hot-scan] {opp.symbol} "
+                                f"{opp.long_exchange}↔{opp.short_exchange} "
+                                f"net={opp.net_edge_pct:.4f}%",
+                                extra={"action": "hot_scan_opportunity", "symbol": opp.symbol},
+                            )
+                            # Fire-and-forget with supervision: entry path runs in its
+                            # own task so the discovery loop is never blocked by order
+                            # placement, pre-flight REST, or lock acquisition.
+                            _task_name = (
+                                f"hot-entry:{opp.symbol}"
+                                f"|{opp.long_exchange}|{opp.short_exchange}"
+                            )
+                            _t = asyncio.create_task(
+                                callback(opp), name=_task_name,
+                            )
+                            _t.add_done_callback(_hot_entry_task_done)
 
                 # ── P3-1: refresh dashboard rows from this hot pass ─────
                 # Overlay the freshly-evaluated opps onto the previously
@@ -1043,17 +1061,28 @@ class Scanner(_ScannerEvaluatorMixin):
                         for opp_key in self._prev_display_opps.keys()
                     }
                     _missing_displayed: set[str] = _displayed_syms - _hot_symbols_set
-                    for _sym in _missing_displayed:
-                        try:
-                            _opps = await self._scan_symbol(
-                                _sym, adapters, exchange_ids, cooled_symbols, cheap=True,
-                            )
-                            _hot_evals.extend(_opps)
-                        except Exception as exc:
-                            if logger.isEnabledFor(logging.DEBUG):
-                                logger.debug(
-                                    f"[hot-scan] display-row re-eval failed for {_sym}: {exc}",
+                    if _missing_displayed:
+                        # Parallel re-eval — cheap=True is REST-free so cost is
+                        # dominated by the slowest WS-cache lookup rather than
+                        # the sum of all sequential awaits.
+                        _missing_list = list(_missing_displayed)
+                        _missing_results = await asyncio.gather(
+                            *[
+                                self._scan_symbol(
+                                    _sym, adapters, exchange_ids, cooled_symbols, cheap=True,
                                 )
+                                for _sym in _missing_list
+                            ],
+                            return_exceptions=True,
+                        )
+                        for _sym, _r in zip(_missing_list, _missing_results):
+                            if isinstance(_r, Exception):
+                                if logger.isEnabledFor(logging.DEBUG):
+                                    logger.debug(
+                                        f"[hot-scan] display-row re-eval failed for {_sym}: {_r!r}",
+                                    )
+                                continue
+                            _hot_evals.extend(_r)
                     # Highest priority last — fresh hot evals always win.
                     for o in _hot_evals:
                         _pool[
@@ -1121,11 +1150,33 @@ class Scanner(_ScannerEvaluatorMixin):
                 cooled_symbols = await self._redis.get_cooled_down_symbols(
                     list(sniper_symbols)
                 )
-                for symbol in sniper_symbols:
-                    try:
-                        opps = await self._scan_symbol(
-                            symbol, adapters, exchange_ids, cooled_symbols, cheap=True,
+                # Run all sniper symbol evals in parallel — cheap=True is
+                # REST-free WS-cache lookups, so cost is the slowest symbol
+                # rather than the sum. The 1 s sniper cadence is most valuable
+                # when 5-10 symbols are simultaneously in the near-funding
+                # window; sequential awaits used to stretch a single tick to
+                # ~500 ms, blocking the next tick. Callback dispatch below
+                # stays sequential — mutates _hot_cb_last_fire.
+                _sniper_list = list(sniper_symbols)
+                _sniper_results = await asyncio.gather(
+                    *[
+                        self._scan_symbol(
+                            sym, adapters, exchange_ids, cooled_symbols, cheap=True,
                         )
+                        for sym in _sniper_list
+                    ],
+                    return_exceptions=True,
+                )
+                for symbol, opps_or_exc in zip(_sniper_list, _sniper_results):
+                    try:
+                        if isinstance(opps_or_exc, asyncio.CancelledError):
+                            return
+                        if isinstance(opps_or_exc, Exception):
+                            logger.debug(
+                                f"[sniper] {symbol} eval error: {opps_or_exc!r}",
+                            )
+                            continue
+                        opps = opps_or_exc
                         for opp in opps:
                             if not opp.qualified:
                                 continue
@@ -1391,17 +1442,42 @@ class Scanner(_ScannerEvaluatorMixin):
                 },
             )
 
-        results = []
+        # Evaluate all C(n,2) cross-exchange pairs in parallel rather than
+        # one-by-one. With 5 exchanges that's 10 pairs per symbol — the old
+        # sequential awaits cost ~200-400 ms per symbol (× 600 symbols per
+        # full scan = ~2-3 s of pointless serialization). The per-adapter
+        # Semaphore(25) still caps REST concurrency, so peak bursts stay
+        # within rate-limit budget (each exchange appears in only 4 of the
+        # 10 pairs → max 4 concurrent REST calls per adapter, well below 25).
         eids = list(funding.keys())
-        for i in range(len(eids)):
-            for j in range(i + 1, len(eids)):
-                opp = await self._evaluate_pair(
-                    symbol, eids[i], eids[j], funding, adapters,
-                    cheap=cheap,
-                )
-                if opp:
-                    results.append(opp)
+        pair_eids = [
+            (eids[i], eids[j])
+            for i in range(len(eids))
+            for j in range(i + 1, len(eids))
+        ]
+        if not pair_eids:
+            return []
 
+        pair_results = await asyncio.gather(
+            *[
+                self._evaluate_pair(
+                    symbol, a, b, funding, adapters, cheap=cheap,
+                )
+                for a, b in pair_eids
+            ],
+            return_exceptions=True,  # one bad pair must not sink the cohort
+        )
+
+        results: List[OpportunityCandidate] = []
+        for (a, b), opp in zip(pair_eids, pair_results):
+            if isinstance(opp, Exception):
+                logger.warning(
+                    f"[scan] {symbol} {a}↔{b} pair eval raised: {opp!r}",
+                    extra={"action": "pair_eval_error", "symbol": symbol},
+                )
+                continue
+            if opp:
+                results.append(opp)
         return results
 
 
