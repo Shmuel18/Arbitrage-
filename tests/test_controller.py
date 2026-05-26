@@ -1698,3 +1698,209 @@ class TestStrictBasisLock:
         controller._check_basis_lock_via_vwap.assert_called_once()
         assert trade.trade_id not in controller._active_trades
         assert trade._exit_reason and trade._exit_reason.startswith("basis_recovery_")
+
+
+class TestPreEntryBasisLock:
+    """`_check_pre_entry_basis_via_vwap` is the pre-fill mirror of the
+    post-fill basis abort. The scanner picked the trade on a snapshot;
+    by the time we'd fire orders the book may have ghosted. This gate
+    re-fetches VWAP and refuses entry if the expected fills would land
+    on an adverse basis beyond `max_entry_basis_spread_pct`. Catches the
+    same drift as `_reject_on_adverse_basis` but BEFORE 2× fees burn
+    (regression for MMT/USDT:USDT 2026-05-26 03:50 UTC).
+    """
+
+    @pytest.mark.asyncio
+    async def test_proceeds_when_expected_basis_within_max(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """Expected basis (long_buy_vwap - short_sell_vwap)/short_sell_vwap
+        stays within max → helper returns True (entry proceeds)."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # long buys at 50050, short sells at 50000 → basis = +0.10% < 0.15% PASS.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50050"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_expected_basis_exceeds_max(
+        self, controller, config, sample_opportunity,
+        mock_exchange_mgr, mock_redis,
+    ):
+        """Adverse VWAP basis above the threshold → REFUSE + cooldown."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # long buys at 50300, short sells at 50000 → basis = +0.60% > 0.15% FAIL.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50300"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is False
+        # A short cooldown is set on the symbol (not the full close cooldown).
+        mock_redis.set_cooldown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_favorable_basis_is_not_refused(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """Favorable basis (long lower than short) must NEVER trigger the
+        gate, regardless of magnitude. Symmetric to TestPostFillBasisCheck.
+        test_favorable_basis_is_not_rejected — same direction semantics."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # long buys at 49500, short sells at 50000 → basis = -1.00% (favorable).
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("49500"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_book_too_thin(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """book_ok=False on either leg → fail-closed REFUSE."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), False),  # ← insufficient depth
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_refuses_on_fetch_error(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """Fetch error on either leg → fail-closed REFUSE."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            side_effect=RuntimeError("orderbook ws disconnected"),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_refuses_on_zero_vwap(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """Zero VWAP from an adapter → REFUSE (can't compute basis)."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("0"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_zero_max_disables_check(
+        self, controller, config, sample_opportunity, mock_exchange_mgr,
+    ):
+        """max=0 → feature disabled, ALWAYS returns True regardless of basis.
+        Mirror of TestPostFillBasisCheck.test_zero_max_disables_check."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0")
+        # Huge adverse basis — should still pass because the check is disabled.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("60000"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        ok = await controller._check_pre_entry_basis_via_vwap(
+            sample_opportunity,
+            mock_exchange_mgr.get("exchange_a"),
+            mock_exchange_mgr.get("exchange_b"),
+            Decimal("0.01"),
+            config.trading_params,
+        )
+        assert ok is True
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_handle_opportunity_blocks_entry(
+        self, controller, config, sample_opportunity,
+        mock_exchange_mgr, mock_redis,
+    ):
+        """End-to-end: handle_opportunity calls the gate after liquidity;
+        when the gate refuses, NO orders are placed and NO trade registers.
+        This is the saving over the post-fill abort path: 0 fees burned."""
+        config.trading_params.max_entry_basis_spread_pct = Decimal("0.15")
+        # VWAP shows adverse basis (+0.60%) but place_order would have filled
+        # cleanly at 50000/50000 — proves the pre-entry gate ran FIRST.
+        mock_exchange_mgr.get("exchange_a").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50300"), True),
+        )
+        mock_exchange_mgr.get("exchange_b").get_vwap_and_depth = AsyncMock(
+            return_value=(Decimal("50000"), True),
+        )
+
+        opp = replace(sample_opportunity, entry_tier="top")
+        await controller.handle_opportunity(opp)
+
+        # Trade NOT registered.
+        assert len(controller._active_trades) == 0
+        # No orders fired (place_order was the default AsyncMock — assert it
+        # was not invoked).
+        assert not mock_exchange_mgr.get("exchange_a").place_order.called
+        assert not mock_exchange_mgr.get("exchange_b").place_order.called
+        # Cooldown was set so we don't spin on the same symbol.
+        mock_redis.set_cooldown.assert_called()

@@ -343,6 +343,20 @@ class _EntryMixin(_EntryOrdersMixin):
             ):
                 return
 
+            # ── Pre-entry basis gate (VWAP-projected) ─────────────────
+            # Mirror of the exit-side Strict Basis Lock. The scanner decided
+            # on a snapshot; the book may have ghosted since. If the VWAP-
+            # projected entry basis exceeds max_entry_basis_spread_pct we
+            # bail BEFORE firing orders — the post-fill check would catch
+            # this too, but only after eating 2× round-trip fees, a cooldown,
+            # and an alert (observed 2026-05-26 MMT/USDT:USDT incident:
+            # scan saw price_spread=-0.21%, fills landed at basis=+0.41%,
+            # post-fill abort closed both legs for ~$0.15 loss + 2 h cooldown).
+            if not await self._check_pre_entry_basis_via_vwap(
+                opp, long_adapter, short_adapter, order_qty, tp,
+            ):
+                return
+
             # Mark grace period BEFORE placing first order
             if self._risk_guard:
                 self._risk_guard.mark_trade_opened(opp.symbol)

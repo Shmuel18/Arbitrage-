@@ -78,6 +78,131 @@ class _EntryOrdersMixin:
             return False
         return True
 
+    async def _check_pre_entry_basis_via_vwap(
+        self,
+        opp: "OpportunityCandidate",
+        long_adapter,
+        short_adapter,
+        order_qty: Decimal,
+        tp,
+    ) -> bool:
+        """Pre-fill basis lock — refuses entry if VWAP-projected fill basis is adverse.
+
+        Mirror of ``_check_basis_lock_via_vwap`` on the exit side. The scanner
+        chooses entry based on a snapshot (ticker / L1), but in the seconds
+        between decision and fill the book can ghost: the basis you saw is
+        not the basis you'll get. ``_reject_on_adverse_basis`` catches this
+        AFTER the fills land — at the cost of 2× round-trip fees, a cooldown,
+        and an alert. This gate catches it BEFORE the orders go in (0 fees).
+
+        Convention:
+            long leg  buys  → walks the asks → side="buy"  VWAP
+            short leg sells → walks the bids → side="sell" VWAP
+            expected_basis = (long_buy_vwap - short_sell_vwap) / short_sell_vwap × 100
+            positive → adverse (we'd pay up on long AND receive less on short).
+
+        Threshold: same ``max_entry_basis_spread_pct`` as the post-fill check
+        — so we reject pre-fill on exactly the cases the post-fill would catch.
+
+        Returns:
+            True  — VWAP confirms basis is within the configured cap.
+            False — basis is adverse / book is thin / fetch errored. Caller
+                    must skip entry (a short cooldown is set so we re-evaluate
+                    on the next tick rather than spinning on the same symbol).
+
+        Fail-closed: any fetch error / timeout / thin book / zero or negative
+        VWAP / unpack error returns False. We'd rather miss a legitimate
+        opportunity than enter on a stale book.
+        """
+        _max_basis = tp.max_entry_basis_spread_pct
+        if not (_max_basis > 0):
+            # Feature disabled — mirror post-fill behaviour (which also gates
+            # on max_entry_basis_spread_pct > 0).
+            return True
+
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(
+                    long_adapter.get_vwap_and_depth(opp.symbol, order_qty, side="buy"),
+                    short_adapter.get_vwap_and_depth(opp.symbol, order_qty, side="sell"),
+                    return_exceptions=True,
+                ),
+                timeout=_ENTRY_LIQUIDITY_TIMEOUT_SEC,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"⏱️ [{opp.symbol}] Pre-entry basis check timed out "
+                f"({_ENTRY_LIQUIDITY_TIMEOUT_SEC}s) — REFUSING entry (fail-closed)",
+                extra={"symbol": opp.symbol, "action": "pre_entry_basis_timeout"},
+            )
+            return False
+
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning(
+                    f"🚫 [{opp.symbol}] Pre-entry basis: VWAP fetch raised ({r!r}) — "
+                    f"REFUSING entry (fail-closed)",
+                    extra={"symbol": opp.symbol, "action": "pre_entry_basis_fetch_error"},
+                )
+                return False
+
+        try:
+            (l_vwap_raw, l_ok), (s_vwap_raw, s_ok) = results  # type: ignore[misc]
+        except Exception as exc:
+            logger.warning(
+                f"🚫 [{opp.symbol}] Pre-entry basis: VWAP unpack failed ({exc!r}) — "
+                f"REFUSING entry",
+                extra={"symbol": opp.symbol, "action": "pre_entry_basis_unpack_error"},
+            )
+            return False
+
+        if not (l_ok and s_ok):
+            logger.warning(
+                f"🚫 [{opp.symbol}] Pre-entry basis: book too thin for full-qty VWAP "
+                f"(long_ok={l_ok}, short_ok={s_ok}) — REFUSING entry",
+                extra={"symbol": opp.symbol, "action": "pre_entry_basis_thin_book"},
+            )
+            return False
+
+        l_vwap = Decimal(str(l_vwap_raw)) if l_vwap_raw else Decimal("0")
+        s_vwap = Decimal(str(s_vwap_raw)) if s_vwap_raw else Decimal("0")
+        if l_vwap <= 0 or s_vwap <= 0:
+            logger.warning(
+                f"🚫 [{opp.symbol}] Pre-entry basis: invalid VWAPs "
+                f"(long={l_vwap}, short={s_vwap}) — REFUSING entry",
+                extra={"symbol": opp.symbol, "action": "pre_entry_basis_invalid_vwap"},
+            )
+            return False
+
+        expected_basis = (l_vwap - s_vwap) / s_vwap * Decimal("100")
+        if expected_basis > _max_basis:
+            logger.warning(
+                f"🚫 [{opp.symbol}] Pre-entry basis ABORT: expected basis "
+                f"{float(expected_basis):+.4f}% > max={float(_max_basis):.4f}% "
+                f"(scan price_spread={float(opp.price_spread_pct):+.4f}%, "
+                f"long_buy_vwap={float(l_vwap)}, short_sell_vwap={float(s_vwap)}) — "
+                f"REFUSING entry. Same gate as post-fill, BEFORE orders fire (saves 2× fees + cooldown).",
+                extra={"symbol": opp.symbol, "action": "pre_entry_basis_abort",
+                       "expected_basis_pct": float(expected_basis),
+                       "max_allowed_pct": float(_max_basis),
+                       "scan_price_spread_pct": float(opp.price_spread_pct)},
+            )
+            # Short cooldown so we re-evaluate quickly when the adverse basis
+            # reverts (it usually does within seconds). NOT the full
+            # cooldown_after_close_seconds — that's for actual position closes;
+            # here nothing was opened. Cap at 60 s so a transient book stall
+            # doesn't lock us out of an otherwise great opportunity.
+            _cd = max(30, min(60, tp.cooldown_after_close_seconds // 10))
+            try:
+                await self._redis.set_cooldown(opp.symbol, _cd)
+            except Exception as _cd_exc:
+                logger.debug(
+                    f"[{opp.symbol}] pre-entry basis cooldown set failed: {_cd_exc!r}",
+                )
+            return False
+
+        return True
+
     async def _abort_on_residual_delta(
         self,
         opp: "OpportunityCandidate",
