@@ -5,9 +5,10 @@ under ``data/backtest-reports/``. Jobs are subprocess supervisors that spawn
 either the fetch script or the runner and record status in Redis so the UI
 can poll.
 
-All endpoints are guarded by ``require_read_token``. That token grants enough
-privilege to DoS the host via repeated job triggers, so tighten to a stricter
-token (add ``require_command_token``) before exposing this service externally.
+Read-only endpoints (listing reports + jobs) are guarded by ``require_read_token``.
+The subprocess-spawning endpoints (``POST /fetch`` and ``POST /run``) are guarded
+by the stricter ``require_command_token`` because they can DoS the host via
+repeated job triggers (each spawns a Python subprocess that runs for minutes).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 if TYPE_CHECKING:
     from src.storage.redis_client import RedisClient
 
-from ..auth import require_read_token
+from ..auth import require_command_token, require_read_token
 from ..deps import require_redis_client
 
 logger = logging.getLogger("trinity.api.backtest")
@@ -309,7 +310,7 @@ async def _register_new_job(
     return job
 
 
-@router.post("/fetch", dependencies=[Depends(require_read_token)])
+@router.post("/fetch", dependencies=[Depends(require_command_token)])
 async def start_fetch(
     body: FetchRequest,
     redis: "RedisClient" = Depends(require_redis_client),
@@ -329,7 +330,7 @@ async def start_fetch(
     return {"job_id": job["id"]}
 
 
-@router.post("/run", dependencies=[Depends(require_read_token)])
+@router.post("/run", dependencies=[Depends(require_command_token)])
 async def start_run(
     body: RunRequest,
     redis: "RedisClient" = Depends(require_redis_client),

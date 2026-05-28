@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 
 logger = get_logger("execution")
 
+_ZERO = Decimal("0")
+
 
 def _task_done_handler(t: asyncio.Task) -> None:
     """Log exceptions from background tasks — never let them vanish silently."""
@@ -339,6 +341,69 @@ class _UtilMixin:
 
         if stored:
             logger.info(f"Recovered {len(self._active_trades)} active trades")
+
+    async def reconcile_dark_positions(self) -> None:
+        """Detect "dark" positions: open on an exchange but NOT tracked by the bot.
+
+        The worst-case recovery gap (audit C1): if the bot crashes after both
+        legs fill but BEFORE the trade is persisted to Redis, on restart
+        ``_recover_trades`` finds nothing — yet real positions sit open on the
+        exchanges, unmonitored and unhedged, until they liquidate.
+
+        This runs once at startup (after ``_recover_trades``). It fetches live
+        positions from every exchange and alerts on any symbol that holds an
+        open position but is absent from ``_active_symbols``. It is ALERT-ONLY
+        by design — it never auto-closes, because blindly closing a position
+        the bot doesn't understand is more dangerous than surfacing it to the
+        operator. Fully guarded so it can never crash startup.
+        """
+        try:
+            tracked = set(self._active_symbols)
+            adapters = list(self._exchanges.all().items())
+            if not adapters:
+                return
+            results = await asyncio.gather(
+                *[adapter.get_positions() for _, adapter in adapters],
+                return_exceptions=True,
+            )
+            dark: list[str] = []
+            for (eid, _adapter), res in zip(adapters, results):
+                if isinstance(res, Exception):
+                    logger.warning(
+                        f"[dark-position] Could not fetch positions on {eid}: {res}",
+                        extra={"exchange": eid},
+                    )
+                    continue
+                for pos in res or []:
+                    if abs(pos.quantity) <= _ZERO:
+                        continue
+                    if pos.symbol not in tracked:
+                        dark.append(
+                            f"{eid}:{pos.symbol} {getattr(pos.side, 'value', pos.side)} "
+                            f"qty={pos.quantity}"
+                        )
+            if dark:
+                msg = (
+                    f"🚨 DARK POSITION(S) detected at startup — open on exchange "
+                    f"but NOT tracked by the bot (possible crash-during-entry "
+                    f"orphan). Manual review required: {'; '.join(dark)}"
+                )
+                logger.critical(msg, extra={"action": "dark_position_detected"})
+                if self._publisher:
+                    await self._publisher.publish_alert(
+                        msg, severity="critical", alert_type="dark_position",
+                    )
+            else:
+                logger.info(
+                    "[dark-position] Startup reconciliation clean — "
+                    "all exchange positions are tracked.",
+                    extra={"action": "dark_position_clean"},
+                )
+        except Exception as exc:  # never let reconciliation break startup
+            logger.error(
+                f"[dark-position] Reconciliation failed (non-fatal): {exc}",
+                extra={"action": "dark_position_error"},
+            )
 
     # ── Balance logging ───────────────────────────────────────────
 

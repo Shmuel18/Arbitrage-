@@ -206,6 +206,9 @@ class ExecutionController(
     async def start(self) -> None:
         self._running = True
         await self._recover_trades()
+        # Audit C1: surface any position open on an exchange but not tracked
+        # by the bot (crash-during-entry orphan). Alert-only, fully guarded.
+        await self.reconcile_dark_positions()
         # Supervised: if the loop crashes unexpectedly it restarts automatically
         # with exponential back-off (5s → 10s → … → 60s cap) so open trades
         # are never left unmonitored.

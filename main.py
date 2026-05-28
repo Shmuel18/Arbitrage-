@@ -160,6 +160,7 @@ async def main() -> None:
     await mgr.connect_all()
 
     # Verify credentials — remove exchanges with bad keys
+    _configured_exchanges = list(cfg.enabled_exchanges)
     verified = await mgr.verify_all()
     cfg.enabled_exchanges = verified
     if len(verified) < 2:
@@ -222,6 +223,24 @@ async def main() -> None:
         await telegram.self_test()
 
     publisher = APIPublisher(redis, telegram=telegram)
+
+    # Audit C3: alert when a configured exchange dropped during verification
+    # (e.g. OKX "API key doesn't exist"). Previously log-only — the operator
+    # had no signal that the bot quietly degraded to fewer exchanges.
+    _dropped_exchanges = [e for e in _configured_exchanges if e not in verified]
+    if _dropped_exchanges:
+        try:
+            await publisher.publish_alert(
+                f"⚠️ Exchange(s) dropped at startup (credential/verification "
+                f"failure): {', '.join(_dropped_exchanges)}. Now trading on "
+                f"{len(verified)}/{len(_configured_exchanges)}: "
+                f"{', '.join(verified)}.",
+                severity="critical",
+                alert_type="exchange_drop",
+            )
+        except Exception as exc:
+            logger.error(f"Failed to publish exchange-drop alert: {exc}")
+
     guard = RiskGuard(cfg, mgr, redis)
     controller = ExecutionController(cfg, mgr, redis, guard, publisher=publisher)
     scanner = Scanner(cfg, mgr, redis, publisher=publisher)

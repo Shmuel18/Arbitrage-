@@ -1904,3 +1904,92 @@ class TestPreEntryBasisLock:
         assert not mock_exchange_mgr.get("exchange_b").place_order.called
         # Cooldown was set so we don't spin on the same symbol.
         mock_redis.set_cooldown.assert_called()
+
+
+# ── Dark-position startup reconciliation (audit C1) ──────────────────────
+
+
+class TestDarkPositionReconciliation:
+    """A position open on an exchange but NOT tracked by the bot (e.g. a
+    crash between order fill and Redis persist) must be surfaced to the
+    operator at startup — alert-only, never auto-closed."""
+
+    async def test_dark_position_detected_and_alerted(
+        self, config, mock_exchange_mgr, mock_redis
+    ):
+        from src.core.contracts import Position
+
+        publisher = AsyncMock()
+        ctrl = ExecutionController(
+            config, mock_exchange_mgr, mock_redis, publisher=publisher
+        )
+        adapter_a = mock_exchange_mgr.all()["exchange_a"]
+        adapter_a.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    exchange="exchange_a",
+                    symbol="BTC/USDT:USDT",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("0.5"),
+                    entry_price=Decimal("50000"),
+                )
+            ]
+        )
+        assert "BTC/USDT:USDT" not in ctrl._active_symbols
+
+        await ctrl.reconcile_dark_positions()
+
+        publisher.publish_alert.assert_awaited_once()
+        kwargs = publisher.publish_alert.call_args.kwargs
+        assert kwargs.get("alert_type") == "dark_position"
+        assert kwargs.get("severity") == "critical"
+
+    async def test_no_alert_when_position_is_tracked(
+        self, config, mock_exchange_mgr, mock_redis
+    ):
+        from src.core.contracts import Position
+
+        publisher = AsyncMock()
+        ctrl = ExecutionController(
+            config, mock_exchange_mgr, mock_redis, publisher=publisher
+        )
+        ctrl._active_symbols.add("BTC/USDT:USDT")
+        adapter_a = mock_exchange_mgr.all()["exchange_a"]
+        adapter_a.get_positions = AsyncMock(
+            return_value=[
+                Position(
+                    exchange="exchange_a",
+                    symbol="BTC/USDT:USDT",
+                    side=OrderSide.BUY,
+                    quantity=Decimal("0.5"),
+                    entry_price=Decimal("50000"),
+                )
+            ]
+        )
+
+        await ctrl.reconcile_dark_positions()
+
+        publisher.publish_alert.assert_not_awaited()
+
+    async def test_clean_when_no_open_positions(
+        self, config, mock_exchange_mgr, mock_redis
+    ):
+        publisher = AsyncMock()
+        ctrl = ExecutionController(
+            config, mock_exchange_mgr, mock_redis, publisher=publisher
+        )
+        # Default fixture: every adapter's get_positions returns [].
+        await ctrl.reconcile_dark_positions()
+        publisher.publish_alert.assert_not_awaited()
+
+    async def test_fetch_failure_is_non_fatal(
+        self, config, mock_exchange_mgr, mock_redis
+    ):
+        publisher = AsyncMock()
+        ctrl = ExecutionController(
+            config, mock_exchange_mgr, mock_redis, publisher=publisher
+        )
+        adapter_a = mock_exchange_mgr.all()["exchange_a"]
+        adapter_a.get_positions = AsyncMock(side_effect=RuntimeError("API down"))
+        # Must NOT raise — startup reconciliation is fully guarded.
+        await ctrl.reconcile_dark_positions()
